@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Shield } from "lucide-react";
 import { toast } from "sonner";
@@ -15,15 +15,25 @@ function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const submitLockRef = useRef(false);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (loading || submitLockRef.current) return;
+    submitLockRef.current = true;
     setLoading(true);
-    const { error } = await signIn(email, password);
-    setLoading(false);
-    if (error) { toast.error(error); return; }
-    toast.success("Welcome back");
-    navigate({ to: "/dashboard" });
+    try {
+      const { error } = await signIn(email, password);
+      if (error) {
+        toast.error(error);
+        return;
+      }
+      toast.success("Welcome back");
+      navigate({ to: "/dashboard" });
+    } finally {
+      submitLockRef.current = false;
+      setLoading(false);
+    }
   }
 
   return (
@@ -35,14 +45,23 @@ function LoginPage() {
           </div>
           <div>
             <div className="font-display text-xl">GovInventory</div>
-            <div className="text-xs uppercase tracking-widest text-sidebar-foreground/60">Republic Records System</div>
+            <div className="text-xs uppercase tracking-widest text-sidebar-foreground/60">
+              Republic Records System
+            </div>
           </div>
         </div>
         <div>
-          <h2 className="font-display text-4xl leading-tight max-w-md">Official record-keeping for public office supplies and equipment.</h2>
-          <p className="mt-4 text-sm text-sidebar-foreground/70 max-w-md">Track materials, monitor stock movements, audit transactions, and generate reports — built for the operational standards of government agencies.</p>
+          <h2 className="font-display text-4xl leading-tight max-w-md">
+            Official record-keeping for public office supplies and equipment.
+          </h2>
+          <p className="mt-4 text-sm text-sidebar-foreground/70 max-w-md">
+            Track materials, monitor stock movements, audit transactions, and generate reports —
+            built for the operational standards of government agencies.
+          </p>
         </div>
-        <div className="text-xs text-sidebar-foreground/50">© {new Date().getFullYear()} Office of Inventory Management</div>
+        <div className="text-xs text-sidebar-foreground/50">
+          © {new Date().getFullYear()} Office of Inventory Management
+        </div>
       </div>
 
       <div className="flex items-center justify-center p-6 lg:p-12 bg-background">
@@ -53,17 +72,43 @@ function LoginPage() {
           </div>
           <div className="space-y-3">
             <Field label="Email">
-              <input type="email" required value={email} onChange={e=>setEmail(e.target.value)} className="input" autoComplete="email" />
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="input"
+                autoComplete="email"
+                disabled={loading}
+              />
             </Field>
             <Field label="Password">
-              <input type="password" required value={password} onChange={e=>setPassword(e.target.value)} className="input" autoComplete="current-password" />
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="input"
+                autoComplete="current-password"
+                disabled={loading}
+              />
             </Field>
           </div>
-          <button disabled={loading} className="w-full rounded-md bg-primary text-primary-foreground py-2.5 text-sm font-medium hover:bg-primary/90 disabled:opacity-50">
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-md bg-primary text-primary-foreground py-2.5 text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+          >
             {loading ? "Signing in…" : "Sign in"}
           </button>
           <p className="text-sm text-muted-foreground text-center">
-            No account? <Link to="/signup" className="text-primary font-medium underline-offset-2 hover:underline">Request access</Link>
+            No account?{" "}
+            <Link
+              to="/signup"
+              className="text-primary font-medium underline-offset-2 hover:underline"
+            >
+              Request access
+            </Link>
           </p>
         </form>
       </div>

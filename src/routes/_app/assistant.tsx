@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import { PageHeader } from "@/components/layout/AppShell";
 import { Sparkles, Send, User } from "lucide-react";
 import { toast } from "sonner";
-import { askAssistant } from "@/server/ai.functions";
+import { askAssistant } from "@/lib/ai.functions";
 
 export const Route = createFileRoute("/_app/assistant")({
   head: () => ({ meta: [{ title: "AI Assistant — GovInventory" }] }),

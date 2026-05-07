@@ -1,63 +1,282 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useState } from "react";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
+import {
+  createAdminUser,
+  deleteAdminUser,
+  listAdminUsers,
+  resetUserPassword,
+  setUserDisabled,
+  setUserRole,
+} from "@/lib/admin.functions";
 import { toast } from "sonner";
 
+type AssignableRole = "viewer" | "staff" | "admin";
+
 export const Route = createFileRoute("/_app/users")({
-  head: () => ({ meta: [{ title: "User Roles — GovInventory" }] }),
+  head: () => ({ meta: [{ title: "User Roles - GovInventory" }] }),
   component: UsersPage,
 });
 
 function UsersPage() {
-  const { isAdmin } = useAuth();
-  const { data: profiles = [], refetch } = useQuery({
-    queryKey: ["profiles"],
-    queryFn: async () => {
-      const { data: p } = await supabase.from("profiles").select("*").order("created_at", { ascending: false });
-      const { data: r } = await supabase.from("user_roles").select("user_id, role");
-      const byUser: Record<string, string[]> = {};
-      (r ?? []).forEach((row: any) => { (byUser[row.user_id] ||= []).push(row.role); });
-      return (p ?? []).map((u: any) => ({ ...u, roles: byUser[u.id] ?? [] }));
-    },
+  const { isAdmin, session } = useAuth();
+  const accessToken = session?.access_token ?? "";
+  const [creating, setCreating] = useState(false);
+  const [resetTarget, setResetTarget] = useState<{ id: string; email: string } | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [resetting, setResetting] = useState(false);
+  const [form, setForm] = useState({
+    email: "",
+    fullName: "",
+    password: "",
+    role: "viewer" as AssignableRole,
   });
 
-  if (!isAdmin) return <div className="p-8 text-sm text-muted-foreground">Admin access required.</div>;
+  const { data: profiles = [], refetch } = useQuery({
+    queryKey: ["profiles", "admin"],
+    enabled: Boolean(isAdmin && accessToken),
+    queryFn: async () => listAdminUsers({ data: { accessToken } }),
+  });
 
-  async function setRole(uid: string, role: string) {
-    await supabase.from("user_roles").delete().eq("user_id", uid);
-    const { error } = await supabase.from("user_roles").insert({ user_id: uid, role });
-    if (error) return toast.error(error.message);
-    toast.success("Role updated"); refetch();
+  if (!isAdmin) {
+    return <div className="p-8 text-sm text-muted-foreground">Admin access required.</div>;
+  }
+
+  async function setRole(uid: string, role: AssignableRole) {
+    try {
+      await setUserRole({ data: { accessToken, userId: uid, role } });
+      toast.success("Role updated");
+      refetch();
+    } catch (e: any) {
+      toast.error(e?.message ?? "Role update failed");
+    }
+  }
+
+  async function createUser(e: React.FormEvent) {
+    e.preventDefault();
+    setCreating(true);
+    try {
+      await createAdminUser({ data: { accessToken, ...form } });
+      toast.success("User created");
+      setForm({ email: "", fullName: "", password: "", role: "viewer" });
+      refetch();
+    } catch (e: any) {
+      toast.error(e?.message ?? "User creation failed");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function resetPassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (!resetTarget) return;
+    setResetting(true);
+    try {
+      await resetUserPassword({
+        data: { accessToken, userId: resetTarget.id, password: newPassword },
+      });
+      toast.success("Password reset");
+      setResetTarget(null);
+      setNewPassword("");
+    } catch (e: any) {
+      toast.error(e?.message ?? "Password reset failed");
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  async function toggleDisabled(uid: string, disabled: boolean) {
+    try {
+      await setUserDisabled({ data: { accessToken, userId: uid, disabled } });
+      toast.success(disabled ? "User deactivated" : "User activated");
+      refetch();
+    } catch (e: any) {
+      toast.error(e?.message ?? "Status update failed");
+    }
+  }
+
+  async function deleteUser(uid: string, email: string) {
+    if (!confirm(`Delete user ${email}? This cannot be undone.`)) return;
+    try {
+      await deleteAdminUser({ data: { accessToken, userId: uid } });
+      toast.success("User deleted");
+      refetch();
+    } catch (e: any) {
+      toast.error(e?.message ?? "User delete failed");
+    }
   }
 
   return (
     <div>
       <PageHeader title="Users & Roles" subtitle="Manage access for personnel" />
-      <div className="p-6 lg:p-8">
+      <div className="p-6 lg:p-8 space-y-4">
+        <form
+          onSubmit={createUser}
+          className="bg-card border border-border rounded-lg p-4 grid gap-3 md:grid-cols-5"
+        >
+          <input
+            required
+            type="email"
+            placeholder="Email"
+            value={form.email}
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
+            className="border border-input rounded-md bg-card px-3 py-2 text-sm"
+          />
+          <input
+            required
+            placeholder="Full name"
+            value={form.fullName}
+            onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+            className="border border-input rounded-md bg-card px-3 py-2 text-sm"
+          />
+          <input
+            required
+            type="password"
+            minLength={6}
+            placeholder="Password"
+            value={form.password}
+            onChange={(e) => setForm({ ...form, password: e.target.value })}
+            className="border border-input rounded-md bg-card px-3 py-2 text-sm"
+          />
+          <RoleSelect
+            value={form.role}
+            onChange={(role) => setForm({ ...form, role })}
+            className="border border-input rounded-md bg-card px-3 py-2 text-sm"
+          />
+          <button
+            disabled={creating}
+            className="rounded-md bg-primary text-primary-foreground px-3 py-2 text-sm font-medium disabled:opacity-50"
+          >
+            {creating ? "Creating..." : "Create user"}
+          </button>
+        </form>
+
         <div className="bg-card border border-border rounded-lg overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-muted/60 text-xs uppercase tracking-wider text-muted-foreground"><tr><th className="text-left px-4 py-3">Name</th><th className="text-left px-4 py-3">Email</th><th className="text-left px-4 py-3">Role</th></tr></thead>
+            <thead className="bg-muted/60 text-xs uppercase tracking-wider text-muted-foreground">
+              <tr>
+                <th className="text-left px-4 py-3">Name</th>
+                <th className="text-left px-4 py-3">Email</th>
+                <th className="text-left px-4 py-3">Role</th>
+                <th className="text-left px-4 py-3">Status</th>
+                <th></th>
+              </tr>
+            </thead>
             <tbody>
               {profiles.map((u: any) => (
                 <tr key={u.id} className="border-t border-border">
-                  <td className="px-4 py-3 font-medium">{u.full_name ?? "—"}</td>
+                  <td className="px-4 py-3 font-medium">{u.full_name ?? "-"}</td>
                   <td className="px-4 py-3">{u.email}</td>
                   <td className="px-4 py-3">
-                    <select value={u.roles[0] ?? "viewer"} onChange={e => setRole(u.id, e.target.value)} className="border border-input rounded-md bg-card px-2 py-1 text-sm">
-                      <option value="admin">admin</option>
-                      <option value="staff">staff</option>
-                      <option value="viewer">viewer</option>
-                    </select>
+                    <RoleSelect
+                      value={u.role}
+                      onChange={(role) => setRole(u.id, role)}
+                      className="border border-input rounded-md bg-card px-2 py-1 text-sm"
+                    />
+                  </td>
+                  <td className="px-4 py-3">{u.disabled ? "disabled" : "active"}</td>
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                    <button
+                      type="button"
+                      onClick={() => setResetTarget({ id: u.id, email: u.email })}
+                      className="px-2 py-1 rounded border border-input text-xs mr-2 cursor-pointer hover:bg-accent"
+                    >
+                      Reset password
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleDisabled(u.id, !u.disabled)}
+                      className="px-2 py-1 rounded border border-input text-xs mr-2 cursor-pointer hover:bg-accent"
+                    >
+                      {u.disabled ? "Activate" : "Deactivate"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteUser(u.id, u.email)}
+                      className="px-2 py-1 rounded border border-destructive/40 text-destructive text-xs cursor-pointer hover:bg-destructive/10"
+                    >
+                      Delete
+                    </button>
                   </td>
                 </tr>
               ))}
-              {profiles.length === 0 && (<tr><td colSpan={3} className="p-12 text-center text-sm text-muted-foreground">No users found.</td></tr>)}
+              {profiles.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="p-12 text-center text-sm text-muted-foreground">
+                    No users found.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
       </div>
+
+      {resetTarget && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-foreground/30 backdrop-blur-sm p-4">
+          <form
+            onSubmit={resetPassword}
+            className="bg-card border border-border rounded-lg w-full max-w-sm p-6 space-y-4"
+          >
+            <div>
+              <h2 className="text-xl">Reset password</h2>
+              <p className="text-sm text-muted-foreground mt-1">{resetTarget.email}</p>
+            </div>
+            <input
+              autoFocus
+              required
+              type="password"
+              minLength={6}
+              placeholder="New password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full border border-input rounded-md bg-card px-3 py-2 text-sm"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setResetTarget(null);
+                  setNewPassword("");
+                }}
+                className="px-4 py-2 rounded-md border border-input text-sm cursor-pointer hover:bg-accent"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={resetting}
+                className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+              >
+                {resetting ? "Resetting..." : "Reset password"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
+  );
+}
+
+function RoleSelect({
+  value,
+  onChange,
+  className,
+}: {
+  value: AssignableRole;
+  onChange: (role: AssignableRole) => void;
+  className: string;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value as AssignableRole)}
+      className={className}
+    >
+      <option value="viewer">viewer</option>
+      <option value="staff">staff</option>
+      <option value="admin">admin</option>
+    </select>
   );
 }

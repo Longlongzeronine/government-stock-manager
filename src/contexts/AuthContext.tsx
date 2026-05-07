@@ -16,6 +16,58 @@ interface AuthCtx {
 }
 
 const Ctx = createContext<AuthCtx | undefined>(undefined);
+const authInFlight = new Map<string, Promise<{ error: string | null }>>();
+
+// Client-side rate limiting to prevent hitting Supabase's rate limits
+const RATE_LIMIT_WINDOW_MS = 60000; // 1 minute window
+const RATE_LIMIT_MAX_REQUESTS = 3; // Max 3 requests per window (reduced from 5)
+const authRequestTimestamps = new Map<string, number[]>();
+
+function checkRateLimit(key: string): { allowed: boolean; retryAfterMs: number } {
+  const now = Date.now();
+  const timestamps = authRequestTimestamps.get(key) || [];
+  
+  // Filter to only keep timestamps within the current window
+  const recentTimestamps = timestamps.filter(ts => now - ts < RATE_LIMIT_WINDOW_MS);
+  
+  if (recentTimestamps.length >= RATE_LIMIT_MAX_REQUESTS) {
+    const oldestTimestamp = recentTimestamps[0];
+    const retryAfterMs = RATE_LIMIT_WINDOW_MS - (now - oldestTimestamp);
+    return { allowed: false, retryAfterMs };
+  }
+  
+  recentTimestamps.push(now);
+  authRequestTimestamps.set(key, recentTimestamps);
+  return { allowed: true, retryAfterMs: 0 };
+}
+
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
+function normalizeAuthError(message: string | null | undefined) {
+  if (!message) return null;
+  const msg = message.toLowerCase();
+  if (msg.includes("signups are disabled")) {
+    return "Email signups are disabled in Supabase. Enable Authentication -> Providers -> Email -> Allow new users to sign up.";
+  }
+  if (msg.includes("429") || msg.includes("rate limit") || msg.includes("too many requests")) {
+    return "Too many requests. Please wait a moment before trying again.";
+  }
+  return message;
+}
+
+async function runAuthRequest(
+  key: string,
+  request: () => Promise<{ error: string | null }>,
+) {
+  const pending = authInFlight.get(key);
+  if (pending) return pending;
+
+  const promise = request().finally(() => authInFlight.delete(key));
+  authInFlight.set(key, promise);
+  return promise;
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -41,7 +93,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function loadRole(uid: string) {
     const { data } = await supabase.from("user_roles").select("role").eq("user_id", uid);
-    if (!data || data.length === 0) { setRole("viewer"); return; }
+    if (!data || data.length === 0) {
+      setRole("viewer");
+      return;
+    }
     const order: Record<string, number> = { admin: 1, staff: 2, viewer: 3 };
     const top = [...data].sort((a: any, b: any) => (order[a.role] ?? 9) - (order[b.role] ?? 9))[0];
     setRole((top as any).role as AppRole);
@@ -56,17 +111,68 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isStaff: role === "staff",
     canWrite: role === "admin" || role === "staff",
     signIn: async (email, password) => {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      return { error: error?.message ?? null };
+      const key = `signin:${normalizeEmail(email)}`;
+      const rateLimit = checkRateLimit(key);
+      if (!rateLimit.allowed) {
+        return { 
+          error: `Too many attempts. Please wait ${Math.ceil(rateLimit.retryAfterMs / 1000)} seconds before trying again.` 
+        };
+      }
+      
+      return runAuthRequest(key, async () => {
+        try {
+          const { error } = await supabase.auth.signInWithPassword({
+            email: normalizeEmail(email),
+            password,
+          });
+          return { error: normalizeAuthError(error?.message) };
+        } catch (err: any) {
+          // Handle network errors or other exceptions that might include rate limiting
+          const errorMessage = err?.message || err?.toString() || '';
+          if (err?.status === 429 || 
+              errorMessage.includes('429') || 
+              errorMessage.includes('Too Many Requests') ||
+              errorMessage.includes('rate limit')) {
+            return { error: "Too many requests. Please wait a moment before trying again." };
+          }
+          return { error: normalizeAuthError(errorMessage || "An unexpected error occurred") };
+        }
+      });
     },
     signUp: async (email, password, fullName) => {
-      const { error } = await supabase.auth.signUp({
-        email, password,
-        options: { data: { full_name: fullName }, emailRedirectTo: `${window.location.origin}/` },
+      const key = `signup:${normalizeEmail(email)}`;
+      const rateLimit = checkRateLimit(key);
+      if (!rateLimit.allowed) {
+        return { 
+          error: `Too many attempts. Please wait ${Math.ceil(rateLimit.retryAfterMs / 1000)} seconds before trying again.` 
+        };
+      }
+      
+      return runAuthRequest(key, async () => {
+        try {
+          const { error } = await supabase.auth.signUp({
+            email: normalizeEmail(email),
+            password,
+            options: { data: { full_name: fullName.trim(), requested_role: "viewer" } },
+          });
+          if (error) return { error: normalizeAuthError(error.message) };
+          return { error: null };
+        } catch (err: any) {
+          // Handle network errors or other exceptions that might include rate limiting
+          const errorMessage = err?.message || err?.toString() || '';
+          if (err?.status === 429 || 
+              errorMessage.includes('429') || 
+              errorMessage.includes('Too Many Requests') ||
+              errorMessage.includes('rate limit')) {
+            return { error: "Too many requests. Please wait a moment before trying again." };
+          }
+          return { error: normalizeAuthError(errorMessage || "An unexpected error occurred") };
+        }
       });
-      return { error: error?.message ?? null };
     },
-    signOut: async () => { await supabase.auth.signOut(); },
+    signOut: async () => {
+      await supabase.auth.signOut();
+    },
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
