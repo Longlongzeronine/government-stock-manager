@@ -3,15 +3,16 @@ import { LayoutDashboard, Package, ArrowLeftRight, Tags, Building2, Users, Scrol
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
-const nav = [
-  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["admin","staff","viewer"] as const },
-  { to: "/inventory", label: "Inventory", icon: Package, roles: ["admin","staff","viewer"] as const },
-  { to: "/stock", label: "Stock In / Out", icon: ArrowLeftRight, roles: ["admin","staff","viewer"] as const },
-  { to: "/categories", label: "Categories", icon: Tags, roles: ["admin","staff","viewer"] as const },
-  { to: "/suppliers", label: "Suppliers", icon: Building2, roles: ["admin","staff","viewer"] as const },
-  { to: "/assistant", label: "AI Assistant", icon: Sparkles, roles: ["admin","staff","viewer"] as const },
-  { to: "/users", label: "Users", icon: Users, roles: ["admin"] as const },
-  { to: "/audit", label: "Audit Log", icon: ScrollText, roles: ["admin"] as const },
+type R = "admin" | "staff" | "viewer";
+const nav: { to: string; label: string; icon: any; roles: R[] }[] = [
+  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["admin","staff","viewer"] },
+  { to: "/inventory", label: "Inventory", icon: Package, roles: ["admin","staff","viewer"] },
+  { to: "/stock", label: "Stock In / Out", icon: ArrowLeftRight, roles: ["admin","staff","viewer"] },
+  { to: "/categories", label: "Categories", icon: Tags, roles: ["admin","staff","viewer"] },
+  { to: "/suppliers", label: "Suppliers", icon: Building2, roles: ["admin","staff","viewer"] },
+  { to: "/assistant", label: "AI Assistant", icon: Sparkles, roles: ["admin","staff","viewer"] },
+  { to: "/users", label: "Users", icon: Users, roles: ["admin"] },
+  { to: "/audit", label: "Audit Log", icon: ScrollText, roles: ["admin"] },
 ];
 
 export function Sidebar() {
