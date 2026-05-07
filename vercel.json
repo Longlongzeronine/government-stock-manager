@@ -6,6 +6,7 @@
   "installCommand": "npm install",
   "outputDirectory": "dist",
   "regions": ["sin1"],
+  "nodeVersion": "18.x",
   "functions": {
     "api/**/*.js": {
       "runtime": "@vercel/node@3.0.0"
@@ -16,8 +17,5 @@
       "source": "/(.*)",
       "destination": "/api/index.js"
     }
-  ],
-  "env": {
-    "NODE_VERSION": "18.x"
-  }
+  ]
 }
