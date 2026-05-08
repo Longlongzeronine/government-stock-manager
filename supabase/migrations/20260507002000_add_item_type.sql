@@ -1,0 +1,1 @@
+ALTER TABLE items ADD COLUMN item_type text NOT NULL DEFAULT 'supply' CHECK (item_type IN ('supply', 'material'));

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
+import { MobileCard, MobileCardRow } from "@/components/common/MobileCard";
 import {
   createAdminUser,
   deleteAdminUser,
@@ -12,6 +13,7 @@ import {
   setUserRole,
 } from "@/lib/admin.functions";
 import { toast } from "sonner";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 type AssignableRole = "viewer" | "staff" | "admin";
 
@@ -108,10 +110,12 @@ function UsersPage() {
     }
   }
 
+  const isMobileView = useIsMobile();
+
   return (
     <div>
       <PageHeader title="Users & Roles" subtitle="Manage access for personnel" />
-      <div className="p-6 lg:p-8 space-y-4">
+      <div className="p-4 sm:p-6 lg:p-8 space-y-4">
         <form
           onSubmit={createUser}
           className="bg-card border border-border rounded-lg p-4 grid gap-3 md:grid-cols-5"
@@ -122,14 +126,14 @@ function UsersPage() {
             placeholder="Email"
             value={form.email}
             onChange={(e) => setForm({ ...form, email: e.target.value })}
-            className="border border-input rounded-md bg-card px-3 py-2 text-sm"
+            className="border border-input rounded-md bg-card px-3 py-2 text-sm w-full"
           />
           <input
             required
             placeholder="Full name"
             value={form.fullName}
             onChange={(e) => setForm({ ...form, fullName: e.target.value })}
-            className="border border-input rounded-md bg-card px-3 py-2 text-sm"
+            className="border border-input rounded-md bg-card px-3 py-2 text-sm w-full"
           />
           <input
             required
@@ -138,80 +142,140 @@ function UsersPage() {
             placeholder="Password"
             value={form.password}
             onChange={(e) => setForm({ ...form, password: e.target.value })}
-            className="border border-input rounded-md bg-card px-3 py-2 text-sm"
+            className="border border-input rounded-md bg-card px-3 py-2 text-sm w-full"
           />
           <RoleSelect
             value={form.role}
             onChange={(role) => setForm({ ...form, role })}
-            className="border border-input rounded-md bg-card px-3 py-2 text-sm"
+            className="border border-input rounded-md bg-card px-3 py-2 text-sm w-full"
           />
           <button
             disabled={creating}
-            className="rounded-md bg-primary text-primary-foreground px-3 py-2 text-sm font-medium disabled:opacity-50"
+            className="rounded-md bg-primary text-primary-foreground px-3 py-2 text-sm font-medium disabled:opacity-50 w-full md:w-auto"
           >
             {creating ? "Creating..." : "Create user"}
           </button>
         </form>
 
-        <div className="bg-card border border-border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/60 text-xs uppercase tracking-wider text-muted-foreground">
-              <tr>
-                <th className="text-left px-4 py-3">Name</th>
-                <th className="text-left px-4 py-3">Email</th>
-                <th className="text-left px-4 py-3">Role</th>
-                <th className="text-left px-4 py-3">Status</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {profiles.map((u: any) => (
-                <tr key={u.id} className="border-t border-border">
-                  <td className="px-4 py-3 font-medium">{u.full_name ?? "-"}</td>
-                  <td className="px-4 py-3">{u.email}</td>
-                  <td className="px-4 py-3">
+        {/* Desktop Table View */}
+        {!isMobileView && (
+          <div className="bg-card border border-border rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/60 text-xs uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="text-left px-4 py-3">Name</th>
+                  <th className="text-left px-4 py-3">Email</th>
+                  <th className="text-left px-4 py-3">Role</th>
+                  <th className="text-left px-4 py-3">Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {profiles.map((u: any) => (
+                  <tr key={u.id} className="border-t border-border">
+                    <td className="px-4 py-3 font-medium">{u.full_name ?? "-"}</td>
+                    <td className="px-4 py-3">{u.email}</td>
+                    <td className="px-4 py-3">
+                      <RoleSelect
+                        value={u.role}
+                        onChange={(role) => setRole(u.id, role)}
+                        className="border border-input rounded-md bg-card px-2 py-1 text-sm"
+                      />
+                    </td>
+                    <td className="px-4 py-3">{u.disabled ? "disabled" : "active"}</td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => setResetTarget({ id: u.id, email: u.email })}
+                        className="px-2 py-1 rounded border border-input text-xs mr-2 cursor-pointer hover:bg-accent"
+                      >
+                        Reset password
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toggleDisabled(u.id, !u.disabled)}
+                        className="px-2 py-1 rounded border border-input text-xs mr-2 cursor-pointer hover:bg-accent"
+                      >
+                        {u.disabled ? "Activate" : "Deactivate"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteUser(u.id, u.email)}
+                        className="px-2 py-1 rounded border border-destructive/40 text-destructive text-xs cursor-pointer hover:bg-destructive/10"
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {profiles.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="p-12 text-center text-sm text-muted-foreground">
+                      No users found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Mobile Card View */}
+        {isMobileView && (
+          <div className="space-y-3">
+            {profiles.map((u: any) => (
+              <MobileCard key={u.id}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="font-medium text-base">{u.full_name ?? "-"}</div>
+                  <span className={`text-xs px-2 py-1 rounded-md border shrink-0 ${u.disabled ? "bg-muted text-muted-foreground border-border" : "bg-success/15 text-success border-success/30"}`}>
+                    {u.disabled ? "disabled" : "active"}
+                  </span>
+                </div>
+                <div className="border-t border-border pt-2 space-y-2">
+                  <MobileCardRow label="Email" value={u.email} />
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs uppercase tracking-wider text-muted-foreground">Role</span>
                     <RoleSelect
                       value={u.role}
                       onChange={(role) => setRole(u.id, role)}
                       className="border border-input rounded-md bg-card px-2 py-1 text-sm"
                     />
-                  </td>
-                  <td className="px-4 py-3">{u.disabled ? "disabled" : "active"}</td>
-                  <td className="px-4 py-3 text-right whitespace-nowrap">
-                    <button
-                      type="button"
-                      onClick={() => setResetTarget({ id: u.id, email: u.email })}
-                      className="px-2 py-1 rounded border border-input text-xs mr-2 cursor-pointer hover:bg-accent"
-                    >
-                      Reset password
-                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2 pt-2 border-t border-border">
+                  <button
+                    type="button"
+                    onClick={() => setResetTarget({ id: u.id, email: u.email })}
+                    className="w-full px-3 py-2 rounded-md border border-input text-sm cursor-pointer hover:bg-accent"
+                  >
+                    Reset password
+                  </button>
+                  <div className="flex gap-2">
                     <button
                       type="button"
                       onClick={() => toggleDisabled(u.id, !u.disabled)}
-                      className="px-2 py-1 rounded border border-input text-xs mr-2 cursor-pointer hover:bg-accent"
+                      className="flex-1 px-3 py-2 rounded-md border border-input text-sm cursor-pointer hover:bg-accent"
                     >
                       {u.disabled ? "Activate" : "Deactivate"}
                     </button>
                     <button
                       type="button"
                       onClick={() => deleteUser(u.id, u.email)}
-                      className="px-2 py-1 rounded border border-destructive/40 text-destructive text-xs cursor-pointer hover:bg-destructive/10"
+                      className="px-3 py-2 rounded-md border border-destructive/40 text-destructive text-sm cursor-pointer hover:bg-destructive/10"
                     >
                       Delete
                     </button>
-                  </td>
-                </tr>
-              ))}
-              {profiles.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="p-12 text-center text-sm text-muted-foreground">
-                    No users found.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+                  </div>
+                </div>
+              </MobileCard>
+            ))}
+            {profiles.length === 0 && (
+              <div className="p-12 text-center text-sm text-muted-foreground bg-card border border-border rounded-lg">
+                No users found.
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {resetTarget && (

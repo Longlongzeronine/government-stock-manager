@@ -4,9 +4,11 @@ import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
+import { MobileCard, MobileCardRow } from "@/components/common/MobileCard";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 export const Route = createFileRoute("/_app/stock")({
   head: () => ({ meta: [{ title: "Stock In / Out — GovInventory" }] }),
@@ -34,6 +36,8 @@ function Stock() {
       (await supabase.from("items").select("id,name,quantity,unit").order("name")).data ?? [],
   });
 
+  const isMobileView = useIsMobile();
+
   return (
     <div>
       <PageHeader
@@ -50,50 +54,94 @@ function Stock() {
           )
         }
       />
-      <div className="p-6 lg:p-8">
-        <div className="bg-card border border-border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/60 text-xs uppercase tracking-wider text-muted-foreground">
-              <tr>
-                <th className="text-left px-4 py-3">Date</th>
-                <th className="text-left px-4 py-3">Item</th>
-                <th className="text-left px-4 py-3">Type</th>
-                <th className="text-right px-4 py-3">Quantity</th>
-                <th className="text-left px-4 py-3">Staff</th>
-                <th className="text-left px-4 py-3">Remarks</th>
-              </tr>
-            </thead>
-            <tbody>
-              {txs.map((t: any) => (
-                <tr key={t.id} className="border-t border-border hover:bg-muted/30">
-                  <td className="px-4 py-2.5 tabular-nums text-xs">
-                    {format(new Date(t.created_at), "MMM d, yyyy HH:mm")}
-                  </td>
-                  <td className="px-4 py-2.5">{t.item?.name ?? "—"}</td>
-                  <td className="px-4 py-2.5">
-                    <span
-                      className={`text-xs font-semibold px-2 py-0.5 rounded-md border ${t.type === "IN" ? "bg-success/15 text-success border-success/30" : "bg-destructive/15 text-destructive border-destructive/30"}`}
-                    >
-                      {t.type}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5 text-right tabular-nums">
-                    {t.quantity} {t.item?.unit}
-                  </td>
-                  <td className="px-4 py-2.5">{t.staff_name ?? "—"}</td>
-                  <td className="px-4 py-2.5 text-muted-foreground">{t.remarks ?? "—"}</td>
-                </tr>
-              ))}
-              {txs.length === 0 && (
+      <div className="p-4 sm:p-6 lg:p-8">
+        {/* Desktop Table View */}
+        {!isMobileView && (
+          <div className="bg-card border border-border rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/60 text-xs uppercase tracking-wider text-muted-foreground">
                 <tr>
-                  <td colSpan={6} className="p-12 text-center text-sm text-muted-foreground">
-                    No transactions recorded.
-                  </td>
+                  <th className="text-left px-4 py-3">Date</th>
+                  <th className="text-left px-4 py-3">Item</th>
+                  <th className="text-left px-4 py-3">Type</th>
+                  <th className="text-right px-4 py-3">Quantity</th>
+                  <th className="text-left px-4 py-3">Staff</th>
+                  <th className="text-left px-4 py-3">Remarks</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {txs.map((t: any) => (
+                  <tr key={t.id} className="border-t border-border hover:bg-muted/30">
+                    <td className="px-4 py-2.5 tabular-nums text-xs">
+                      {format(new Date(t.created_at), "MMM d, yyyy HH:mm")}
+                    </td>
+                    <td className="px-4 py-2.5">{t.item?.name ?? "—"}</td>
+                    <td className="px-4 py-2.5">
+                      <span
+                        className={`text-xs font-semibold px-2 py-0.5 rounded-md border ${t.type === "IN" ? "bg-success/15 text-success border-success/30" : "bg-destructive/15 text-destructive border-destructive/30"}`}
+                      >
+                        {t.type}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">
+                      {t.quantity} {t.item?.unit}
+                    </td>
+                    <td className="px-4 py-2.5">{t.staff_name ?? "—"}</td>
+                    <td className="px-4 py-2.5 text-muted-foreground">{t.remarks ?? "—"}</td>
+                  </tr>
+                ))}
+                {txs.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="p-12 text-center text-sm text-muted-foreground">
+                      No transactions recorded.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Mobile Card View */}
+        {isMobileView && (
+          <div className="space-y-3">
+            {txs.map((t: any) => (
+              <MobileCard key={t.id}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-base">{t.item?.name ?? "—"}</div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {format(new Date(t.created_at), "MMM d, yyyy HH:mm")}
+                    </div>
+                  </div>
+                  <span
+                    className={`text-xs font-semibold px-2 py-1 rounded-md border shrink-0 ${t.type === "IN" ? "bg-success/15 text-success border-success/30" : "bg-destructive/15 text-destructive border-destructive/30"}`}
+                  >
+                    {t.type}
+                  </span>
+                </div>
+                <div className="border-t border-border pt-2 space-y-2">
+                  <MobileCardRow 
+                    label="Quantity" 
+                    value={`${t.quantity} ${t.item?.unit ?? ""}`} 
+                  />
+                  <MobileCardRow label="Staff" value={t.staff_name ?? "—"} />
+                  {t.remarks && (
+                    <div className="pt-1">
+                      <span className="text-xs uppercase tracking-wider text-muted-foreground">Remarks</span>
+                      <p className="text-sm mt-1">{t.remarks}</p>
+                    </div>
+                  )}
+                </div>
+              </MobileCard>
+            ))}
+            {txs.length === 0 && (
+              <div className="p-12 text-center text-sm text-muted-foreground bg-card border border-border rounded-lg">
+                No transactions recorded.
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {open && canWrite && (

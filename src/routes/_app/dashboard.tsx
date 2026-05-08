@@ -84,7 +84,7 @@ function Dashboard() {
   return (
     <div>
       <PageHeader title="Dashboard" subtitle="Live overview of inventory operations" />
-      <div className="p-6 lg:p-8 space-y-6">
+      <div className="p-4 sm:p-6 lg:p-8 space-y-6">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <Stat icon={Package} label="Total Items" value={total} tone="navy" />
           <Stat icon={AlertTriangle} label="Low Stock" value={low} tone="warning" />
@@ -93,7 +93,7 @@ function Dashboard() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2 bg-card border border-border rounded-lg p-5">
+          <div className="lg:col-span-2 bg-card border border-border rounded-lg p-4 sm:p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="text-lg">Monthly Usage</h2>
@@ -103,7 +103,7 @@ function Dashboard() {
               </div>
               <TrendingUp className="h-4 w-4 text-muted-foreground" />
             </div>
-            <div className="h-64">
+            <div className="h-48 sm:h-56 lg:h-64">
               <ResponsiveContainer>
                 <LineChart data={series} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
                   <CartesianGrid
@@ -138,7 +138,7 @@ function Dashboard() {
             </div>
           </div>
 
-          <div className="bg-card border border-border rounded-lg p-5">
+          <div className="bg-card border border-border rounded-lg p-4 sm:p-5">
             <h2 className="text-lg mb-3">Quick Actions</h2>
             <div className="space-y-2">
               {isAdmin && (
@@ -177,7 +177,7 @@ function Dashboard() {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="bg-card border border-border rounded-lg">
-            <div className="p-5 border-b border-border">
+            <div className="p-4 sm:p-5 border-b border-border">
               <h2 className="text-lg">Low Stock Alerts</h2>
             </div>
             <div className="divide-y divide-border">
@@ -187,7 +187,7 @@ function Dashboard() {
                 </div>
               )}
               {lowItems.map((i: any) => (
-                <div key={i.id} className="p-4 flex items-center justify-between gap-3">
+                <div key={i.id} className="p-3 sm:p-4 flex items-center justify-between gap-3">
                   <div>
                     <div className="font-medium text-sm">{i.name}</div>
                     <div className="text-xs text-muted-foreground">
@@ -201,7 +201,7 @@ function Dashboard() {
           </div>
 
           <div className="bg-card border border-border rounded-lg">
-            <div className="p-5 border-b border-border">
+            <div className="p-4 sm:p-5 border-b border-border">
               <h2 className="text-lg">Recent Transactions</h2>
             </div>
             <div className="divide-y divide-border">
@@ -211,7 +211,7 @@ function Dashboard() {
                 </div>
               )}
               {recentTx.map((t: any) => (
-                <div key={t.id} className="p-4 flex items-center justify-between gap-3">
+                <div key={t.id} className="p-3 sm:p-4 flex items-center justify-between gap-3">
                   <div>
                     <div className="font-medium text-sm">{t.item?.name ?? "—"}</div>
                     <div className="text-xs text-muted-foreground">

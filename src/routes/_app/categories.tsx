@@ -4,8 +4,10 @@ import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
+import { MobileCard, MobileCardRow } from "@/components/common/MobileCard";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 export const Route = createFileRoute("/_app/categories")({
   head: () => ({ meta: [{ title: "Categories — GovInventory" }] }),
@@ -30,6 +32,8 @@ function Categories() {
     qc.invalidateQueries({ queryKey: ["categories"] });
   }
 
+  const isMobileView = useIsMobile();
+
   return (
     <div>
       <PageHeader
@@ -49,54 +53,99 @@ function Categories() {
           )
         }
       />
-      <div className="p-6 lg:p-8">
-        <div className="bg-card border border-border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/60 text-xs uppercase tracking-wider text-muted-foreground">
-              <tr>
-                <th className="text-left px-4 py-3">Name</th>
-                <th className="text-left px-4 py-3">Description</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {cats.map((c: any) => (
-                <tr key={c.id} className="border-t border-border hover:bg-muted/30">
-                  <td className="px-4 py-3 font-medium">{c.name}</td>
-                  <td className="px-4 py-3 text-muted-foreground">{c.description ?? "—"}</td>
-                  <td className="px-4 py-3 text-right">
-                    {isAdmin && (
-                      <div className="inline-flex gap-1">
-                        <button
-                          onClick={() => {
-                            setEditing(c);
-                            setOpen(true);
-                          }}
-                          className="p-1.5 rounded hover:bg-accent"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          onClick={() => del(c.id)}
-                          className="p-1.5 rounded hover:bg-destructive/10 text-destructive"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {cats.length === 0 && (
+      <div className="p-4 sm:p-6 lg:p-8">
+        {/* Desktop Table View */}
+        {!isMobileView && (
+          <div className="bg-card border border-border rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/60 text-xs uppercase tracking-wider text-muted-foreground">
                 <tr>
-                  <td colSpan={3} className="p-12 text-center text-sm text-muted-foreground">
-                    No categories yet.
-                  </td>
+                  <th className="text-left px-4 py-3">Name</th>
+                  <th className="text-left px-4 py-3">Description</th>
+                  <th></th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {cats.map((c: any) => (
+                  <tr key={c.id} className="border-t border-border hover:bg-muted/30">
+                    <td className="px-4 py-3 font-medium">{c.name}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{c.description ?? "—"}</td>
+                    <td className="px-4 py-3 text-right">
+                      {isAdmin && (
+                        <div className="inline-flex gap-1">
+                          <button
+                            onClick={() => {
+                              setEditing(c);
+                              setOpen(true);
+                            }}
+                            className="p-1.5 rounded hover:bg-accent"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => del(c.id)}
+                            className="p-1.5 rounded hover:bg-destructive/10 text-destructive"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {cats.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="p-12 text-center text-sm text-muted-foreground">
+                      No categories yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Mobile Card View */}
+        {isMobileView && (
+          <div className="space-y-3">
+            {cats.map((c: any) => (
+              <MobileCard key={c.id}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="font-medium text-base">{c.name}</div>
+                  {isAdmin && (
+                    <div className="flex gap-1 shrink-0">
+                      <button
+                        onClick={() => {
+                          setEditing(c);
+                          setOpen(true);
+                        }}
+                        className="p-1.5 rounded hover:bg-accent"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => del(c.id)}
+                        className="p-1.5 rounded hover:bg-destructive/10 text-destructive"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {c.description && (
+                  <div className="border-t border-border pt-2">
+                    <MobileCardRow label="Description" value={c.description} />
+                  </div>
+                )}
+              </MobileCard>
+            ))}
+            {cats.length === 0 && (
+              <div className="p-12 text-center text-sm text-muted-foreground bg-card border border-border rounded-lg">
+                No categories yet.
+              </div>
+            )}
+          </div>
+        )}
       </div>
       {open && (
         <CatDialog

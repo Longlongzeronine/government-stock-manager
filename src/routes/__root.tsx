@@ -4,6 +4,7 @@ import {
   Link,
   createRootRouteWithContext,
   useRouter,
+  useRouterState,
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
@@ -66,10 +67,22 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 });
 
 function RootShell({ children }: { children: React.ReactNode }) {
+  const routerState = useRouterState();
+  const isLoading = routerState.status === "pending";
   return (
     <html lang="en">
       <head><HeadContent /></head>
-      <body>{children}<Scripts /></body>
+      <body>
+        {/* Route navigation loader bar */}
+        <div
+          suppressHydrationWarning
+          className={`fixed top-0 left-0 right-0 z-[9999] h-[3px] bg-primary transition-opacity duration-300 ${isLoading ? "opacity-100" : "opacity-0"}`}
+        >
+          <div className="h-full w-full origin-left animate-[route-progress_2s_ease-in-out_infinite] bg-primary-foreground/40" />
+        </div>
+        {children}
+        <Scripts />
+      </body>
     </html>
   );
 }
