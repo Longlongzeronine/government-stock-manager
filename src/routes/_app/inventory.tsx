@@ -77,7 +77,7 @@ function Inventory() {
       Quantity: i.quantity,
       Unit: i.unit,
       ReorderLevel: i.reorder_level,
-      Updated: format(new Date(i.updated_at), "yyyy-MM-dd"),
+      Updated: i.updated_at ? format(new Date(i.updated_at), "yyyy-MM-dd") : "",
     }));
   }
 

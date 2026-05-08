@@ -78,7 +78,7 @@ function RootShell({ children }: { children: React.ReactNode }) {
           suppressHydrationWarning
           className={`fixed top-0 left-0 right-0 z-[9999] h-[3px] bg-primary transition-opacity duration-300 ${isLoading ? "opacity-100" : "opacity-0"}`}
         >
-          <div className="h-full w-full origin-left animate-[route-progress_2s_ease-in-out_infinite] bg-primary-foreground/40" />
+          <div className="h-full w-full origin-left animate-[route-progress_1s_ease-in-out] bg-primary-foreground/40" />
         </div>
         {children}
         <Scripts />

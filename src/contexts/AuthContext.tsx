@@ -19,8 +19,8 @@ const Ctx = createContext<AuthCtx | undefined>(undefined);
 const authInFlight = new Map<string, Promise<{ error: string | null }>>();
 
 // Client-side rate limiting to prevent hitting Supabase's rate limits
-const RATE_LIMIT_WINDOW_MS = 60000; // 1 minute window
-const RATE_LIMIT_MAX_REQUESTS = 3; // Max 3 requests per window (reduced from 5)
+const RATE_LIMIT_WINDOW_MS = 120000; // 2 minutes window
+const RATE_LIMIT_MAX_REQUESTS = 10; // Max 10 requests per window
 const authRequestTimestamps = new Map<string, number[]>();
 
 function checkRateLimit(key: string): { allowed: boolean; retryAfterMs: number } {
@@ -121,10 +121,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       return runAuthRequest(key, async () => {
         try {
-          const { error } = await supabase.auth.signInWithPassword({
+          const signInPromise = supabase.auth.signInWithPassword({
             email: normalizeEmail(email),
             password,
           });
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Request timed out")), 10000)
+          );
+          const { error } = await Promise.race([signInPromise, timeoutPromise]);
           return { error: normalizeAuthError(error?.message) };
         } catch (err: any) {
           // Handle network errors or other exceptions that might include rate limiting
@@ -134,6 +138,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               errorMessage.includes('Too Many Requests') ||
               errorMessage.includes('rate limit')) {
             return { error: "Too many requests. Please wait a moment before trying again." };
+          }
+          if (errorMessage.includes('timed out')) {
+            return { error: "Request timed out. Check your internet connection." };
           }
           return { error: normalizeAuthError(errorMessage || "An unexpected error occurred") };
         }
@@ -150,11 +157,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       return runAuthRequest(key, async () => {
         try {
-          const { error } = await supabase.auth.signUp({
+          const signUpPromise = supabase.auth.signUp({
             email: normalizeEmail(email),
             password,
             options: { data: { full_name: fullName.trim(), requested_role: "viewer" } },
           });
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Request timed out")), 10000)
+          );
+          const { error } = await Promise.race([signUpPromise, timeoutPromise]);
           if (error) return { error: normalizeAuthError(error.message) };
           return { error: null };
         } catch (err: any) {
@@ -165,6 +176,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               errorMessage.includes('Too Many Requests') ||
               errorMessage.includes('rate limit')) {
             return { error: "Too many requests. Please wait a moment before trying again." };
+          }
+          if (errorMessage.includes('timed out')) {
+            return { error: "Request timed out. Check your internet connection." };
           }
           return { error: normalizeAuthError(errorMessage || "An unexpected error occurred") };
         }
