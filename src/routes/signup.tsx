@@ -28,7 +28,7 @@ function SignupPage() {
         toast.error(error);
         return;
       }
-      toast.success("Account created. You may now sign in.");
+      toast.success("Registration submitted. An admin must approve your account before you can sign in.");
       navigate({ to: "/login" });
     } finally {
       submitLockRef.current = false;

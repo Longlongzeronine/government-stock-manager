@@ -78,7 +78,7 @@ export const listAdminUsers = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const adminClient = await getAdminClient(data.accessToken);
     const [{ data: profiles }, { data: roleRows }, { data: authUsers, error }] = await Promise.all([
-      adminClient.from("profiles").select("id, full_name, email, created_at"),
+      adminClient.from("profiles").select("id, full_name, email, created_at, status"),
       adminClient.from("user_roles").select("user_id, role"),
       adminClient.auth.admin.listUsers(),
     ]);
@@ -98,6 +98,7 @@ export const listAdminUsers = createServerFn({ method: "POST" })
         full_name: profile?.full_name ?? user.user_metadata?.full_name ?? null,
         role: roleById.get(user.id) ?? "viewer",
         disabled: Boolean(user.banned_until && new Date(user.banned_until) > new Date()),
+        status: profile?.status ?? "pending",
         created_at: profile?.created_at ?? user.created_at,
       };
     });
@@ -121,6 +122,7 @@ export const createAdminUser = createServerFn({ method: "POST" })
       id: created.user.id,
       email: created.user.email,
       full_name: data.fullName.trim(),
+      status: "active",
     });
     await adminClient.from("user_roles").delete().eq("user_id", created.user.id);
     const { error: roleError } = await adminClient
@@ -173,6 +175,34 @@ export const deleteAdminUser = createServerFn({ method: "POST" })
     await adminClient.from("user_roles").delete().eq("user_id", data.userId);
     await adminClient.from("profiles").delete().eq("id", data.userId);
     const { error } = await adminClient.auth.admin.deleteUser(data.userId);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+interface ApproveRequest extends AdminRequest {
+  userId: string;
+}
+
+export const approveUser = createServerFn({ method: "POST" })
+  .inputValidator((d: ApproveRequest) => d)
+  .handler(async ({ data }) => {
+    const adminClient = await getAdminClient(data.accessToken);
+    const { error } = await adminClient
+      .from("profiles")
+      .update({ status: "active" })
+      .eq("id", data.userId);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+export const declineUser = createServerFn({ method: "POST" })
+  .inputValidator((d: ApproveRequest) => d)
+  .handler(async ({ data }) => {
+    const adminClient = await getAdminClient(data.accessToken);
+    const { error } = await adminClient
+      .from("profiles")
+      .update({ status: "declined" })
+      .eq("id", data.userId);
     if (error) throw new Error(error.message);
     return { ok: true };
   });

@@ -27,7 +27,6 @@ export const nav: { to: string; label: string; icon: any; roles: R[] }[] = [
   { to: "/stock", label: "Stock In / Out", icon: ArrowLeftRight, roles: ["admin", "staff"] },
   { to: "/categories", label: "Categories", icon: Tags, roles: ["admin"] },
   { to: "/suppliers", label: "Suppliers", icon: Building2, roles: ["admin", "staff", "viewer"] },
-  { to: "/assistant", label: "AI Assistant", icon: Sparkles, roles: ["admin", "staff", "viewer"] },
   { to: "/users", label: "Users", icon: Users, roles: ["admin"] },
   { to: "/audit", label: "Audit Log", icon: ScrollText, roles: ["admin"] },
 ];

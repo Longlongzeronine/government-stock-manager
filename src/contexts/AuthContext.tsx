@@ -128,8 +128,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const timeoutPromise = new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error("Request timed out")), 10000)
           );
-          const { error } = await Promise.race([signInPromise, timeoutPromise]);
-          return { error: normalizeAuthError(error?.message) };
+          const { data, error } = await Promise.race([signInPromise, timeoutPromise]);
+          if (error) return { error: normalizeAuthError(error?.message) };
+
+          // Check user approval status
+          if (data?.user) {
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("status")
+              .eq("id", data.user.id)
+              .single();
+
+            if (profile?.status === "pending") {
+              // Sign out immediately since they're not approved
+              await supabase.auth.signOut();
+              return { error: "Your account is pending admin approval. You will be notified once approved." };
+            }
+            if (profile?.status === "declined") {
+              await supabase.auth.signOut();
+              return { error: "Your account request has been declined. Contact an administrator." };
+            }
+          }
+
+          return { error: null };
         } catch (err: any) {
           // Handle network errors or other exceptions that might include rate limiting
           const errorMessage = err?.message || err?.toString() || '';
