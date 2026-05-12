@@ -13,7 +13,7 @@ import { format } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
 
 export const Route = createFileRoute("/_app/inventory")({
-  head: () => ({ meta: [{ title: "Inventory — GovInventory" }] }),
+  head: () => ({ meta: [{ title: "Inventory — Supplify" }] }),
   component: Inventory,
 });
 

@@ -4,7 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/signup")({
-  head: () => ({ meta: [{ title: "Request access — GovInventory" }] }),
+  head: () => ({ meta: [{ title: "Request access — Supplify" }] }),
   component: SignupPage,
 });
 

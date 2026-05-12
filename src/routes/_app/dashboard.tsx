@@ -19,7 +19,7 @@ import { StatusBadge } from "@/components/common/StatusBadge";
 import { useAuth } from "@/contexts/AuthContext";
 
 export const Route = createFileRoute("/_app/dashboard")({
-  head: () => ({ meta: [{ title: "Dashboard — GovInventory" }] }),
+  head: () => ({ meta: [{ title: "Dashboard — Supplify" }] }),
   component: Dashboard,
 });
 
