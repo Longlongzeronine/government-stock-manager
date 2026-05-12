@@ -1,18 +1,12 @@
-import { createFileRoute, Outlet, redirect, useRouter } from "@tanstack/react-router";
-import { supabase } from "@/integrations/supabase/client";
+import { createFileRoute, Outlet, useRouter } from "@tanstack/react-router";
 import { AppShell } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { useEffect } from "react";
 
 export const Route = createFileRoute("/_app")({
-  beforeLoad: async () => {
-    // This runs on both server and client. On the server, there's no
-    // browser localStorage so the session is never found. We skip the
-    // guard on the server and handle it client-side in the component.
-    if (typeof window !== "undefined") {
-      const { data } = await supabase.auth.getSession();
-      if (!data.session) throw redirect({ to: "/login" });
-    }
+  beforeLoad: () => {
+    // Auth guard is handled client-side in AppShellGuard to avoid
+    // SSR issues where browser localStorage (session) isn't available.
   },
   component: () => <AppShellGuard />,
 });
@@ -22,7 +16,8 @@ function AppShellGuard() {
   const router = useRouter();
 
   useEffect(() => {
-    // Once auth finishes loading, redirect if no session
+    // Wait for AuthContext to hydrate from localStorage, then redirect
+    // if no session is found.
     if (!loading && !session) {
       router.navigate({ to: "/login" });
     }

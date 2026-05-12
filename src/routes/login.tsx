@@ -38,8 +38,8 @@ function LoginPage() {
 
   return (
     <div className="min-h-screen grid lg:grid-cols-2">
-      <div className="hidden lg:flex flex-col justify-between bg-sidebar text-sidebar-foreground p-12">
-        <div className="flex items-center gap-3">
+      <div className="hidden lg:flex flex-col justify-center bg-sidebar text-sidebar-foreground p-12">
+        <div className="flex items-center gap-3 mb-16">
           <img src="/favicon.svg" alt="Supplify" className="h-11 w-11 rounded-md" />
           <div>
             <div className="font-display text-xl">Supplify</div>
@@ -48,7 +48,7 @@ function LoginPage() {
             </div>
           </div>
         </div>
-        <div>
+        <div className="mb-12">
           <h2 className="font-display text-4xl leading-tight max-w-md">
             Official record-keeping for public office supplies and equipment.
           </h2>
