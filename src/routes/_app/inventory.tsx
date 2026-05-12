@@ -151,6 +151,17 @@ function Inventory() {
           </select>
         </div>
 
+        {/* Pagination (top) */}
+        <div className="flex items-center justify-between text-sm">
+          <div className="text-muted-foreground">
+            Page {page + 1} of {totalPages}
+          </div>
+          <div className="flex gap-2">
+            <button disabled={page === 0} onClick={() => setPage((p) => p - 1)} className="px-3 py-1.5 rounded border border-input bg-card disabled:opacity-50">Previous</button>
+            <button disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)} className="px-3 py-1.5 rounded border border-input bg-card disabled:opacity-50">Next</button>
+          </div>
+        </div>
+
         {/* Desktop Table View */}
         {!isMobileView && (
           <div className="bg-card border border-border rounded-lg overflow-hidden">
@@ -253,16 +264,6 @@ function Inventory() {
           </div>
         )}
 
-        {/* Pagination */}
-        <div className="flex items-center justify-between text-sm">
-          <div className="text-muted-foreground">
-            Page {page + 1} of {totalPages}
-          </div>
-          <div className="flex gap-2">
-            <button disabled={page === 0} onClick={() => setPage((p) => p - 1)} className="px-3 py-1.5 rounded border border-input bg-card disabled:opacity-50">Previous</button>
-            <button disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)} className="px-3 py-1.5 rounded border border-input bg-card disabled:opacity-50">Next</button>
-          </div>
-        </div>
       </div>
 
       {open && (
