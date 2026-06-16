@@ -5,7 +5,9 @@ import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { MobileCard, MobileCardRow } from "@/components/common/MobileCard";
 import {
+  approveUser,
   createAdminUser,
+  declineUser,
   deleteAdminUser,
   listAdminUsers,
   resetUserPassword,
@@ -18,7 +20,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 type AssignableRole = "viewer" | "staff" | "admin";
 
 export const Route = createFileRoute("/_app/users")({
-  head: () => ({ meta: [{ title: "User Roles - GovInventory" }] }),
+  head: () => ({ meta: [{ title: "User Roles — Supplify" }] }),
   component: UsersPage,
 });
 
@@ -182,22 +184,69 @@ function UsersPage() {
                         className="border border-input rounded-md bg-card px-2 py-1 text-sm"
                       />
                     </td>
-                    <td className="px-4 py-3">{u.disabled ? "disabled" : "active"}</td>
+                    <td className="px-4 py-3">
+                      {u.status === "pending" ? (
+                        <span className="text-xs px-2 py-0.5 rounded-md bg-warning/15 text-warning-foreground border border-warning/30">pending</span>
+                      ) : u.status === "declined" ? (
+                        <span className="text-xs px-2 py-0.5 rounded-md bg-destructive/15 text-destructive border border-destructive/30">declined</span>
+                      ) : u.disabled ? (
+                        <span className="text-xs px-2 py-0.5 rounded-md bg-muted text-muted-foreground border border-border">disabled</span>
+                      ) : (
+                        <span className="text-xs px-2 py-0.5 rounded-md bg-success/15 text-success border border-success/30">active</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
-                      <button
-                        type="button"
-                        onClick={() => setResetTarget({ id: u.id, email: u.email })}
-                        className="px-2 py-1 rounded border border-input text-xs mr-2 cursor-pointer hover:bg-accent"
-                      >
-                        Reset password
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => toggleDisabled(u.id, !u.disabled)}
-                        className="px-2 py-1 rounded border border-input text-xs mr-2 cursor-pointer hover:bg-accent"
-                      >
-                        {u.disabled ? "Activate" : "Deactivate"}
-                      </button>
+                      {u.status === "pending" ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await approveUser({ data: { accessToken, userId: u.id } });
+                                toast.success("User approved");
+                                refetch();
+                              } catch (e: any) {
+                                toast.error(e?.message ?? "Approve failed");
+                              }
+                            }}
+                            className="px-2 py-1 rounded border border-success/50 text-success text-xs mr-2 cursor-pointer hover:bg-success/10"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await declineUser({ data: { accessToken, userId: u.id } });
+                                toast.success("User declined");
+                                refetch();
+                              } catch (e: any) {
+                                toast.error(e?.message ?? "Decline failed");
+                              }
+                            }}
+                            className="px-2 py-1 rounded border border-destructive/40 text-destructive text-xs mr-2 cursor-pointer hover:bg-destructive/10"
+                          >
+                            Decline
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setResetTarget({ id: u.id, email: u.email })}
+                            className="px-2 py-1 rounded border border-input text-xs mr-2 cursor-pointer hover:bg-accent"
+                          >
+                            Reset password
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => toggleDisabled(u.id, !u.disabled)}
+                            className="px-2 py-1 rounded border border-input text-xs mr-2 cursor-pointer hover:bg-accent"
+                          >
+                            {u.disabled ? "Activate" : "Deactivate"}
+                          </button>
+                        </>
+                      )}
                       <button
                         type="button"
                         onClick={() => deleteUser(u.id, u.email)}
@@ -227,9 +276,15 @@ function UsersPage() {
               <MobileCard key={u.id}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="font-medium text-base">{u.full_name ?? "-"}</div>
-                  <span className={`text-xs px-2 py-1 rounded-md border shrink-0 ${u.disabled ? "bg-muted text-muted-foreground border-border" : "bg-success/15 text-success border-success/30"}`}>
-                    {u.disabled ? "disabled" : "active"}
-                  </span>
+                  {u.status === "pending" ? (
+                    <span className="text-xs px-2 py-1 rounded-md shrink-0 bg-warning/15 text-warning-foreground border border-warning/30">pending</span>
+                  ) : u.status === "declined" ? (
+                    <span className="text-xs px-2 py-1 rounded-md shrink-0 bg-destructive/15 text-destructive border border-destructive/30">declined</span>
+                  ) : u.disabled ? (
+                    <span className="text-xs px-2 py-1 rounded-md shrink-0 bg-muted text-muted-foreground border border-border">disabled</span>
+                  ) : (
+                    <span className="text-xs px-2 py-1 rounded-md shrink-0 bg-success/15 text-success border border-success/30">active</span>
+                  )}
                 </div>
                 <div className="border-t border-border pt-2 space-y-2">
                   <MobileCardRow label="Email" value={u.email} />
@@ -243,29 +298,66 @@ function UsersPage() {
                   </div>
                 </div>
                 <div className="flex flex-col gap-2 pt-2 border-t border-border">
-                  <button
-                    type="button"
-                    onClick={() => setResetTarget({ id: u.id, email: u.email })}
-                    className="w-full px-3 py-2 rounded-md border border-input text-sm cursor-pointer hover:bg-accent"
-                  >
-                    Reset password
-                  </button>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => toggleDisabled(u.id, !u.disabled)}
-                      className="flex-1 px-3 py-2 rounded-md border border-input text-sm cursor-pointer hover:bg-accent"
-                    >
-                      {u.disabled ? "Activate" : "Deactivate"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => deleteUser(u.id, u.email)}
-                      className="px-3 py-2 rounded-md border border-destructive/40 text-destructive text-sm cursor-pointer hover:bg-destructive/10"
-                    >
-                      Delete
-                    </button>
-                  </div>
+                  {u.status === "pending" ? (
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await approveUser({ data: { accessToken, userId: u.id } });
+                            toast.success("User approved");
+                            refetch();
+                          } catch (e: any) {
+                            toast.error(e?.message ?? "Approve failed");
+                          }
+                        }}
+                        className="flex-1 px-3 py-2 rounded-md border border-success/50 text-success text-sm cursor-pointer hover:bg-success/10"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await declineUser({ data: { accessToken, userId: u.id } });
+                            toast.success("User declined");
+                            refetch();
+                          } catch (e: any) {
+                            toast.error(e?.message ?? "Decline failed");
+                          }
+                        }}
+                        className="flex-1 px-3 py-2 rounded-md border border-destructive/40 text-destructive text-sm cursor-pointer hover:bg-destructive/10"
+                      >
+                        Decline
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setResetTarget({ id: u.id, email: u.email })}
+                        className="w-full px-3 py-2 rounded-md border border-input text-sm cursor-pointer hover:bg-accent"
+                      >
+                        Reset password
+                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleDisabled(u.id, !u.disabled)}
+                          className="flex-1 px-3 py-2 rounded-md border border-input text-sm cursor-pointer hover:bg-accent"
+                        >
+                          {u.disabled ? "Activate" : "Deactivate"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteUser(u.id, u.email)}
+                          className="px-3 py-2 rounded-md border border-destructive/40 text-destructive text-sm cursor-pointer hover:bg-destructive/10"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               </MobileCard>
             ))}

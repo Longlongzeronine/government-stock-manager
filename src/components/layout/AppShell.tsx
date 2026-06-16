@@ -1,5 +1,6 @@
 import { Outlet } from "@tanstack/react-router";
 import { Sidebar } from "./Sidebar";
+import { AiChatWidget } from "./AiChatWidget";
 import { Menu } from "lucide-react";
 import { useState } from "react";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -29,6 +30,9 @@ export function AppShell() {
         )}
         <Outlet />
       </main>
+
+      {/* Floating AI assistant */}
+      <AiChatWidget />
 
       {/* Mobile menu drawer */}
       {isMobile && mobileMenuOpen && (

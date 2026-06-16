@@ -4,7 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/signup")({
-  head: () => ({ meta: [{ title: "Request access — GovInventory" }] }),
+  head: () => ({ meta: [{ title: "Request access — Supplify" }] }),
   component: SignupPage,
 });
 
@@ -28,7 +28,7 @@ function SignupPage() {
         toast.error(error);
         return;
       }
-      toast.success("Account created. You may now sign in.");
+      toast.success("Registration submitted. An admin must approve your account before you can sign in.");
       navigate({ to: "/login" });
     } finally {
       submitLockRef.current = false;

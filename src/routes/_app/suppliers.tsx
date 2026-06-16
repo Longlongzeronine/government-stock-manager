@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-mobile";
 
 export const Route = createFileRoute("/_app/suppliers")({
-  head: () => ({ meta: [{ title: "Suppliers — GovInventory" }] }),
+  head: () => ({ meta: [{ title: "Suppliers — Supplify" }] }),
   component: Suppliers,
 });
 
