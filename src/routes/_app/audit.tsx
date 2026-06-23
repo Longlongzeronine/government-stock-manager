@@ -8,7 +8,7 @@ import { format } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
 
 export const Route = createFileRoute("/_app/audit")({
-  head: () => ({ meta: [{ title: "Audit Log — GovInventory" }] }),
+  head: () => ({ meta: [{ title: "Audit Log — Supplify" }] }),
   component: Audit,
 });
 

@@ -20,7 +20,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 type AssignableRole = "viewer" | "staff" | "admin";
 
 export const Route = createFileRoute("/_app/users")({
-  head: () => ({ meta: [{ title: "User Roles - GovInventory" }] }),
+  head: () => ({ meta: [{ title: "User Roles — Supplify" }] }),
   component: UsersPage,
 });
 

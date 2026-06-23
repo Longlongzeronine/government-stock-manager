@@ -1,6 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
@@ -13,13 +13,18 @@ import { format } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
 
 export const Route = createFileRoute("/_app/inventory")({
-  head: () => ({ meta: [{ title: "Inventory — GovInventory" }] }),
+  head: () => ({ meta: [{ title: "Inventory — Supplify" }] }),
+  validateSearch: (search: Record<string, unknown>) => ({
+    add: search.add === "1" || search.add === 1 || search.add === true,
+  }),
   component: Inventory,
 });
 
 function Inventory() {
   const { isAdmin } = useAuth();
   const qc = useQueryClient();
+  const navigate = useNavigate();
+  const searchParams = Route.useSearch();
   const [search, setSearch] = useState("");
   const [catFilter, setCatFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
@@ -27,6 +32,13 @@ function Inventory() {
   const pageSize = 15;
   const [editing, setEditing] = useState<any | null>(null);
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!searchParams.add || !isAdmin) return;
+    setEditing(null);
+    setOpen(true);
+    navigate({ to: "/inventory", search: {} });
+  }, [isAdmin, navigate, searchParams.add]);
 
   const { data: items = [] } = useQuery({
     queryKey: ["items"],
@@ -151,6 +163,17 @@ function Inventory() {
           </select>
         </div>
 
+        {/* Pagination (top) */}
+        <div className="flex items-center justify-between text-sm">
+          <div className="text-muted-foreground">
+            Page {page + 1} of {totalPages}
+          </div>
+          <div className="flex gap-2">
+            <button disabled={page === 0} onClick={() => setPage((p) => p - 1)} className="px-3 py-1.5 rounded border border-input bg-card disabled:opacity-50">Previous</button>
+            <button disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)} className="px-3 py-1.5 rounded border border-input bg-card disabled:opacity-50">Next</button>
+          </div>
+        </div>
+
         {/* Desktop Table View */}
         {!isMobileView && (
           <div className="bg-card border border-border rounded-lg overflow-hidden">
@@ -253,16 +276,6 @@ function Inventory() {
           </div>
         )}
 
-        {/* Pagination */}
-        <div className="flex items-center justify-between text-sm">
-          <div className="text-muted-foreground">
-            Page {page + 1} of {totalPages}
-          </div>
-          <div className="flex gap-2">
-            <button disabled={page === 0} onClick={() => setPage((p) => p - 1)} className="px-3 py-1.5 rounded border border-input bg-card disabled:opacity-50">Previous</button>
-            <button disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)} className="px-3 py-1.5 rounded border border-input bg-card disabled:opacity-50">Next</button>
-          </div>
-        </div>
       </div>
 
       {open && (

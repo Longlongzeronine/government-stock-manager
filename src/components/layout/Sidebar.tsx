@@ -3,6 +3,7 @@ import {
   LayoutDashboard,
   Package,
   ArrowLeftRight,
+  ClipboardList,
   Tags,
   Building2,
   Users,
@@ -24,6 +25,7 @@ export const nav: { to: string; label: string; icon: any; roles: R[] }[] = [
     roles: ["admin", "staff", "viewer"],
   },
   { to: "/inventory", label: "Inventory", icon: Package, roles: ["admin", "staff", "viewer"] },
+  { to: "/requisitions", label: "Requisitions", icon: ClipboardList, roles: ["admin", "staff"] },
   { to: "/stock", label: "Stock In / Out", icon: ArrowLeftRight, roles: ["admin", "staff"] },
   { to: "/categories", label: "Categories", icon: Tags, roles: ["admin"] },
   { to: "/suppliers", label: "Suppliers", icon: Building2, roles: ["admin", "staff", "viewer"] },
@@ -55,15 +57,13 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps = {}) {
         {/* Drawer */}
         <div className="fixed inset-y-0 left-0 w-64 bg-sidebar text-sidebar-foreground flex flex-col z-50">
           <div className="flex items-center justify-between px-4 py-3 border-b border-sidebar-border">
-            <div className="flex items-center gap-2">
-              <div className="h-8 w-8 rounded-md bg-sidebar-primary/15 grid place-items-center">
-                <Shield className="h-4 w-4 text-sidebar-primary" />
-              </div>
+            <div className="flex items-center gap-2.5">
+              <img src="/favicon.svg" alt="Supplify" className="h-8 w-8 rounded-md" />
               <div>
-                <div className="font-display text-sm">GovInventory</div>
-                <div className="text-[9px] uppercase tracking-wider text-sidebar-foreground/60">
-                  Republic Records
-                </div>
+              <div className="font-display text-sm leading-tight">Supplify</div>
+              <div className="text-[9px] uppercase tracking-wider text-sidebar-foreground/60 leading-tight">
+                Supplies & Materials Management
+              </div>
               </div>
             </div>
             <button
@@ -118,16 +118,14 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps = {}) {
 
   // Desktop sidebar
   return (
-    <aside className="hidden md:flex w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
+    <aside className="hidden md:flex w-64 shrink-0 h-screen sticky top-0 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
       <div className="px-5 py-5 border-b border-sidebar-border">
-        <div className="flex items-center gap-2">
-          <div className="h-9 w-9 rounded-md bg-sidebar-primary/15 grid place-items-center">
-            <Shield className="h-5 w-5 text-sidebar-primary" />
-          </div>
+        <div className="flex items-center gap-2.5">
+          <img src="/favicon.svg" alt="Supplify" className="h-9 w-9 rounded-md" />
           <div>
-            <div className="font-display text-base leading-tight">GovInventory</div>
-            <div className="text-[10px] uppercase tracking-wider text-sidebar-foreground/60">
-              Republic Records System
+            <div className="font-display text-base leading-tight">Supplify</div>
+            <div className="text-[10px] uppercase tracking-wider text-sidebar-foreground/60 leading-tight">
+              Supplies & Materials Management
             </div>
           </div>
         </div>
