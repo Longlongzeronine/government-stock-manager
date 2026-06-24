@@ -8,7 +8,7 @@ export const supabase = createClient(url, key, {
 });
 
 export type AppRole = "admin" | "staff" | "viewer";
-export type TxType = "IN" | "OUT";
+export type TxType = "IN" | "OUT" | "RETURN" | "TRANSFER" | "DISPOSAL" | "ADJUSTMENT";
 
 export interface Item {
   id: string;
@@ -18,6 +18,15 @@ export interface Item {
   supplier_id: string | null;
   quantity: number;
   unit: string;
+  unit_value: number;
+  total_cost: number;
+  stock_number: string | null;
+  property_number: string | null;
+  fund_cluster: string;
+  uacs_object_code: string | null;
+  estimated_useful_life: string | null;
+  accountable_officer: string | null;
+  office: string | null;
   reorder_level: number;
   created_at: string;
   updated_at: string;
@@ -28,8 +37,10 @@ export interface Category { id: string; name: string; description: string | null
 export interface Supplier { id: string; name: string; contact: string | null; address: string | null; notes: string | null; created_at: string; }
 export interface Transaction {
   id: string; item_id: string; type: TxType; quantity: number;
+  unit_value: number | null; total_cost: number | null; reference_no: string | null; transaction_date: string;
+  responsibility_center_code: string | null; office_officer: string | null;
   staff_id: string | null; staff_name: string | null; remarks: string | null; created_at: string;
-  item?: { id: string; name: string; unit: string } | null;
+  item?: { id: string; name: string; unit: string; unit_value: number } | null;
 }
 export interface Profile { id: string; full_name: string | null; email: string | null; created_at: string; }
 export interface AuditLog { id: string; actor_id: string | null; actor_email: string | null; action: string; table_name: string; row_id: string | null; payload: any; created_at: string; }

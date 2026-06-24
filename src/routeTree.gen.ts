@@ -13,12 +13,15 @@ import { Route as SignupRouteImport } from './routes/signup'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ItemQrIdRouteImport } from './routes/item-qr.$id'
 import { Route as AppUsersRouteImport } from './routes/_app/users'
 import { Route as AppSuppliersRouteImport } from './routes/_app/suppliers'
 import { Route as AppStockRouteImport } from './routes/_app/stock'
+import { Route as AppScanRouteImport } from './routes/_app/scan'
 import { Route as AppRequisitionsRouteImport } from './routes/_app/requisitions'
 import { Route as AppInventoryRouteImport } from './routes/_app/inventory'
 import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
+import { Route as AppCoaFormsRouteImport } from './routes/_app/coa-forms'
 import { Route as AppCategoriesRouteImport } from './routes/_app/categories'
 import { Route as AppAuditRouteImport } from './routes/_app/audit'
 import { Route as AppAssistantRouteImport } from './routes/_app/assistant'
@@ -42,6 +45,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ItemQrIdRoute = ItemQrIdRouteImport.update({
+  id: '/item-qr/$id',
+  path: '/item-qr/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppUsersRoute = AppUsersRouteImport.update({
   id: '/users',
   path: '/users',
@@ -57,6 +65,11 @@ const AppStockRoute = AppStockRouteImport.update({
   path: '/stock',
   getParentRoute: () => AppRoute,
 } as any)
+const AppScanRoute = AppScanRouteImport.update({
+  id: '/scan',
+  path: '/scan',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppRequisitionsRoute = AppRequisitionsRouteImport.update({
   id: '/requisitions',
   path: '/requisitions',
@@ -70,6 +83,11 @@ const AppInventoryRoute = AppInventoryRouteImport.update({
 const AppDashboardRoute = AppDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppCoaFormsRoute = AppCoaFormsRouteImport.update({
+  id: '/coa-forms',
+  path: '/coa-forms',
   getParentRoute: () => AppRoute,
 } as any)
 const AppCategoriesRoute = AppCategoriesRouteImport.update({
@@ -95,12 +113,15 @@ export interface FileRoutesByFullPath {
   '/assistant': typeof AppAssistantRoute
   '/audit': typeof AppAuditRoute
   '/categories': typeof AppCategoriesRoute
+  '/coa-forms': typeof AppCoaFormsRoute
   '/dashboard': typeof AppDashboardRoute
   '/inventory': typeof AppInventoryRoute
   '/requisitions': typeof AppRequisitionsRoute
+  '/scan': typeof AppScanRoute
   '/stock': typeof AppStockRoute
   '/suppliers': typeof AppSuppliersRoute
   '/users': typeof AppUsersRoute
+  '/item-qr/$id': typeof ItemQrIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -109,12 +130,15 @@ export interface FileRoutesByTo {
   '/assistant': typeof AppAssistantRoute
   '/audit': typeof AppAuditRoute
   '/categories': typeof AppCategoriesRoute
+  '/coa-forms': typeof AppCoaFormsRoute
   '/dashboard': typeof AppDashboardRoute
   '/inventory': typeof AppInventoryRoute
   '/requisitions': typeof AppRequisitionsRoute
+  '/scan': typeof AppScanRoute
   '/stock': typeof AppStockRoute
   '/suppliers': typeof AppSuppliersRoute
   '/users': typeof AppUsersRoute
+  '/item-qr/$id': typeof ItemQrIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -125,12 +149,15 @@ export interface FileRoutesById {
   '/_app/assistant': typeof AppAssistantRoute
   '/_app/audit': typeof AppAuditRoute
   '/_app/categories': typeof AppCategoriesRoute
+  '/_app/coa-forms': typeof AppCoaFormsRoute
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/inventory': typeof AppInventoryRoute
   '/_app/requisitions': typeof AppRequisitionsRoute
+  '/_app/scan': typeof AppScanRoute
   '/_app/stock': typeof AppStockRoute
   '/_app/suppliers': typeof AppSuppliersRoute
   '/_app/users': typeof AppUsersRoute
+  '/item-qr/$id': typeof ItemQrIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -141,12 +168,15 @@ export interface FileRouteTypes {
     | '/assistant'
     | '/audit'
     | '/categories'
+    | '/coa-forms'
     | '/dashboard'
     | '/inventory'
     | '/requisitions'
+    | '/scan'
     | '/stock'
     | '/suppliers'
     | '/users'
+    | '/item-qr/$id'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -155,12 +185,15 @@ export interface FileRouteTypes {
     | '/assistant'
     | '/audit'
     | '/categories'
+    | '/coa-forms'
     | '/dashboard'
     | '/inventory'
     | '/requisitions'
+    | '/scan'
     | '/stock'
     | '/suppliers'
     | '/users'
+    | '/item-qr/$id'
   id:
     | '__root__'
     | '/'
@@ -170,12 +203,15 @@ export interface FileRouteTypes {
     | '/_app/assistant'
     | '/_app/audit'
     | '/_app/categories'
+    | '/_app/coa-forms'
     | '/_app/dashboard'
     | '/_app/inventory'
     | '/_app/requisitions'
+    | '/_app/scan'
     | '/_app/stock'
     | '/_app/suppliers'
     | '/_app/users'
+    | '/item-qr/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -183,6 +219,7 @@ export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
   LoginRoute: typeof LoginRoute
   SignupRoute: typeof SignupRoute
+  ItemQrIdRoute: typeof ItemQrIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -215,6 +252,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/item-qr/$id': {
+      id: '/item-qr/$id'
+      path: '/item-qr/$id'
+      fullPath: '/item-qr/$id'
+      preLoaderRoute: typeof ItemQrIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app/users': {
       id: '/_app/users'
       path: '/users'
@@ -236,6 +280,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppStockRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/scan': {
+      id: '/_app/scan'
+      path: '/scan'
+      fullPath: '/scan'
+      preLoaderRoute: typeof AppScanRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/requisitions': {
       id: '/_app/requisitions'
       path: '/requisitions'
@@ -255,6 +306,13 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof AppDashboardRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/coa-forms': {
+      id: '/_app/coa-forms'
+      path: '/coa-forms'
+      fullPath: '/coa-forms'
+      preLoaderRoute: typeof AppCoaFormsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/categories': {
@@ -285,9 +343,11 @@ interface AppRouteChildren {
   AppAssistantRoute: typeof AppAssistantRoute
   AppAuditRoute: typeof AppAuditRoute
   AppCategoriesRoute: typeof AppCategoriesRoute
+  AppCoaFormsRoute: typeof AppCoaFormsRoute
   AppDashboardRoute: typeof AppDashboardRoute
   AppInventoryRoute: typeof AppInventoryRoute
   AppRequisitionsRoute: typeof AppRequisitionsRoute
+  AppScanRoute: typeof AppScanRoute
   AppStockRoute: typeof AppStockRoute
   AppSuppliersRoute: typeof AppSuppliersRoute
   AppUsersRoute: typeof AppUsersRoute
@@ -297,9 +357,11 @@ const AppRouteChildren: AppRouteChildren = {
   AppAssistantRoute: AppAssistantRoute,
   AppAuditRoute: AppAuditRoute,
   AppCategoriesRoute: AppCategoriesRoute,
+  AppCoaFormsRoute: AppCoaFormsRoute,
   AppDashboardRoute: AppDashboardRoute,
   AppInventoryRoute: AppInventoryRoute,
   AppRequisitionsRoute: AppRequisitionsRoute,
+  AppScanRoute: AppScanRoute,
   AppStockRoute: AppStockRoute,
   AppSuppliersRoute: AppSuppliersRoute,
   AppUsersRoute: AppUsersRoute,
@@ -312,6 +374,7 @@ const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
   LoginRoute: LoginRoute,
   SignupRoute: SignupRoute,
+  ItemQrIdRoute: ItemQrIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

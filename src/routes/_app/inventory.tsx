@@ -88,6 +88,11 @@ function Inventory() {
       Type: i.item_type === "material" ? "Material" : "Supply",
       Quantity: i.quantity,
       Unit: i.unit,
+      UnitValue: Number(i.unit_value ?? 0),
+      TotalCost: totalCost(i),
+      StockNumber: i.stock_number ?? "",
+      PropertyNumber: i.property_number ?? "",
+      FundCluster: i.fund_cluster ?? "",
       ReorderLevel: i.reorder_level,
       Updated: i.updated_at ? format(new Date(i.updated_at), "yyyy-MM-dd") : "",
     }));
@@ -184,8 +189,11 @@ function Inventory() {
                   <Th>Category</Th>
                   <Th>Supplier</Th>
                   <Th>Type</Th>
+                  <Th>Stock/Property No.</Th>
                   <Th className="text-right">Qty</Th>
                   <Th>Unit</Th>
+                  <Th className="text-right">Unit Value</Th>
+                  <Th className="text-right">Total Cost</Th>
                   <Th className="text-right">Reorder</Th>
                   <Th>Status</Th>
                   <Th></Th>
@@ -203,8 +211,11 @@ function Inventory() {
                     <Td>
                       <TypeBadge itemType={i.item_type} />
                     </Td>
+                    <Td>{i.stock_number || i.property_number || "—"}</Td>
                     <Td className="text-right tabular-nums font-medium">{i.quantity}</Td>
                     <Td>{i.unit}</Td>
+                    <Td className="text-right tabular-nums">{money(i.unit_value)}</Td>
+                    <Td className="text-right tabular-nums">{money(totalCost(i))}</Td>
                     <Td className="text-right tabular-nums">{i.reorder_level}</Td>
                     <Td>
                       <StatusBadge quantity={i.quantity} reorder={i.reorder_level} />
@@ -225,7 +236,7 @@ function Inventory() {
                 ))}
                 {paged.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="p-12 text-center text-sm text-muted-foreground">
+                    <td colSpan={12} className="p-12 text-center text-sm text-muted-foreground">
                       No items match your filters.
                     </td>
                   </tr>
@@ -251,8 +262,11 @@ function Inventory() {
                   <MobileCardRow label="Category" value={i.category?.name ?? "—"} />
                   <MobileCardRow label="Supplier" value={i.supplier?.name ?? "—"} />
                   <MobileCardRow label="Type" value={<TypeBadge itemType={i.item_type} />} />
+                  <MobileCardRow label="Stock/Property No." value={i.stock_number || i.property_number || "—"} />
                   <div className="grid grid-cols-2 gap-2">
                     <MobileCardRow label="Qty" value={`${i.quantity} ${i.unit}`} />
+                    <MobileCardRow label="Unit Value" value={money(i.unit_value)} align="right" />
+                    <MobileCardRow label="Total Cost" value={money(totalCost(i))} />
                     <MobileCardRow label="Reorder" value={i.reorder_level} align="right" />
                   </div>
                 </div>
@@ -312,6 +326,18 @@ function TypeBadge({ itemType }: { itemType: string }) {
   );
 }
 
+function money(value: any) {
+  return Number(value ?? 0).toLocaleString("en-PH", {
+    style: "currency",
+    currency: "PHP",
+    minimumFractionDigits: 2,
+  });
+}
+
+function totalCost(item: any) {
+  return Number(item.total_cost ?? Number(item.quantity ?? 0) * Number(item.unit_value ?? 0));
+}
+
 function ItemDialog({ editing, cats, sups, onClose, onSaved }: any) {
   const [form, setForm] = useState({
     name: editing?.name ?? "",
@@ -321,6 +347,14 @@ function ItemDialog({ editing, cats, sups, onClose, onSaved }: any) {
     item_type: editing?.item_type ?? "supply",
     quantity: editing?.quantity ?? 0,
     unit: editing?.unit ?? "pcs",
+    unit_value: editing?.unit_value ?? 0,
+    stock_number: editing?.stock_number ?? "",
+    property_number: editing?.property_number ?? "",
+    fund_cluster: editing?.fund_cluster ?? "06",
+    uacs_object_code: editing?.uacs_object_code ?? "",
+    estimated_useful_life: editing?.estimated_useful_life ?? "",
+    accountable_officer: editing?.accountable_officer ?? "",
+    office: editing?.office ?? "",
     reorder_level: editing?.reorder_level ?? 10,
   });
   const [saving, setSaving] = useState(false);
@@ -333,6 +367,14 @@ function ItemDialog({ editing, cats, sups, onClose, onSaved }: any) {
       category_id: form.category_id || null,
       supplier_id: form.supplier_id || null,
       quantity: Number(form.quantity),
+      unit_value: Number(form.unit_value),
+      stock_number: form.stock_number || null,
+      property_number: form.property_number || null,
+      fund_cluster: form.fund_cluster || "06",
+      uacs_object_code: form.uacs_object_code || null,
+      estimated_useful_life: form.estimated_useful_life || null,
+      accountable_officer: form.accountable_officer || null,
+      office: form.office || null,
       reorder_level: Number(form.reorder_level),
     };
     const { error } = editing
@@ -346,7 +388,7 @@ function ItemDialog({ editing, cats, sups, onClose, onSaved }: any) {
 
   return (
     <div className="fixed inset-0 bg-foreground/30 backdrop-blur-sm grid place-items-center z-50 p-4">
-      <form onSubmit={save} className="bg-card border border-border rounded-lg w-full max-w-xl p-6 space-y-4">
+      <form onSubmit={save} className="bg-card border border-border rounded-lg w-full max-w-3xl max-h-[92vh] overflow-y-auto p-6 space-y-4">
         <h2 className="text-xl">{editing ? "Edit item" : "Add new item"}</h2>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Name" full>
@@ -382,11 +424,35 @@ function ItemDialog({ editing, cats, sups, onClose, onSaved }: any) {
           <Field label="Quantity">
             <input type="number" min={0} className="dlg-input" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value as any })} />
           </Field>
+          <Field label="Unit Value">
+            <input type="number" min={0} step="0.01" className="dlg-input" value={form.unit_value} onChange={(e) => setForm({ ...form, unit_value: e.target.value as any })} />
+          </Field>
           <Field label="Unit">
             <input className="dlg-input" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} />
           </Field>
           <Field label="Reorder level">
             <input type="number" min={0} className="dlg-input" value={form.reorder_level} onChange={(e) => setForm({ ...form, reorder_level: e.target.value as any })} />
+          </Field>
+          <Field label="Stock No.">
+            <input className="dlg-input" value={form.stock_number} onChange={(e) => setForm({ ...form, stock_number: e.target.value })} />
+          </Field>
+          <Field label="Semi-Expendable Property No.">
+            <input className="dlg-input" value={form.property_number} onChange={(e) => setForm({ ...form, property_number: e.target.value })} />
+          </Field>
+          <Field label="Fund Cluster">
+            <input className="dlg-input" value={form.fund_cluster} onChange={(e) => setForm({ ...form, fund_cluster: e.target.value })} />
+          </Field>
+          <Field label="UACS Object Code">
+            <input className="dlg-input" value={form.uacs_object_code} onChange={(e) => setForm({ ...form, uacs_object_code: e.target.value })} />
+          </Field>
+          <Field label="Estimated Useful Life">
+            <input className="dlg-input" value={form.estimated_useful_life} onChange={(e) => setForm({ ...form, estimated_useful_life: e.target.value })} />
+          </Field>
+          <Field label="Accountable Officer">
+            <input className="dlg-input" value={form.accountable_officer} onChange={(e) => setForm({ ...form, accountable_officer: e.target.value })} />
+          </Field>
+          <Field label="Office/Station" full>
+            <input className="dlg-input" value={form.office} onChange={(e) => setForm({ ...form, office: e.target.value })} />
           </Field>
         </div>
         <div className="flex justify-end gap-2 pt-2">

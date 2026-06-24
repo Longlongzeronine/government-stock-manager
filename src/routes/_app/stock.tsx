@@ -25,7 +25,8 @@ function Stock() {
       (
         await supabase
           .from("transactions")
-          .select("*, item:items(id,name,unit)")
+          .select("*, item:items(id,name,unit,unit_value)")
+          .order("transaction_date", { ascending: false })
           .order("created_at", { ascending: false })
           .limit(200)
       ).data ?? [],
@@ -33,7 +34,7 @@ function Stock() {
   const { data: items = [] } = useQuery({
     queryKey: ["items"],
     queryFn: async () =>
-      (await supabase.from("items").select("id,name,quantity,unit").order("name")).data ?? [],
+      (await supabase.from("items").select("id,name,quantity,unit,unit_value").order("name")).data ?? [],
   });
 
   const isMobileView = useIsMobile();
@@ -62,9 +63,12 @@ function Stock() {
               <thead className="bg-muted/60 text-xs uppercase tracking-wider text-muted-foreground">
                 <tr>
                   <th className="text-left px-4 py-3">Date</th>
+                  <th className="text-left px-4 py-3">Reference</th>
                   <th className="text-left px-4 py-3">Item</th>
                   <th className="text-left px-4 py-3">Type</th>
                   <th className="text-right px-4 py-3">Quantity</th>
+                  <th className="text-right px-4 py-3">Unit Value</th>
+                  <th className="text-right px-4 py-3">Total Cost</th>
                   <th className="text-left px-4 py-3">Staff</th>
                   <th className="text-left px-4 py-3">Remarks</th>
                 </tr>
@@ -73,8 +77,9 @@ function Stock() {
                 {txs.map((t: any) => (
                   <tr key={t.id} className="border-t border-border hover:bg-muted/30">
                     <td className="px-4 py-2.5 tabular-nums text-xs">
-                      {format(new Date(t.created_at), "MMM d, yyyy HH:mm")}
+                      {format(new Date(t.transaction_date ?? t.created_at), "MMM d, yyyy")}
                     </td>
+                    <td className="px-4 py-2.5">{t.reference_no ?? "—"}</td>
                     <td className="px-4 py-2.5">{t.item?.name ?? "—"}</td>
                     <td className="px-4 py-2.5">
                       <span
@@ -86,13 +91,15 @@ function Stock() {
                     <td className="px-4 py-2.5 text-right tabular-nums">
                       {t.quantity} {t.item?.unit}
                     </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">{money(t.unit_value ?? t.item?.unit_value)}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">{money(t.total_cost ?? Number(t.quantity) * Number(t.unit_value ?? t.item?.unit_value ?? 0))}</td>
                     <td className="px-4 py-2.5">{t.staff_name ?? "—"}</td>
                     <td className="px-4 py-2.5 text-muted-foreground">{t.remarks ?? "—"}</td>
                   </tr>
                 ))}
                 {txs.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="p-12 text-center text-sm text-muted-foreground">
+                    <td colSpan={9} className="p-12 text-center text-sm text-muted-foreground">
                       No transactions recorded.
                     </td>
                   </tr>
@@ -111,7 +118,7 @@ function Stock() {
                   <div className="flex-1 min-w-0">
                     <div className="font-medium text-base">{t.item?.name ?? "—"}</div>
                     <div className="text-xs text-muted-foreground mt-1">
-                      {format(new Date(t.created_at), "MMM d, yyyy HH:mm")}
+                      {format(new Date(t.transaction_date ?? t.created_at), "MMM d, yyyy")}
                     </div>
                   </div>
                   <span
@@ -125,6 +132,9 @@ function Stock() {
                     label="Quantity" 
                     value={`${t.quantity} ${t.item?.unit ?? ""}`} 
                   />
+                  <MobileCardRow label="Reference" value={t.reference_no ?? "—"} />
+                  <MobileCardRow label="Unit Value" value={money(t.unit_value ?? t.item?.unit_value)} />
+                  <MobileCardRow label="Total Cost" value={money(t.total_cost ?? Number(t.quantity) * Number(t.unit_value ?? t.item?.unit_value ?? 0))} />
                   <MobileCardRow label="Staff" value={t.staff_name ?? "—"} />
                   {t.remarks && (
                     <div className="pt-1">
@@ -162,8 +172,20 @@ function Stock() {
 }
 
 function MovementDialog({ items, userId, userName, onClose, onSaved }: any) {
-  const [form, setForm] = useState({ item_id: "", type: "IN", quantity: 1, remarks: "" });
+  const today = format(new Date(), "yyyy-MM-dd");
+  const [form, setForm] = useState({
+    item_id: "",
+    type: "IN",
+    quantity: 1,
+    unit_value: 0,
+    reference_no: "",
+    transaction_date: today,
+    responsibility_center_code: "",
+    office_officer: "",
+    remarks: "",
+  });
   const [saving, setSaving] = useState(false);
+  const selected = items.find((i: any) => i.id === form.item_id);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -173,6 +195,11 @@ function MovementDialog({ items, userId, userName, onClose, onSaved }: any) {
       item_id: form.item_id,
       type: form.type,
       quantity: Number(form.quantity),
+      unit_value: Number(form.unit_value || selected?.unit_value || 0),
+      reference_no: form.reference_no || null,
+      transaction_date: form.transaction_date,
+      responsibility_center_code: form.responsibility_center_code || null,
+      office_officer: form.office_officer || null,
       staff_id: userId,
       staff_name: userName,
       remarks: form.remarks || null,
@@ -208,7 +235,29 @@ function MovementDialog({ items, userId, userName, onClose, onSaved }: any) {
             ))}
           </select>
         </label>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="block">
+            <span className="text-xs uppercase tracking-wider font-medium text-muted-foreground">
+              Date
+            </span>
+            <input
+              type="date"
+              required
+              value={form.transaction_date}
+              onChange={(e) => setForm({ ...form, transaction_date: e.target.value })}
+              className="dlg-input mt-1.5"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs uppercase tracking-wider font-medium text-muted-foreground">
+              Reference No.
+            </span>
+            <input
+              value={form.reference_no}
+              onChange={(e) => setForm({ ...form, reference_no: e.target.value })}
+              className="dlg-input mt-1.5"
+            />
+          </label>
           <label className="block">
             <span className="text-xs uppercase tracking-wider font-medium text-muted-foreground">
               Type
@@ -220,6 +269,10 @@ function MovementDialog({ items, userId, userName, onClose, onSaved }: any) {
             >
               <option value="IN">Stock IN</option>
               <option value="OUT">Stock OUT</option>
+              <option value="RETURN">Return</option>
+              <option value="TRANSFER">Transfer</option>
+              <option value="DISPOSAL">Disposal</option>
+              <option value="ADJUSTMENT">Balance Adjustment</option>
             </select>
           </label>
           <label className="block">
@@ -232,6 +285,40 @@ function MovementDialog({ items, userId, userName, onClose, onSaved }: any) {
               required
               value={form.quantity}
               onChange={(e) => setForm({ ...form, quantity: e.target.value as any })}
+              className="dlg-input mt-1.5"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs uppercase tracking-wider font-medium text-muted-foreground">
+              Unit Value
+            </span>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              required
+              value={form.unit_value || selected?.unit_value || 0}
+              onChange={(e) => setForm({ ...form, unit_value: e.target.value as any })}
+              className="dlg-input mt-1.5"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs uppercase tracking-wider font-medium text-muted-foreground">
+              Responsibility Center
+            </span>
+            <input
+              value={form.responsibility_center_code}
+              onChange={(e) => setForm({ ...form, responsibility_center_code: e.target.value })}
+              className="dlg-input mt-1.5"
+            />
+          </label>
+          <label className="block sm:col-span-2">
+            <span className="text-xs uppercase tracking-wider font-medium text-muted-foreground">
+              Office/Officer
+            </span>
+            <input
+              value={form.office_officer}
+              onChange={(e) => setForm({ ...form, office_officer: e.target.value })}
               className="dlg-input mt-1.5"
             />
           </label>
@@ -266,4 +353,12 @@ function MovementDialog({ items, userId, userName, onClose, onSaved }: any) {
       </form>
     </div>
   );
+}
+
+function money(value: any) {
+  return Number(value ?? 0).toLocaleString("en-PH", {
+    style: "currency",
+    currency: "PHP",
+    minimumFractionDigits: 2,
+  });
 }
