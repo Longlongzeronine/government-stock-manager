@@ -2,7 +2,6 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import {
-  ClipboardList,
   FileText,
   LayoutPanelLeft,
   Plus,
@@ -23,7 +22,7 @@ export const Route = createFileRoute("/_app/requisitions")({
   component: Requisitions,
 });
 
-type Mode = "preview" | "quick" | "split";
+type Mode = "preview" | "split";
 type FormLayout = "request" | "ris";
 type PaperOrientation = "portrait" | "landscape";
 type Errors = Record<string, string>;
@@ -260,7 +259,7 @@ function Requisitions() {
     <div>
       <PageHeader
         title="Requisitions"
-        subtitle="Create request forms from preview, quick entry, or split view"
+        subtitle="Create request forms from preview or split view"
         actions={
           <>
             <button onClick={cancelForm} className="office-btn requisition-action">
@@ -301,10 +300,9 @@ function Requisitions() {
               ))}
             </div>
           </div>
-          <div className="grid w-full grid-cols-3 overflow-hidden rounded-md border border-border bg-card p-1 sm:inline-flex sm:w-auto">
+          <div className="grid w-full grid-cols-2 overflow-hidden rounded-md border border-border bg-card p-1 sm:inline-flex sm:w-auto">
             {[
               { value: "preview", label: "Form Preview", icon: FileText },
-              { value: "quick", label: "Quick Entry", icon: ClipboardList },
               { value: "split", label: "Split View", icon: LayoutPanelLeft },
             ].map((option) => {
               const Icon = option.icon;
@@ -326,7 +324,13 @@ function Requisitions() {
           </div>
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1040px)_minmax(380px,1fr)] xl:items-start">
+        <div
+          className={
+            mode === "split"
+              ? "space-y-4"
+              : "grid gap-4 xl:grid-cols-[minmax(0,1040px)_minmax(380px,1fr)] xl:items-start"
+          }
+        >
           <main className="min-w-0">
             {mode === "preview" && (
               <PaperPreview
@@ -339,26 +343,13 @@ function Requisitions() {
                 onItem={updateItem}
                 onAddItem={addItem}
                 onDeleteItem={deleteItem}
-              />
-            )}
-
-            {mode === "quick" && (
-              <QuickEntry
-                form={form}
-                errors={errors}
-                grandTotal={grandTotal}
-                onField={updateField}
-                onApprover={updateApprover}
-                onItem={updateItem}
-                onAddItem={addItem}
-                onDeleteItem={deleteItem}
                 zoom={previewZoom}
                 onZoomChange={setPreviewZoom}
               />
             )}
 
             {mode === "split" && (
-              <div className="grid gap-4 2xl:grid-cols-[minmax(460px,0.9fr)_minmax(520px,1.1fr)]">
+              <div className="grid gap-4 xl:grid-cols-[minmax(460px,0.9fr)_minmax(520px,1.1fr)]">
                 <QuickEntry
                   form={form}
                   errors={errors}
@@ -403,6 +394,7 @@ function Requisitions() {
             onDeleteRecord={deleteRecord}
             onDeleteInventoryItem={deleteInventoryItem}
             onLoadRecord={loadRecord}
+            placement={mode === "split" ? "bottom" : "side"}
           />
         </div>
       </div>
@@ -988,6 +980,7 @@ function RightPanel({
   onDeleteRecord,
   onDeleteInventoryItem,
   onLoadRecord,
+  placement = "side",
 }: {
   inventoryItems: any[];
   records: SavedRequisition[];
@@ -996,6 +989,7 @@ function RightPanel({
   onDeleteRecord: (id: string) => void;
   onDeleteInventoryItem: (id: string) => void;
   onLoadRecord: (record: SavedRequisition) => void;
+  placement?: "side" | "bottom";
 }) {
   const requestCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -1010,157 +1004,160 @@ function RightPanel({
   const savedRecords = records.filter((record) => record.status === "Saved");
   const draftRecords = records.filter((record) => record.status === "Draft");
   const latestSaved = savedRecords[0];
+  const isBottom = placement === "bottom";
 
   return (
     <aside className="space-y-4">
-      <div className="grid grid-cols-2 gap-3">
+      <div className={`grid grid-cols-2 gap-3 ${isBottom ? "xl:grid-cols-4" : ""}`}>
         <SummaryCard label="Active Items" value={activeItems} />
         <SummaryCard label="Request Forms" value={savedRecords.length} />
         <SummaryCard label="Requested This Month" value={savedRecords.filter((record) => sameMonth(record.savedAt)).length} />
         <SummaryCard label="Latest Request" value={latestSaved?.requisitionNo || latestRequest?.requisitionNo || "-"} />
       </div>
 
-      <section className="rounded-lg border border-border bg-card">
-        <div className="border-b border-border px-3 py-2 text-sm font-semibold">Recent Requisitions</div>
-        <div className="mobile-table-scroll max-h-72 overflow-auto">
-          <table className="min-w-[520px] w-full text-xs">
-            <thead className="sticky top-0 bg-muted text-muted-foreground">
-              <tr>
-                <th className="px-2 py-2 text-left">Requisition No.</th>
-                <th className="px-2 py-2 text-left">Requested By</th>
-                <th className="px-2 py-2 text-left">Date</th>
-                <th className="px-2 py-2 text-right">Item Count</th>
-                <th className="px-2 py-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {savedRecords.map((record) => (
-                <tr
-                  key={record.id}
-                  onClick={() => onLoadRecord(record)}
-                  className="cursor-pointer border-t border-border hover:bg-accent/60"
-                  title="Load this requisition into the form"
-                >
-                  <td className="px-2 py-2 font-medium">{record.requisitionNo}</td>
-                  <td className="px-2 py-2">{record.requestedBy || "-"}</td>
-                  <td className="px-2 py-2">{formatDate(record.date)}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{getValidItems(record.items).length}</td>
-                  <td className="px-2 py-2 text-right">
-                    <button
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onDeleteRecord(record.id);
-                      }}
-                      className="icon-btn text-destructive"
-                      title="Delete requisition"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {savedRecords.length === 0 && (
+      <div className={isBottom ? "grid gap-4 xl:grid-cols-2" : "space-y-4"}>
+        <section className="rounded-lg border border-border bg-card">
+          <div className="border-b border-border px-3 py-2 text-sm font-semibold">Recent Requisitions</div>
+          <div className="mobile-table-scroll max-h-72 overflow-auto">
+            <table className="min-w-[520px] w-full text-xs">
+              <thead className="sticky top-0 bg-muted text-muted-foreground">
                 <tr>
-                  <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">No saved requisitions yet.</td>
+                  <th className="px-2 py-2 text-left">Requisition No.</th>
+                  <th className="px-2 py-2 text-left">Requested By</th>
+                  <th className="px-2 py-2 text-left">Date</th>
+                  <th className="px-2 py-2 text-right">Item Count</th>
+                  <th className="px-2 py-2"></th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+              </thead>
+              <tbody>
+                {savedRecords.map((record) => (
+                  <tr
+                    key={record.id}
+                    onClick={() => onLoadRecord(record)}
+                    className="cursor-pointer border-t border-border hover:bg-accent/60"
+                    title="Load this requisition into the form"
+                  >
+                    <td className="px-2 py-2 font-medium">{record.requisitionNo}</td>
+                    <td className="px-2 py-2">{record.requestedBy || "-"}</td>
+                    <td className="px-2 py-2">{formatDate(record.date)}</td>
+                    <td className="px-2 py-2 text-right tabular-nums">{getValidItems(record.items).length}</td>
+                    <td className="px-2 py-2 text-right">
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDeleteRecord(record.id);
+                        }}
+                        className="icon-btn text-destructive"
+                        title="Delete requisition"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {savedRecords.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">No saved requisitions yet.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
 
-      <section className="rounded-lg border border-border bg-card">
-        <div className="border-b border-border px-3 py-2 text-sm font-semibold">Draft Requisitions</div>
-        <div className="mobile-table-scroll max-h-72 overflow-auto">
-          <table className="min-w-[520px] w-full text-xs">
-            <thead className="sticky top-0 bg-muted text-muted-foreground">
-              <tr>
-                <th className="px-2 py-2 text-left">Requisition No.</th>
-                <th className="px-2 py-2 text-left">Requested By</th>
-                <th className="px-2 py-2 text-left">Date</th>
-                <th className="px-2 py-2 text-right">Item Count</th>
-                <th className="px-2 py-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {draftRecords.map((record) => (
-                <tr
-                  key={record.id}
-                  onClick={() => onLoadRecord(record)}
-                  className="cursor-pointer border-t border-border hover:bg-accent/60"
-                  title="Load this requisition into the form"
-                >
-                  <td className="px-2 py-2 font-medium">{record.requisitionNo}</td>
-                  <td className="px-2 py-2">{record.requestedBy || "-"}</td>
-                  <td className="px-2 py-2">{formatDate(record.date)}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{getValidItems(record.items).length}</td>
-                  <td className="px-2 py-2 text-right">
-                    <button
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onDeleteRecord(record.id);
-                      }}
-                      className="icon-btn text-destructive"
-                      title="Delete requisition"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {draftRecords.length === 0 && (
+        <section className="rounded-lg border border-border bg-card">
+          <div className="border-b border-border px-3 py-2 text-sm font-semibold">Draft Requisitions</div>
+          <div className="mobile-table-scroll max-h-72 overflow-auto">
+            <table className="min-w-[520px] w-full text-xs">
+              <thead className="sticky top-0 bg-muted text-muted-foreground">
                 <tr>
-                  <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">No draft requisitions yet.</td>
+                  <th className="px-2 py-2 text-left">Requisition No.</th>
+                  <th className="px-2 py-2 text-left">Requested By</th>
+                  <th className="px-2 py-2 text-left">Date</th>
+                  <th className="px-2 py-2 text-right">Item Count</th>
+                  <th className="px-2 py-2"></th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+              </thead>
+              <tbody>
+                {draftRecords.map((record) => (
+                  <tr
+                    key={record.id}
+                    onClick={() => onLoadRecord(record)}
+                    className="cursor-pointer border-t border-border hover:bg-accent/60"
+                    title="Load this requisition into the form"
+                  >
+                    <td className="px-2 py-2 font-medium">{record.requisitionNo}</td>
+                    <td className="px-2 py-2">{record.requestedBy || "-"}</td>
+                    <td className="px-2 py-2">{formatDate(record.date)}</td>
+                    <td className="px-2 py-2 text-right tabular-nums">{getValidItems(record.items).length}</td>
+                    <td className="px-2 py-2 text-right">
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDeleteRecord(record.id);
+                        }}
+                        className="icon-btn text-destructive"
+                        title="Delete requisition"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {draftRecords.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">No draft requisitions yet.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
 
-      <section className="rounded-lg border border-border bg-card">
-        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-          <div className="text-sm font-semibold">Inventory Items</div>
-          <Link to="/inventory" search={{ add: true }} className="office-btn py-1 text-xs">
-            <Plus className="h-3.5 w-3.5" /> Add
-          </Link>
-        </div>
-        <div className="mobile-table-scroll max-h-72 overflow-auto">
-          <table className="min-w-[720px] w-full text-xs">
-            <thead className="sticky top-0 bg-muted text-muted-foreground">
-              <tr>
-                <th className="px-2 py-2 text-left">Particulars</th>
-                <th className="px-2 py-2 text-left">Unit</th>
-                <th className="px-2 py-2 text-right">Unit Cost</th>
-                <th className="px-2 py-2 text-left">Source / Transaction</th>
-                <th className="px-2 py-2 text-right">Request Count</th>
-                <th className="px-2 py-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {inventoryItems.slice(0, 12).map((item: any) => (
-                <tr key={item.id} className="border-t border-border">
-                  <td className="px-2 py-2">{item.name}</td>
-                  <td className="px-2 py-2">{item.unit}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{money(0)}</td>
-                  <td className="px-2 py-2">{item.item_type || "Inventory"}</td>
-                  <td className="px-2 py-2 text-right tabular-nums">{requestCounts.get(String(item.name).toLowerCase()) ?? 0}</td>
-                  <td className="px-2 py-2 text-right">
-                    <button onClick={() => onDeleteInventoryItem(item.id)} className="icon-btn text-destructive" title="Delete inventory item">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {inventoryItems.length === 0 && (
+        <section className={`rounded-lg border border-border bg-card ${isBottom ? "xl:col-span-2" : ""}`}>
+          <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+            <div className="text-sm font-semibold">Inventory Items</div>
+            <Link to="/inventory" search={{ add: true }} className="office-btn py-1 text-xs">
+              <Plus className="h-3.5 w-3.5" /> Add
+            </Link>
+          </div>
+          <div className="mobile-table-scroll max-h-72 overflow-auto">
+            <table className="min-w-[720px] w-full text-xs">
+              <thead className="sticky top-0 bg-muted text-muted-foreground">
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">No inventory items found.</td>
+                  <th className="px-2 py-2 text-left">Particulars</th>
+                  <th className="px-2 py-2 text-left">Unit</th>
+                  <th className="px-2 py-2 text-right">Unit Cost</th>
+                  <th className="px-2 py-2 text-left">Source / Transaction</th>
+                  <th className="px-2 py-2 text-right">Request Count</th>
+                  <th className="px-2 py-2"></th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+              </thead>
+              <tbody>
+                {inventoryItems.slice(0, 12).map((item: any) => (
+                  <tr key={item.id} className="border-t border-border">
+                    <td className="px-2 py-2">{item.name}</td>
+                    <td className="px-2 py-2">{item.unit}</td>
+                    <td className="px-2 py-2 text-right tabular-nums">{money(0)}</td>
+                    <td className="px-2 py-2">{item.item_type || "Inventory"}</td>
+                    <td className="px-2 py-2 text-right tabular-nums">{requestCounts.get(String(item.name).toLowerCase()) ?? 0}</td>
+                    <td className="px-2 py-2 text-right">
+                      <button onClick={() => onDeleteInventoryItem(item.id)} className="icon-btn text-destructive" title="Delete inventory item">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {inventoryItems.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">No inventory items found.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
     </aside>
   );
 }
