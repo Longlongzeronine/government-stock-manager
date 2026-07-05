@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { listSuppliers, createSupplier, updateSupplier, deleteSupplier } from "@/lib/data.functions";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { MobileCard, MobileCardRow } from "@/components/common/MobileCard";
@@ -19,16 +19,20 @@ function Suppliers() {
   const qc = useQueryClient();
   const { data: rows = [] } = useQuery({
     queryKey: ["suppliers"],
-    queryFn: async () => (await supabase.from("suppliers").select("*").order("name")).data ?? [],
+    queryFn: async () => await listSuppliers(),
   });
   const [editing, setEditing] = useState<any | null>(null);
   const [open, setOpen] = useState(false);
 
   async function del(id: string) {
     if (!confirm("Delete this supplier?")) return;
-    const { error } = await supabase.from("suppliers").delete().eq("id", id);
-    if (error) return toast.error(error.message);
-    toast.success("Deleted"); qc.invalidateQueries({ queryKey: ["suppliers"] });
+    try {
+      await deleteSupplier({ data: { id } });
+      toast.success("Deleted");
+      qc.invalidateQueries({ queryKey: ["suppliers"] });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Delete failed");
+    }
   }
 
   const isMobileView = useIsMobile();
@@ -109,12 +113,19 @@ function SupDialog({ editing, onClose, onSaved }: any) {
   const [saving, setSaving] = useState(false);
   async function save(e: React.FormEvent) {
     e.preventDefault(); setSaving(true);
-    const { error } = editing
-      ? await supabase.from("suppliers").update(form).eq("id", editing.id)
-      : await supabase.from("suppliers").insert(form);
-    setSaving(false);
-    if (error) return toast.error(error.message);
-    toast.success("Saved"); onSaved();
+    try {
+      if (editing) {
+        await updateSupplier({ data: { id: editing.id, ...form } });
+      } else {
+        await createSupplier({ data: form });
+      }
+      toast.success("Saved");
+      onSaved();
+    } catch (e: any) {
+      toast.error(e?.message ?? "Save failed");
+    } finally {
+      setSaving(false);
+    }
   }
   return (
     <div className="fixed inset-0 bg-foreground/30 backdrop-blur-sm grid place-items-center z-50 p-4">

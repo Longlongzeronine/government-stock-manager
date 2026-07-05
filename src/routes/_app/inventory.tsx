@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { listItems, listCategories, listSuppliers, createItem, updateItem, deleteItem } from "@/lib/data.functions";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { StatusBadge } from "@/components/common/StatusBadge";
@@ -16,7 +16,7 @@ export const Route = createFileRoute("/_app/inventory")({
   head: () => ({ meta: [{ title: "Inventory — Supplify" }] }),
   validateSearch: (search: Record<string, unknown>) => ({
     add: search.add === "1" || search.add === 1 || search.add === true,
-  }),
+  } as { add?: boolean }),
   component: Inventory,
 });
 
@@ -37,26 +37,20 @@ function Inventory() {
     if (!searchParams.add || !isAdmin) return;
     setEditing(null);
     setOpen(true);
-    navigate({ to: "/inventory", search: {} });
+    navigate({ to: "/inventory", search: { add: false } });
   }, [isAdmin, navigate, searchParams.add]);
 
   const { data: items = [] } = useQuery({
     queryKey: ["items"],
-    queryFn: async () =>
-      (
-        await supabase
-          .from("items")
-          .select("*, category:categories(id,name), supplier:suppliers(id,name)")
-          .order("name")
-      ).data ?? [],
+    queryFn: async () => await listItems(),
   });
   const { data: cats = [] } = useQuery({
     queryKey: ["categories"],
-    queryFn: async () => (await supabase.from("categories").select("*").order("name")).data ?? [],
+    queryFn: async () => await listCategories(),
   });
   const { data: sups = [] } = useQuery({
     queryKey: ["suppliers"],
-    queryFn: async () => (await supabase.from("suppliers").select("*").order("name")).data ?? [],
+    queryFn: async () => await listSuppliers(),
   });
 
   const filtered = useMemo(() => {
@@ -73,10 +67,13 @@ function Inventory() {
 
   async function onDelete(id: string) {
     if (!confirm("Delete this item permanently?")) return;
-    const { error } = await supabase.from("items").delete().eq("id", id);
-    if (error) return toast.error(error.message);
-    toast.success("Item deleted");
-    qc.invalidateQueries({ queryKey: ["items"] });
+    try {
+      await deleteItem({ data: { id } });
+      toast.success("Item deleted");
+      qc.invalidateQueries({ queryKey: ["items"] });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Delete failed");
+    }
   }
 
   function exportRows() {
@@ -86,13 +83,10 @@ function Inventory() {
       Category: i.category?.name ?? "",
       Supplier: i.supplier?.name ?? "",
       Type: i.item_type === "material" ? "Material" : "Supply",
+      Classification: classificationLabel(i),
+      AcquisitionCost: i.acquisition_cost ?? 0,
       Quantity: i.quantity,
       Unit: i.unit,
-      UnitValue: Number(i.unit_value ?? 0),
-      TotalCost: totalCost(i),
-      StockNumber: i.stock_number ?? "",
-      PropertyNumber: i.property_number ?? "",
-      FundCluster: i.fund_cluster ?? "",
       ReorderLevel: i.reorder_level,
       Updated: i.updated_at ? format(new Date(i.updated_at), "yyyy-MM-dd") : "",
     }));
@@ -189,11 +183,10 @@ function Inventory() {
                   <Th>Category</Th>
                   <Th>Supplier</Th>
                   <Th>Type</Th>
-                  <Th>Stock/Property No.</Th>
+                  <Th>Classification</Th>
+                  <Th className="text-right">Price</Th>
                   <Th className="text-right">Qty</Th>
                   <Th>Unit</Th>
-                  <Th className="text-right">Unit Value</Th>
-                  <Th className="text-right">Total Cost</Th>
                   <Th className="text-right">Reorder</Th>
                   <Th>Status</Th>
                   <Th></Th>
@@ -211,11 +204,12 @@ function Inventory() {
                     <Td>
                       <TypeBadge itemType={i.item_type} />
                     </Td>
-                    <Td>{i.stock_number || i.property_number || "—"}</Td>
+                    <Td>
+                      <ClassificationBadge item={i} />
+                    </Td>
+                    <Td className="text-right tabular-nums">{money(Number(i.acquisition_cost || 0))}</Td>
                     <Td className="text-right tabular-nums font-medium">{i.quantity}</Td>
                     <Td>{i.unit}</Td>
-                    <Td className="text-right tabular-nums">{money(i.unit_value)}</Td>
-                    <Td className="text-right tabular-nums">{money(totalCost(i))}</Td>
                     <Td className="text-right tabular-nums">{i.reorder_level}</Td>
                     <Td>
                       <StatusBadge quantity={i.quantity} reorder={i.reorder_level} />
@@ -236,7 +230,7 @@ function Inventory() {
                 ))}
                 {paged.length === 0 && (
                   <tr>
-                    <td colSpan={12} className="p-12 text-center text-sm text-muted-foreground">
+                    <td colSpan={11} className="p-12 text-center text-sm text-muted-foreground">
                       No items match your filters.
                     </td>
                   </tr>
@@ -262,11 +256,10 @@ function Inventory() {
                   <MobileCardRow label="Category" value={i.category?.name ?? "—"} />
                   <MobileCardRow label="Supplier" value={i.supplier?.name ?? "—"} />
                   <MobileCardRow label="Type" value={<TypeBadge itemType={i.item_type} />} />
-                  <MobileCardRow label="Stock/Property No." value={i.stock_number || i.property_number || "—"} />
+                  <MobileCardRow label="Classification" value={<ClassificationBadge item={i} />} />
+                  <MobileCardRow label="Acquisition Cost" value={money(Number(i.acquisition_cost || 0))} />
                   <div className="grid grid-cols-2 gap-2">
                     <MobileCardRow label="Qty" value={`${i.quantity} ${i.unit}`} />
-                    <MobileCardRow label="Unit Value" value={money(i.unit_value)} align="right" />
-                    <MobileCardRow label="Total Cost" value={money(totalCost(i))} />
                     <MobileCardRow label="Reorder" value={i.reorder_level} align="right" />
                   </div>
                 </div>
@@ -326,16 +319,32 @@ function TypeBadge({ itemType }: { itemType: string }) {
   );
 }
 
-function money(value: any) {
-  return Number(value ?? 0).toLocaleString("en-PH", {
-    style: "currency",
-    currency: "PHP",
-    minimumFractionDigits: 2,
-  });
+function ClassificationBadge({ item }: { item: any }) {
+  const label = classificationLabel(item);
+  const tone =
+    item.inventory_classification === "ppe"
+      ? "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300"
+      : item.inventory_classification === "semi_expendable_property"
+        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+        : "bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300";
+
+  return <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${tone}`}>{label}</span>;
 }
 
-function totalCost(item: any) {
-  return Number(item.total_cost ?? Number(item.quantity ?? 0) * Number(item.unit_value ?? 0));
+function classificationLabel(item: any) {
+  if (item.inventory_classification === "ppe") return "PPE";
+  if (item.inventory_classification === "semi_expendable_property") return "Semi-Expendable Property";
+  return "Office Supplies";
+}
+
+function computeClassification(itemType: string, acquisitionCost: number) {
+  if (itemType === "supply") return "expendable_supply";
+  if (acquisitionCost >= 50000) return "ppe";
+  return "semi_expendable_property";
+}
+
+function money(value: number) {
+  return new Intl.NumberFormat("en-PH", { style: "currency", currency: "PHP" }).format(value || 0);
 }
 
 function ItemDialog({ editing, cats, sups, onClose, onSaved }: any) {
@@ -345,16 +354,9 @@ function ItemDialog({ editing, cats, sups, onClose, onSaved }: any) {
     category_id: editing?.category_id ?? "",
     supplier_id: editing?.supplier_id ?? "",
     item_type: editing?.item_type ?? "supply",
+    acquisition_cost: editing?.acquisition_cost ?? 0,
     quantity: editing?.quantity ?? 0,
     unit: editing?.unit ?? "pcs",
-    unit_value: editing?.unit_value ?? 0,
-    stock_number: editing?.stock_number ?? "",
-    property_number: editing?.property_number ?? "",
-    fund_cluster: editing?.fund_cluster ?? "06",
-    uacs_object_code: editing?.uacs_object_code ?? "",
-    estimated_useful_life: editing?.estimated_useful_life ?? "",
-    accountable_officer: editing?.accountable_officer ?? "",
-    office: editing?.office ?? "",
     reorder_level: editing?.reorder_level ?? 10,
   });
   const [saving, setSaving] = useState(false);
@@ -367,28 +369,29 @@ function ItemDialog({ editing, cats, sups, onClose, onSaved }: any) {
       category_id: form.category_id || null,
       supplier_id: form.supplier_id || null,
       quantity: Number(form.quantity),
-      unit_value: Number(form.unit_value),
-      stock_number: form.stock_number || null,
-      property_number: form.property_number || null,
-      fund_cluster: form.fund_cluster || "06",
-      uacs_object_code: form.uacs_object_code || null,
-      estimated_useful_life: form.estimated_useful_life || null,
-      accountable_officer: form.accountable_officer || null,
-      office: form.office || null,
+      acquisition_cost: Number(form.acquisition_cost),
       reorder_level: Number(form.reorder_level),
+      inventory_classification: computeClassification(form.item_type, Number(form.acquisition_cost)),
+      semi_expendable_tier: null,
     };
-    const { error } = editing
-      ? await supabase.from("items").update(payload).eq("id", editing.id)
-      : await supabase.from("items").insert(payload);
-    setSaving(false);
-    if (error) return toast.error(error.message);
-    toast.success(editing ? "Item updated" : "Item created");
-    onSaved();
+    try {
+      if (editing) {
+        await updateItem({ data: { id: editing.id, data: payload } });
+      } else {
+        await createItem({ data: payload });
+      }
+      toast.success(editing ? "Item updated" : "Item created");
+      onSaved();
+    } catch (e: any) {
+      toast.error(e?.message ?? "Save failed");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <div className="fixed inset-0 bg-foreground/30 backdrop-blur-sm grid place-items-center z-50 p-4">
-      <form onSubmit={save} className="bg-card border border-border rounded-lg w-full max-w-3xl max-h-[92vh] overflow-y-auto p-6 space-y-4">
+      <form onSubmit={save} className="bg-card border border-border rounded-lg w-full max-w-xl p-6 space-y-4">
         <h2 className="text-xl">{editing ? "Edit item" : "Add new item"}</h2>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Name" full>
@@ -421,38 +424,17 @@ function ItemDialog({ editing, cats, sups, onClose, onSaved }: any) {
               {sups.map((s: any) => (<option key={s.id} value={s.id}>{s.name}</option>))}
             </select>
           </Field>
+          <Field label="Acquisition cost">
+            <input type="number" min={0} step="0.01" className="dlg-input" value={form.acquisition_cost} onChange={(e) => setForm({ ...form, acquisition_cost: e.target.value as any })} />
+          </Field>
           <Field label="Quantity">
             <input type="number" min={0} className="dlg-input" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value as any })} />
-          </Field>
-          <Field label="Unit Value">
-            <input type="number" min={0} step="0.01" className="dlg-input" value={form.unit_value} onChange={(e) => setForm({ ...form, unit_value: e.target.value as any })} />
           </Field>
           <Field label="Unit">
             <input className="dlg-input" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} />
           </Field>
           <Field label="Reorder level">
             <input type="number" min={0} className="dlg-input" value={form.reorder_level} onChange={(e) => setForm({ ...form, reorder_level: e.target.value as any })} />
-          </Field>
-          <Field label="Stock No.">
-            <input className="dlg-input" value={form.stock_number} onChange={(e) => setForm({ ...form, stock_number: e.target.value })} />
-          </Field>
-          <Field label="Semi-Expendable Property No.">
-            <input className="dlg-input" value={form.property_number} onChange={(e) => setForm({ ...form, property_number: e.target.value })} />
-          </Field>
-          <Field label="Fund Cluster">
-            <input className="dlg-input" value={form.fund_cluster} onChange={(e) => setForm({ ...form, fund_cluster: e.target.value })} />
-          </Field>
-          <Field label="UACS Object Code">
-            <input className="dlg-input" value={form.uacs_object_code} onChange={(e) => setForm({ ...form, uacs_object_code: e.target.value })} />
-          </Field>
-          <Field label="Estimated Useful Life">
-            <input className="dlg-input" value={form.estimated_useful_life} onChange={(e) => setForm({ ...form, estimated_useful_life: e.target.value })} />
-          </Field>
-          <Field label="Accountable Officer">
-            <input className="dlg-input" value={form.accountable_officer} onChange={(e) => setForm({ ...form, accountable_officer: e.target.value })} />
-          </Field>
-          <Field label="Office/Station" full>
-            <input className="dlg-input" value={form.office} onChange={(e) => setForm({ ...form, office: e.target.value })} />
           </Field>
         </div>
         <div className="flex justify-end gap-2 pt-2">

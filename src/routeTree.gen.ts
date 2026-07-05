@@ -17,9 +17,11 @@ import { Route as ItemQrIdRouteImport } from './routes/item-qr.$id'
 import { Route as AppUsersRouteImport } from './routes/_app/users'
 import { Route as AppSuppliersRouteImport } from './routes/_app/suppliers'
 import { Route as AppStockRouteImport } from './routes/_app/stock'
+import { Route as AppScannerRouteImport } from './routes/_app/scanner'
 import { Route as AppScanRouteImport } from './routes/_app/scan'
 import { Route as AppRequisitionsRouteImport } from './routes/_app/requisitions'
 import { Route as AppInventoryRouteImport } from './routes/_app/inventory'
+import { Route as AppFormsRouteImport } from './routes/_app/forms'
 import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
 import { Route as AppCoaFormsRouteImport } from './routes/_app/coa-forms'
 import { Route as AppCategoriesRouteImport } from './routes/_app/categories'
@@ -65,6 +67,11 @@ const AppStockRoute = AppStockRouteImport.update({
   path: '/stock',
   getParentRoute: () => AppRoute,
 } as any)
+const AppScannerRoute = AppScannerRouteImport.update({
+  id: '/scanner',
+  path: '/scanner',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppScanRoute = AppScanRouteImport.update({
   id: '/scan',
   path: '/scan',
@@ -78,6 +85,11 @@ const AppRequisitionsRoute = AppRequisitionsRouteImport.update({
 const AppInventoryRoute = AppInventoryRouteImport.update({
   id: '/inventory',
   path: '/inventory',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppFormsRoute = AppFormsRouteImport.update({
+  id: '/forms',
+  path: '/forms',
   getParentRoute: () => AppRoute,
 } as any)
 const AppDashboardRoute = AppDashboardRouteImport.update({
@@ -115,9 +127,11 @@ export interface FileRoutesByFullPath {
   '/categories': typeof AppCategoriesRoute
   '/coa-forms': typeof AppCoaFormsRoute
   '/dashboard': typeof AppDashboardRoute
+  '/forms': typeof AppFormsRoute
   '/inventory': typeof AppInventoryRoute
   '/requisitions': typeof AppRequisitionsRoute
   '/scan': typeof AppScanRoute
+  '/scanner': typeof AppScannerRoute
   '/stock': typeof AppStockRoute
   '/suppliers': typeof AppSuppliersRoute
   '/users': typeof AppUsersRoute
@@ -132,9 +146,11 @@ export interface FileRoutesByTo {
   '/categories': typeof AppCategoriesRoute
   '/coa-forms': typeof AppCoaFormsRoute
   '/dashboard': typeof AppDashboardRoute
+  '/forms': typeof AppFormsRoute
   '/inventory': typeof AppInventoryRoute
   '/requisitions': typeof AppRequisitionsRoute
   '/scan': typeof AppScanRoute
+  '/scanner': typeof AppScannerRoute
   '/stock': typeof AppStockRoute
   '/suppliers': typeof AppSuppliersRoute
   '/users': typeof AppUsersRoute
@@ -151,9 +167,11 @@ export interface FileRoutesById {
   '/_app/categories': typeof AppCategoriesRoute
   '/_app/coa-forms': typeof AppCoaFormsRoute
   '/_app/dashboard': typeof AppDashboardRoute
+  '/_app/forms': typeof AppFormsRoute
   '/_app/inventory': typeof AppInventoryRoute
   '/_app/requisitions': typeof AppRequisitionsRoute
   '/_app/scan': typeof AppScanRoute
+  '/_app/scanner': typeof AppScannerRoute
   '/_app/stock': typeof AppStockRoute
   '/_app/suppliers': typeof AppSuppliersRoute
   '/_app/users': typeof AppUsersRoute
@@ -170,9 +188,11 @@ export interface FileRouteTypes {
     | '/categories'
     | '/coa-forms'
     | '/dashboard'
+    | '/forms'
     | '/inventory'
     | '/requisitions'
     | '/scan'
+    | '/scanner'
     | '/stock'
     | '/suppliers'
     | '/users'
@@ -187,9 +207,11 @@ export interface FileRouteTypes {
     | '/categories'
     | '/coa-forms'
     | '/dashboard'
+    | '/forms'
     | '/inventory'
     | '/requisitions'
     | '/scan'
+    | '/scanner'
     | '/stock'
     | '/suppliers'
     | '/users'
@@ -205,9 +227,11 @@ export interface FileRouteTypes {
     | '/_app/categories'
     | '/_app/coa-forms'
     | '/_app/dashboard'
+    | '/_app/forms'
     | '/_app/inventory'
     | '/_app/requisitions'
     | '/_app/scan'
+    | '/_app/scanner'
     | '/_app/stock'
     | '/_app/suppliers'
     | '/_app/users'
@@ -280,6 +304,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppStockRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/scanner': {
+      id: '/_app/scanner'
+      path: '/scanner'
+      fullPath: '/scanner'
+      preLoaderRoute: typeof AppScannerRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/scan': {
       id: '/_app/scan'
       path: '/scan'
@@ -299,6 +330,13 @@ declare module '@tanstack/react-router' {
       path: '/inventory'
       fullPath: '/inventory'
       preLoaderRoute: typeof AppInventoryRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/forms': {
+      id: '/_app/forms'
+      path: '/forms'
+      fullPath: '/forms'
+      preLoaderRoute: typeof AppFormsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/dashboard': {
@@ -345,9 +383,11 @@ interface AppRouteChildren {
   AppCategoriesRoute: typeof AppCategoriesRoute
   AppCoaFormsRoute: typeof AppCoaFormsRoute
   AppDashboardRoute: typeof AppDashboardRoute
+  AppFormsRoute: typeof AppFormsRoute
   AppInventoryRoute: typeof AppInventoryRoute
   AppRequisitionsRoute: typeof AppRequisitionsRoute
   AppScanRoute: typeof AppScanRoute
+  AppScannerRoute: typeof AppScannerRoute
   AppStockRoute: typeof AppStockRoute
   AppSuppliersRoute: typeof AppSuppliersRoute
   AppUsersRoute: typeof AppUsersRoute
@@ -359,9 +399,11 @@ const AppRouteChildren: AppRouteChildren = {
   AppCategoriesRoute: AppCategoriesRoute,
   AppCoaFormsRoute: AppCoaFormsRoute,
   AppDashboardRoute: AppDashboardRoute,
+  AppFormsRoute: AppFormsRoute,
   AppInventoryRoute: AppInventoryRoute,
   AppRequisitionsRoute: AppRequisitionsRoute,
   AppScanRoute: AppScanRoute,
+  AppScannerRoute: AppScannerRoute,
   AppStockRoute: AppStockRoute,
   AppSuppliersRoute: AppSuppliersRoute,
   AppUsersRoute: AppUsersRoute,

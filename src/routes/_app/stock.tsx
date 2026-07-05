@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { listRecentTransactions, listBasicItems, createTransaction } from "@/lib/data.functions";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { MobileCard, MobileCardRow } from "@/components/common/MobileCard";
@@ -21,20 +21,11 @@ function Stock() {
   const [open, setOpen] = useState(false);
   const { data: txs = [] } = useQuery({
     queryKey: ["transactions"],
-    queryFn: async () =>
-      (
-        await supabase
-          .from("transactions")
-          .select("*, item:items(id,name,unit,unit_value)")
-          .order("transaction_date", { ascending: false })
-          .order("created_at", { ascending: false })
-          .limit(200)
-      ).data ?? [],
+    queryFn: async () => await listRecentTransactions(),
   });
   const { data: items = [] } = useQuery({
     queryKey: ["items"],
-    queryFn: async () =>
-      (await supabase.from("items").select("id,name,quantity,unit,unit_value").order("name")).data ?? [],
+    queryFn: async () => await listBasicItems(),
   });
 
   const isMobileView = useIsMobile();
@@ -191,21 +182,27 @@ function MovementDialog({ items, userId, userName, onClose, onSaved }: any) {
     e.preventDefault();
     if (!form.item_id) return toast.error("Select an item");
     setSaving(true);
-    const { error } = await supabase.from("transactions").insert({
-      item_id: form.item_id,
-      type: form.type,
-      quantity: Number(form.quantity),
-      unit_value: Number(form.unit_value || selected?.unit_value || 0),
-      reference_no: form.reference_no || null,
-      transaction_date: form.transaction_date,
-      responsibility_center_code: form.responsibility_center_code || null,
-      office_officer: form.office_officer || null,
-      staff_id: userId,
-      staff_name: userName,
-      remarks: form.remarks || null,
-    });
-    setSaving(false);
-    if (error) return toast.error(error.message);
+    try {
+      await createTransaction({ data: {
+        item_id: form.item_id,
+        type: form.type,
+        quantity: Number(form.quantity),
+        unit_value: Number(form.unit_value || selected?.unit_value || 0),
+        reference_no: form.reference_no || null,
+        transaction_date: form.transaction_date,
+        responsibility_center_code: form.responsibility_center_code || null,
+        office_officer: form.office_officer || null,
+        staff_id: userId,
+        staff_name: userName,
+        remarks: form.remarks || null,
+      } });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Save failed");
+      setSaving(false);
+      return;
+    } finally {
+      setSaving(false);
+    }
     toast.success("Movement recorded");
     onSaved();
   }

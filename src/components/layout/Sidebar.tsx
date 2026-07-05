@@ -3,7 +3,9 @@ import {
   LayoutDashboard,
   Package,
   ArrowLeftRight,
+  ScanLine,
   ClipboardList,
+  FileStack,
   Tags,
   Building2,
   Users,
@@ -17,20 +19,21 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
-type R = "admin" | "staff" | "viewer";
+type R = "admin" | "staff" | "accounting" | "viewer";
 export const nav: { to: string; label: string; icon: any; roles: R[] }[] = [
   {
     to: "/dashboard",
     label: "Dashboard",
     icon: LayoutDashboard,
-    roles: ["admin", "staff", "viewer"],
+    roles: ["admin", "staff", "accounting", "viewer"],
   },
-  { to: "/inventory", label: "Inventory", icon: Package, roles: ["admin", "staff", "viewer"] },
+  { to: "/inventory", label: "Inventory", icon: Package, roles: ["admin", "staff", "accounting", "viewer"] },
+  { to: "/scanner", label: "Scanner", icon: ScanLine, roles: ["admin", "staff", "accounting", "viewer"] },
   { to: "/requisitions", label: "Requisitions", icon: ClipboardList, roles: ["admin", "staff"] },
-  { to: "/stock", label: "Stock In / Out", icon: ArrowLeftRight, roles: ["admin", "staff"] },
-  { to: "/coa-forms", label: "COA Forms", icon: FileText, roles: ["admin", "staff", "viewer"] },
+  { to: "/forms", label: "Forms Flow", icon: FileStack, roles: ["admin", "staff", "accounting"] },
+  { to: "/stock", label: "Stock In / Out", icon: ArrowLeftRight, roles: ["admin", "staff", "accounting"] },
   { to: "/categories", label: "Categories", icon: Tags, roles: ["admin"] },
-  { to: "/suppliers", label: "Suppliers", icon: Building2, roles: ["admin", "staff", "viewer"] },
+  { to: "/suppliers", label: "Suppliers", icon: Building2, roles: ["admin", "staff", "accounting", "viewer"] },
   { to: "/users", label: "Users", icon: Users, roles: ["admin"] },
   { to: "/audit", label: "Audit Log", icon: ScrollText, roles: ["admin"] },
 ];

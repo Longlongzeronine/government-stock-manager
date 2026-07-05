@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
 import { ArrowLeft, Printer, ShieldCheck } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { getItem } from "@/lib/data.functions";
 import { useAuth } from "@/contexts/AuthContext";
 
 export const Route = createFileRoute("/item-qr/$id")({
@@ -23,15 +23,7 @@ function ItemQrDetail() {
   const { data: item, isLoading } = useQuery({
     queryKey: ["item-qr", id],
     enabled: Boolean(session),
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("items")
-        .select("*, category:categories(id,name), supplier:suppliers(id,name)")
-        .eq("id", id)
-        .single();
-      if (error) throw error;
-      return data as any;
-    },
+    queryFn: async () => await getItem({ data: { id } }) as any,
   });
 
   useEffect(() => {
@@ -62,7 +54,7 @@ function ItemQrDetail() {
     <div className="min-h-screen bg-background p-4 sm:p-8 print:bg-white print:p-0">
       <div className="mx-auto max-w-4xl space-y-4 print:max-w-none">
         <div className="flex flex-wrap items-center justify-between gap-2 print:hidden">
-          <Link to="/inventory" className="inline-flex items-center gap-2 rounded-md border border-input bg-card px-3 py-2 text-sm hover:bg-accent">
+          <Link to="/inventory" search={{ add: false }} className="inline-flex items-center gap-2 rounded-md border border-input bg-card px-3 py-2 text-sm hover:bg-accent">
             <ArrowLeft className="h-4 w-4" /> Inventory
           </Link>
           <button onClick={() => window.print()} className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground">
