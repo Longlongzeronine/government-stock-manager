@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 
-type Role = "viewer" | "staff" | "admin";
-const roles = new Set<Role>(["viewer", "staff", "admin"]);
+type Role = "viewer" | "staff" | "accounting" | "admin";
+const roles = new Set<Role>(["viewer", "staff", "accounting", "admin"]);
 
 interface AdminRequest {
   accessToken: string;

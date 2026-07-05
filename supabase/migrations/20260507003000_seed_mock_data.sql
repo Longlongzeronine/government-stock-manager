@@ -20,19 +20,23 @@ VALUES
   ('d0000001-0000-0000-0000-000000000005', 'FurniCraft Inc.', 'Carlos Lopez', 'carlos@furnicraft.ph', '028000005')
 ON CONFLICT (id) DO NOTHING;
 
--- 3. Items — 5 supplies + 5 materials
+-- 3. Items — 5 supplies + 5 materials + 1 PPE item
+-- NOTE: acquisition_cost is set in migration 20260702001000 after the column is added
 INSERT INTO items (id, name, description, item_type, category_id, supplier_id, quantity, unit, reorder_level)
 VALUES
-  -- Supplies
+  -- Supplies — consumable items, classified as expendable_supply regardless of price
   ('e0000001-0000-0000-0000-000000000001', 'Bond Paper A4 (70gsm)', 'Premium bond paper for official documents', 'supply', 'c0000001-0000-0000-0000-000000000001', 'd0000001-0000-0000-0000-000000000001', 500, 'reams', 50),
   ('e0000001-0000-0000-0000-000000000002', 'Ballpoint Pen — Black', 'Standard issue black ink ballpoint pens', 'supply', 'c0000001-0000-0000-0000-000000000001', 'd0000001-0000-0000-0000-000000000001', 240, 'pieces', 30),
-  ('e0000001-0000-0000-0000-000000000003', 'Office Chair — Ergonomic', 'Adjustable ergonomic mesh-back chair', 'supply', 'c0000001-0000-0000-0000-000000000003', 'd0000005-0000-0000-0000-000000000005', 8, 'pieces', 2),
-  ('e0000001-0000-0000-0000-000000000004', 'Desktop Monitor 24″', 'Full HD IPS LCD monitor', 'supply', 'c0000001-0000-0000-0000-000000000002', 'd0000002-0000-0000-0000-000000000002', 15, 'pieces', 5),
+  ('e0000001-0000-0000-0000-000000000003', 'Office Chair — Ergonomic', 'Adjustable ergonomic mesh-back chair', 'material', 'c0000001-0000-0000-0000-000000000003', 'd0000005-0000-0000-0000-000000000005', 8, 'pieces', 2),
+  ('e0000001-0000-0000-0000-000000000004', 'Desktop Monitor 24″', 'Full HD IPS LCD monitor', 'material', 'c0000001-0000-0000-0000-000000000002', 'd0000002-0000-0000-0000-000000000002', 15, 'pieces', 5),
   ('e0000001-0000-0000-0000-000000000005', 'All-Purpose Detergent', 'Liquid detergent 1L', 'supply', 'c0000001-0000-0000-0000-000000000005', 'd0000004-0000-0000-0000-000000000004', 40, 'bottles', 10),
 
-  -- Materials
+  -- Materials — durable items compared against ₱50,000/unit threshold
   ('e0000002-0000-0000-0000-000000000001', 'Portland Cement (40kg)', 'Type 1 Portland cement bags', 'material', 'c0000001-0000-0000-0000-000000000004', 'd0000003-0000-0000-0000-000000000003', 200, 'bags', 30),
   ('e0000002-0000-0000-0000-000000000002', 'Steel Rebar 12mm', 'Standard-grade steel reinforcement', 'material', 'c0000001-0000-0000-0000-000000000004', 'd0000003-0000-0000-0000-000000000003', 500, 'lengths', 100),
   ('e0000002-0000-0000-0000-000000000003', 'Plywood ¾″ (4′×8′)', 'Marine-grade treated plywood', 'material', 'c0000001-0000-0000-0000-000000000004', 'd0000003-0000-0000-0000-000000000003', 60, 'sheets', 10),
   ('e0000002-0000-0000-0000-000000000004', 'PVC Pipe 4″ x 10ft', 'Schedule 40 PVC pipe', 'material', 'c0000001-0000-0000-0000-000000000004', 'd0000003-0000-0000-0000-000000000003', 120, 'pieces', 20),
-  ('e0000002-0000-0000-0000-000000000005', 'Paint — Latex White (4L)', 'Interior latex white paint', 'material', 'c0000001-0000-0000-0000-000000000004', 'd0000003-0000-0000-0000-000000000003', 25, 'gallons', 5);
+  ('e0000002-0000-0000-0000-000000000005', 'Paint — Latex White (4L)', 'Interior latex white paint', 'material', 'c0000001-0000-0000-0000-000000000004', 'd0000003-0000-0000-0000-000000000003', 25, 'gallons', 5),
+
+  -- PPE demo item — material with per-unit cost >= ₱50,000
+  ('e0000002-0000-0000-0000-000000000006', 'Server — Rackmount 1U', 'Enterprise-grade rackmount server with dual processors', 'material', 'c0000001-0000-0000-0000-000000000002', 'd0000002-0000-0000-0000-000000000002', 3, 'pieces', 1);

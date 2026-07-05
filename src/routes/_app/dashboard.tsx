@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { listItems, listRecentTransactions } from "@/lib/data.functions";
 import { PageHeader } from "@/components/layout/AppShell";
 import { Package, AlertTriangle, XCircle, ArrowLeftRight, TrendingUp } from "lucide-react";
 import {
@@ -25,41 +25,16 @@ export const Route = createFileRoute("/_app/dashboard")({
 
 function Dashboard() {
   const { canWrite, isAdmin } = useAuth();
-  const { data: items = [], refetch: rItems } = useQuery({
+  const { data: items = [] } = useQuery({
     queryKey: ["items"],
-    queryFn: async () =>
-      (
-        await supabase
-          .from("items")
-          .select("*, category:categories(id,name), supplier:suppliers(id,name)")
-          .order("name")
-      ).data ?? [],
+    queryFn: async () => await listItems(),
+    refetchInterval: 10000,
   });
-  const { data: txs = [], refetch: rTx } = useQuery({
+  const { data: txs = [] } = useQuery({
     queryKey: ["tx", "recent"],
-    queryFn: async () =>
-      (
-        await supabase
-          .from("transactions")
-          .select("*, item:items(id,name,unit)")
-          .order("created_at", { ascending: false })
-          .limit(200)
-      ).data ?? [],
+    queryFn: async () => await listRecentTransactions(),
+    refetchInterval: 10000,
   });
-
-  useEffect(() => {
-    const ch = supabase
-      .channel("dash")
-      .on("postgres_changes", { event: "*", schema: "public", table: "items" }, () => rItems())
-      .on("postgres_changes", { event: "*", schema: "public", table: "transactions" }, () => {
-        rItems();
-        rTx();
-      })
-      .subscribe();
-    return () => {
-      supabase.removeChannel(ch);
-    };
-  }, [rItems, rTx]);
 
   const total = items.length;
   const low = items.filter((i: any) => i.quantity > 0 && i.quantity <= i.reorder_level).length;
@@ -144,6 +119,7 @@ function Dashboard() {
               {isAdmin && (
                 <Link
                   to="/inventory"
+                  search={{ add: "1" as any }}
                   className="block rounded-md border border-border px-3 py-2 text-sm hover:bg-accent"
                 >
                   + Add new item
