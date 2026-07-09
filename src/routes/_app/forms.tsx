@@ -9,6 +9,7 @@ import {
   LayoutPanelLeft,
   PackageCheck,
   Plus,
+  Printer,
   Save,
   Send,
   Trash2,
@@ -51,6 +52,9 @@ type Transaction = {
   staff_name: string | null;
   remarks: string | null;
   created_at: string;
+  source_form_type?: "IAR" | "RIS" | string | null;
+  source_form_id?: string | null;
+  source_line_id?: string | null;
   item?: Item;
 };
 
@@ -66,8 +70,18 @@ type Line = {
 
 type IarState = {
   iarNo: string;
+  entityName: string;
+  fundCluster: string;
   supplier: string;
+  poNoDate: string;
+  requisitioningOffice: string;
+  responsibilityCenter: string;
   invoiceNo: string;
+  iarDate: string;
+  invoiceDate: string;
+  dateInspected: string;
+  dateReceived: string;
+  inspectionOfficer: string;
   acceptedBy: string;
 };
 
@@ -79,6 +93,33 @@ type RisState = {
   approvedBy: string;
   issuedBy: string;
   receivedBy: string;
+  requestedDesignation: string;
+  approvedDesignation: string;
+  issuedDesignation: string;
+  receivedDesignation: string;
+  requestedDate: string;
+  approvedDate: string;
+  issuedDate: string;
+  receivedDate: string;
+};
+
+const FORM_DEFAULTS = {
+  entityName: "PROVINCIAL TRAINING CENTER - DAVAO DEL NORTE",
+  fundCluster: "06-SSP",
+  responsibilityCenter: "16 009 3 00011 07",
+  risResponsibilityCenter: "16 009 03 0001 07",
+  inspectionOfficer: "JOHN EARVIN C. GONZALES",
+  custodian: "ENGR. JENY E. BUSCANO",
+  requestedBy: "JOHN EARVIN C. GONZALES",
+  requestedDesignation: "TESD Specialist II",
+  approvedBy: "ENGR. ALBERT N. MANINGO",
+  approvedDesignation: "Head of Procuring Entity / Center Administrator",
+  issuedBy: "ENGR. JENY E. BUSCANO",
+  issuedDesignation: "Sr. TESDS / Supply Officer",
+  receivedBy: "JOHN EARVIN C. GONZALES",
+  receivedDesignation: "TESD Specialist II",
+  accountingStaff: "MAYSHEENA S. MANILA",
+  accountingDesignation: "Administrative Officer IV",
 };
 
 function FormsFlow() {
@@ -94,20 +135,40 @@ function FormsFlow() {
   const [selectedItemId, setSelectedItemId] = useState("");
   const [reportMonth, setReportMonth] = useState(today.slice(0, 7));
   const [iar, setIar] = useState<IarState>({
-    iarNo: `IAR-${today}`,
+    iarNo: makeFormNumber("IAR", today),
+    entityName: FORM_DEFAULTS.entityName,
+    fundCluster: FORM_DEFAULTS.fundCluster,
     supplier: "",
+    poNoDate: "",
+    requisitioningOffice: "",
+    responsibilityCenter: FORM_DEFAULTS.responsibilityCenter,
     invoiceNo: "",
-    acceptedBy: userName,
+    iarDate: today,
+    invoiceDate: today,
+    dateInspected: today,
+    dateReceived: today,
+    inspectionOfficer: FORM_DEFAULTS.inspectionOfficer,
+    acceptedBy: FORM_DEFAULTS.custodian,
   });
-  const [iarLines, setIarLines] = useState<Line[]>([blankLine()]);
+  const [iarLines, setIarLines] = useState<Line[]>(
+    Array.from({ length: 4 }, blankLine),
+  );
   const [ris, setRis] = useState<RisState>({
-    risNo: `RIS-${today}`,
+    risNo: makeFormNumber("RIS", today),
     office: "",
     purpose: "",
-    requestedBy: userName,
-    approvedBy: "",
-    issuedBy: userName,
-    receivedBy: "",
+    requestedBy: FORM_DEFAULTS.requestedBy,
+    approvedBy: FORM_DEFAULTS.approvedBy,
+    issuedBy: FORM_DEFAULTS.issuedBy,
+    receivedBy: FORM_DEFAULTS.receivedBy,
+    requestedDesignation: FORM_DEFAULTS.requestedDesignation,
+    approvedDesignation: FORM_DEFAULTS.approvedDesignation,
+    issuedDesignation: FORM_DEFAULTS.issuedDesignation,
+    receivedDesignation: FORM_DEFAULTS.receivedDesignation,
+    requestedDate: today,
+    approvedDate: today,
+    issuedDate: today,
+    receivedDate: today,
   });
   const [risLines, setRisLines] = useState<Line[]>([blankLine()]);
   const [saving, setSaving] = useState(false);
@@ -191,6 +252,14 @@ function FormsFlow() {
       .single();
 
     if (iarError) {
+      if (isUniqueViolation(iarError)) {
+        const nextIarNo = makeFormNumber("IAR", today);
+        setIar({ ...iar, iarNo: nextIarNo });
+        setSaving(false);
+        return toast.error(
+          `IAR No. ${iar.iarNo} already exists. I prepared ${nextIarNo}; try posting again.`,
+        );
+      }
       setSaving(false);
       return toast.error(iarError.message);
     }
@@ -242,6 +311,15 @@ function FormsFlow() {
     setSaving(false);
     toast.success("IAR posted. Stock card receipts were added.");
     refreshFlow();
+    setSelectedItemId(validLines[0]?.item_id || "");
+    setIar({
+      ...iar,
+      iarNo: makeFormNumber("IAR", today),
+      supplier: "",
+      poNoDate: "",
+      invoiceNo: "",
+    });
+    setIarLines(Array.from({ length: 4 }, blankLine));
     setTab("stock-card");
   }
 
@@ -287,6 +365,14 @@ function FormsFlow() {
       .single();
 
     if (risError) {
+      if (isUniqueViolation(risError)) {
+        const nextRisNo = makeFormNumber("RIS", today);
+        setRis({ ...ris, risNo: nextRisNo });
+        setSaving(false);
+        return toast.error(
+          `RIS No. ${ris.risNo} already exists. I prepared ${nextRisNo}; try saving again.`,
+        );
+      }
       setSaving(false);
       return toast.error(risError.message);
     }
@@ -360,6 +446,12 @@ function FormsFlow() {
     setSaving(false);
     toast.success("RIS issued. Stock balances were deducted.");
     refreshFlow();
+    setRis({
+      ...ris,
+      risNo: makeFormNumber("RIS", today),
+      purpose: "",
+    });
+    setRisLines([blankLine()]);
     setTab("rsmi");
   }
 
@@ -368,21 +460,39 @@ function FormsFlow() {
       return;
     if (tab === "iar") {
       setIar({
-        iarNo: `IAR-${today}`,
+        iarNo: makeFormNumber("IAR", today),
+        entityName: FORM_DEFAULTS.entityName,
+        fundCluster: FORM_DEFAULTS.fundCluster,
         supplier: "",
+        poNoDate: "",
+        requisitioningOffice: "",
+        responsibilityCenter: FORM_DEFAULTS.responsibilityCenter,
         invoiceNo: "",
-        acceptedBy: userName,
+        iarDate: today,
+        invoiceDate: today,
+        dateInspected: today,
+        dateReceived: today,
+        inspectionOfficer: FORM_DEFAULTS.inspectionOfficer,
+        acceptedBy: FORM_DEFAULTS.custodian,
       });
-      setIarLines([blankLine()]);
+      setIarLines(Array.from({ length: 4 }, blankLine));
     } else if (tab === "ris") {
       setRis({
-        risNo: `RIS-${today}`,
+        risNo: makeFormNumber("RIS", today),
         office: "",
         purpose: "",
-        requestedBy: userName,
-        approvedBy: "",
-        issuedBy: userName,
-        receivedBy: "",
+        requestedBy: FORM_DEFAULTS.requestedBy,
+        approvedBy: FORM_DEFAULTS.approvedBy,
+        issuedBy: FORM_DEFAULTS.issuedBy,
+        receivedBy: FORM_DEFAULTS.receivedBy,
+        requestedDesignation: FORM_DEFAULTS.requestedDesignation,
+        approvedDesignation: FORM_DEFAULTS.approvedDesignation,
+        issuedDesignation: FORM_DEFAULTS.issuedDesignation,
+        receivedDesignation: FORM_DEFAULTS.receivedDesignation,
+        requestedDate: today,
+        approvedDate: today,
+        issuedDate: today,
+        receivedDate: today,
       });
       setRisLines([blankLine()]);
     }
@@ -396,6 +506,30 @@ function FormsFlow() {
     );
   }
 
+  function printActiveForm() {
+    const paper = document.querySelector(".flow-paper");
+    if (!paper) return toast.error("No form preview available to print.");
+
+    document.querySelector(".forms-print-root")?.remove();
+    const printRoot = document.createElement("div");
+    printRoot.className = "forms-print-root";
+    const printPaper = paper.cloneNode(true) as HTMLElement;
+    normalizePrintControls(printPaper);
+    printRoot.appendChild(printPaper);
+    document.body.appendChild(printRoot);
+    document.body.classList.add("printing-form");
+
+    const cleanupPrint = () => {
+      document.body.classList.remove("printing-form");
+      printRoot.remove();
+      window.removeEventListener("afterprint", cleanupPrint);
+    };
+
+    window.addEventListener("afterprint", cleanupPrint);
+    window.print();
+    window.setTimeout(cleanupPrint, 1000);
+  }
+
   return (
     <div>
       <PageHeader
@@ -403,6 +537,9 @@ function FormsFlow() {
         subtitle="Preview and encode IAR, Stock Card, RIS, and RSMI"
         actions={
           <>
+            <button onClick={printActiveForm} className="flow-header-btn">
+              <Printer className="h-4 w-4" /> Print Form
+            </button>
             <button
               onClick={resetActiveForm}
               disabled={tab === "stock-card" || tab === "rsmi"}
@@ -714,6 +851,7 @@ function EntryPanel({
             <FlowField label="IAR No.">
               <input
                 className="flow-input"
+                placeholder="e.g. IAR-2026-07-10-143005123"
                 value={iar.iarNo}
                 onChange={(e) => setIar({ ...iar, iarNo: e.target.value })}
               />
@@ -721,6 +859,7 @@ function EntryPanel({
             <FlowField label="Supplier">
               <input
                 className="flow-input"
+                placeholder="e.g. Davao Citihardware Inc."
                 value={iar.supplier}
                 onChange={(e) => setIar({ ...iar, supplier: e.target.value })}
               />
@@ -728,6 +867,7 @@ function EntryPanel({
             <FlowField label="Invoice / DR No.">
               <input
                 className="flow-input"
+                placeholder="e.g. 250876 / DR-0001"
                 value={iar.invoiceNo}
                 onChange={(e) => setIar({ ...iar, invoiceNo: e.target.value })}
               />
@@ -735,6 +875,7 @@ function EntryPanel({
             <FlowField label="Accepted By">
               <input
                 className="flow-input"
+                placeholder={FORM_DEFAULTS.custodian}
                 value={iar.acceptedBy}
                 onChange={(e) => setIar({ ...iar, acceptedBy: e.target.value })}
               />
@@ -772,6 +913,7 @@ function EntryPanel({
             <FlowField label="RIS No.">
               <input
                 className="flow-input"
+                placeholder="e.g. RIS-2026-07-10-143005123"
                 value={ris.risNo}
                 onChange={(e) => setRis({ ...ris, risNo: e.target.value })}
               />
@@ -779,6 +921,7 @@ function EntryPanel({
             <FlowField label="Requesting Office">
               <input
                 className="flow-input"
+                placeholder="e.g. Training and Assessment"
                 value={ris.office}
                 onChange={(e) => setRis({ ...ris, office: e.target.value })}
               />
@@ -786,6 +929,7 @@ function EntryPanel({
             <FlowField label="Requested By">
               <input
                 className="flow-input"
+                placeholder={FORM_DEFAULTS.requestedBy}
                 value={ris.requestedBy}
                 onChange={(e) =>
                   setRis({ ...ris, requestedBy: e.target.value })
@@ -795,6 +939,7 @@ function EntryPanel({
             <FlowField label="Purpose">
               <input
                 className="flow-input"
+                placeholder="e.g. For official supplies and maintenance"
                 value={ris.purpose}
                 onChange={(e) => setRis({ ...ris, purpose: e.target.value })}
               />
@@ -802,6 +947,7 @@ function EntryPanel({
             <FlowField label="Approved By">
               <input
                 className="flow-input"
+                placeholder={FORM_DEFAULTS.approvedBy}
                 value={ris.approvedBy}
                 onChange={(e) => setRis({ ...ris, approvedBy: e.target.value })}
               />
@@ -809,6 +955,7 @@ function EntryPanel({
             <FlowField label="Issued By">
               <input
                 className="flow-input"
+                placeholder={FORM_DEFAULTS.issuedBy}
                 value={ris.issuedBy}
                 onChange={(e) => setRis({ ...ris, issuedBy: e.target.value })}
               />
@@ -816,6 +963,7 @@ function EntryPanel({
             <FlowField label="Received By">
               <input
                 className="flow-input"
+                placeholder={FORM_DEFAULTS.receivedBy}
                 value={ris.receivedBy}
                 onChange={(e) => setRis({ ...ris, receivedBy: e.target.value })}
               />
@@ -1007,14 +1155,16 @@ function IarPaper({
   editable: boolean;
 }) {
   const validLines = getPreviewLines(items, lines);
+  const displayCount = Math.max(6, lines.length);
   const displayLines = editable
-    ? padRows(lines, Math.max(8, lines.length))
-    : padRows(validLines, 8);
+    ? Array.from({ length: displayCount }, (_, index) => lines[index] ?? null)
+    : padRows(validLines, 6);
 
-  function updateLine(id: string, patch: Partial<Line>) {
-    onLines(
-      lines.map((line) => (line.id === id ? { ...line, ...patch } : line)),
-    );
+  function updateLineAt(index: number, patch: Partial<Line>) {
+    const nextLines = [...lines];
+    while (nextLines.length <= index) nextLines.push(blankLine());
+    nextLines[index] = { ...nextLines[index], ...patch };
+    onLines(nextLines);
   }
 
   function addLine() {
@@ -1026,43 +1176,181 @@ function IarPaper({
   }
 
   return (
-    <div className={`flow-paper ${orientation}`}>
-      <PaperHeader
-        title="Inspection and Acceptance Report"
-        formNo={form.iarNo}
-        editable={editable}
-        onFormNo={(value) => onForm({ ...form, iarNo: value })}
-      />
-      <div className="paper-meta three">
-        <PaperMeta
-          label="Supplier"
-          value={form.supplier}
-          editable={editable}
-          onChange={(value) => onForm({ ...form, supplier: value })}
-        />
-        <PaperMeta
-          label="Invoice / DR No."
-          value={form.invoiceNo}
-          editable={editable}
-          onChange={(value) => onForm({ ...form, invoiceNo: value })}
-        />
-        <PaperMeta
-          label="Accepted By"
-          value={form.acceptedBy}
-          editable={editable}
-          onChange={(value) => onForm({ ...form, acceptedBy: value })}
-        />
-      </div>
-      <table className="paper-grid">
+    <div className={`flow-paper ${orientation} iar-paper`}>
+      <div className="iar-title">Inspection and Acceptance Report</div>
+      <table className="paper-grid iar-meta-grid">
+        <tbody>
+          <tr>
+            <td colSpan={2}>
+              <strong>Entity Name :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  placeholder={FORM_DEFAULTS.entityName}
+                  value={form.entityName}
+                  onChange={(event) =>
+                    onForm({ ...form, entityName: event.target.value })
+                  }
+                />
+              ) : (
+                form.entityName
+              )}
+            </td>
+            <td>
+              <strong>Fund Cluster :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  placeholder={FORM_DEFAULTS.fundCluster}
+                  value={form.fundCluster}
+                  onChange={(event) =>
+                    onForm({ ...form, fundCluster: event.target.value })
+                  }
+                />
+              ) : (
+                form.fundCluster
+              )}
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <strong>Supplier :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  placeholder="e.g. DAVAO CITIHARDWARE INC."
+                  value={form.supplier}
+                  onChange={(event) =>
+                    onForm({ ...form, supplier: event.target.value })
+                  }
+                />
+              ) : (
+                form.supplier
+              )}
+            </td>
+            <td>
+              <strong>IAR No. :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  placeholder="e.g. IAR-2026-07-10-143005123"
+                  value={form.iarNo}
+                  onChange={(event) =>
+                    onForm({ ...form, iarNo: event.target.value })
+                  }
+                />
+              ) : (
+                form.iarNo
+              )}
+            </td>
+            <td>
+              <strong>Date :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  type="date"
+                  value={form.iarDate}
+                  onChange={(event) =>
+                    onForm({ ...form, iarDate: event.target.value })
+                  }
+                />
+              ) : (
+                shortDate(form.iarDate)
+              )}
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <strong>PO No. / Date :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  placeholder="e.g. 2025-02-0006 / 02/14/2025"
+                  value={form.poNoDate}
+                  onChange={(event) =>
+                    onForm({ ...form, poNoDate: event.target.value })
+                  }
+                />
+              ) : (
+                form.poNoDate
+              )}
+            </td>
+            <td>
+              <strong>Invoice No. :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  placeholder="e.g. 250876"
+                  value={form.invoiceNo}
+                  onChange={(event) =>
+                    onForm({ ...form, invoiceNo: event.target.value })
+                  }
+                />
+              ) : (
+                form.invoiceNo
+              )}
+            </td>
+            <td>
+              <strong>Date :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  type="date"
+                  value={form.invoiceDate}
+                  onChange={(event) =>
+                    onForm({ ...form, invoiceDate: event.target.value })
+                  }
+                />
+              ) : (
+                shortDate(form.invoiceDate)
+              )}
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <strong>Requisitioning Office/Dept. :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  placeholder="e.g. Training and Assessment"
+                  value={form.requisitioningOffice}
+                  onChange={(event) =>
+                    onForm({
+                      ...form,
+                      requisitioningOffice: event.target.value,
+                    })
+                  }
+                />
+              ) : (
+                form.requisitioningOffice
+              )}
+            </td>
+            <td colSpan={2}>
+              <strong>Responsibility Center Code :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  placeholder={FORM_DEFAULTS.responsibilityCenter}
+                  value={form.responsibilityCenter}
+                  onChange={(event) =>
+                    onForm({ ...form, responsibilityCenter: event.target.value })
+                  }
+                />
+              ) : (
+                form.responsibilityCenter
+              )}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <table className="paper-grid iar-items-grid">
         <thead>
           <tr>
-            <th className="stock-no-col">Stock No.</th>
-            <th className="item-col">Item Description</th>
+            <th className="stock-no-col">Stock/<br />Property No.</th>
+            <th className="item-col">Description</th>
             <th>Unit</th>
-            <th className="qty-col">Qty.</th>
-            <th className="cost-col">Unit Cost</th>
-            <th>Remarks</th>
-            {editable && <th className="action-col"></th>}
+            <th className="qty-col">Quantity</th>
+            {editable && <th className="action-col print-hidden"></th>}
           </tr>
         </thead>
         <tbody>
@@ -1075,12 +1363,12 @@ function IarPaper({
               <tr key={sourceLine?.id || previewLine?.id || index}>
                 <td>{String(index + 1).padStart(3, "0")}</td>
                 <td>
-                  {editable && sourceLine ? (
+                  {editable ? (
                     <select
                       className="paper-cell-control"
-                      value={sourceLine.item_id}
+                      value={sourceLine?.item_id || ""}
                       onChange={(e) =>
-                        updateLine(sourceLine.id, { item_id: e.target.value })
+                        updateLineAt(index, { item_id: e.target.value })
                       }
                     >
                       <option value="">Select item...</option>
@@ -1096,53 +1384,23 @@ function IarPaper({
                 </td>
                 <td>{previewLine?.item?.unit || ""}</td>
                 <td className="right">
-                  {editable && sourceLine ? (
+                  {editable ? (
                     <input
                       className="paper-cell-control right"
                       type="number"
                       min={1}
-                      value={sourceLine.quantity}
+                      placeholder="Qty."
+                      value={sourceLine?.quantity || ""}
                       onChange={(e) =>
-                        updateLine(sourceLine.id, { quantity: e.target.value })
+                        updateLineAt(index, { quantity: e.target.value })
                       }
                     />
                   ) : (
                     previewLine?.quantity || ""
                   )}
                 </td>
-                <td className="right">
-                  {editable && sourceLine ? (
-                    <input
-                      className="paper-cell-control right"
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={sourceLine.unitCost}
-                      onChange={(e) =>
-                        updateLine(sourceLine.id, { unitCost: e.target.value })
-                      }
-                    />
-                  ) : previewLine?.unitCost ? (
-                    peso(Number(previewLine.unitCost))
-                  ) : (
-                    ""
-                  )}
-                </td>
-                <td>
-                  {editable && sourceLine ? (
-                    <input
-                      className="paper-cell-control"
-                      value={sourceLine.remarks}
-                      onChange={(e) =>
-                        updateLine(sourceLine.id, { remarks: e.target.value })
-                      }
-                    />
-                  ) : (
-                    previewLine?.remarks || ""
-                  )}
-                </td>
                 {editable && (
-                  <td className="center">
+                  <td className="center print-hidden">
                     {sourceLine && (
                       <button
                         className="flow-icon text-destructive"
@@ -1164,10 +1422,93 @@ function IarPaper({
           <Plus className="h-4 w-4" /> Add Row
         </button>
       )}
-      <SignatureBlock
-        labels={["Supply Officer", "Inspection Officer", "Accepted By"]}
-        values={["", "", form.acceptedBy]}
-      />
+      <table className="paper-grid iar-signoff-grid">
+        <tbody>
+          <tr>
+            <th>Inspection</th>
+            <th>Acceptance</th>
+          </tr>
+          <tr>
+            <td>
+              <strong>Date Inspected :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  type="date"
+                  value={form.dateInspected}
+                  onChange={(event) =>
+                    onForm({ ...form, dateInspected: event.target.value })
+                  }
+                />
+              ) : (
+                shortDate(form.dateInspected)
+              )}
+              <div className="iar-checkbox-line">
+                <span className="paper-checkbox" /> Inspected, verified and
+                found in order as to quantity and specifications
+              </div>
+            </td>
+            <td>
+              <strong>Date Received :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  type="date"
+                  value={form.dateReceived}
+                  onChange={(event) =>
+                    onForm({ ...form, dateReceived: event.target.value })
+                  }
+                />
+              ) : (
+                shortDate(form.dateReceived)
+              )}
+              <div className="iar-checkbox-line">
+                <span className="paper-checkbox" /> Complete
+              </div>
+              <div className="iar-checkbox-line">
+                <span className="paper-checkbox" /> Partial (pls. specify
+                quantity)
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td className="center strong">
+              {editable ? (
+                <input
+                  className="paper-cell-control center strong"
+                  placeholder={FORM_DEFAULTS.inspectionOfficer}
+                  value={form.inspectionOfficer}
+                  onChange={(event) =>
+                    onForm({ ...form, inspectionOfficer: event.target.value })
+                  }
+                />
+              ) : (
+                form.inspectionOfficer
+              )}
+              <div className="signature-label normal-case">
+                Inspection Officer/Inspection Committee
+              </div>
+            </td>
+            <td className="center strong">
+              {editable ? (
+                <input
+                  className="paper-cell-control center strong"
+                  placeholder={FORM_DEFAULTS.custodian}
+                  value={form.acceptedBy}
+                  onChange={(event) =>
+                    onForm({ ...form, acceptedBy: event.target.value })
+                  }
+                />
+              ) : (
+                form.acceptedBy
+              )}
+              <div className="signature-label normal-case">
+                Supply and/or Property Custodian
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -1190,40 +1531,76 @@ function StockCardPaper({
   editable: boolean;
 }) {
   return (
-    <div className={`flow-paper ${orientation}`}>
+    <div className={`flow-paper ${orientation} stock-paper`}>
       <div className="paper-title-dark">Stock Card</div>
-      <div className="paper-meta two">
-        <div className="paper-meta-cell">
-          <span>Item:</span>{" "}
-          {editable ? (
-            <select
-              className="paper-meta-control"
-              value={selectedItemId}
-              onChange={(event) => onSelectedItemId(event.target.value)}
-            >
-              {items.map((candidate) => (
-                <option key={candidate.id} value={candidate.id}>
-                  {candidate.name}
-                </option>
-              ))}
-            </select>
-          ) : (
-            item?.name || ""
-          )}
-        </div>
-        <PaperMeta label="Stock No." value={item ? item.id.slice(0, 8) : ""} />
-        <PaperMeta label="Description" value={item?.name || ""} />
-        <PaperMeta label="Unit of Measurement" value={item?.unit || ""} />
-      </div>
+      <table className="paper-grid official-meta-grid stock-meta-grid">
+        <tbody>
+          <tr>
+            <td colSpan={2}>
+              <strong>Entity Name :</strong>{" "}
+              <span className="strong">
+                PROVINCIAL TRAINING CENTER - DAVAO DEL NORTE
+              </span>
+            </td>
+            <td>
+              <strong>Fund Cluster :</strong>{" "}
+              <span className="strong">06-SSP</span>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <strong>Item :</strong>{" "}
+              {editable ? (
+                <select
+                  className="paper-inline-control strong"
+                  value={selectedItemId}
+                  onChange={(event) => onSelectedItemId(event.target.value)}
+                >
+                  {items.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="strong">{item?.name || ""}</span>
+              )}
+            </td>
+            <td>
+              <strong>Stock No. :</strong>{" "}
+              <span className="strong">{item ? item.id.slice(0, 8) : ""}</span>
+            </td>
+            <td>
+              <strong>Re-order Point :</strong>
+            </td>
+          </tr>
+          <tr>
+            <td colSpan={2}>
+              <strong>Description :</strong>{" "}
+              <span className="strong">{item?.name || ""}</span>
+            </td>
+            <td>
+              <strong>Unit of Measurement :</strong>{" "}
+              <span className="strong">{item?.unit || ""}</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
       <table className="paper-grid stock-card">
         <thead>
           <tr>
-            <th>Date</th>
-            <th>Reference</th>
-            <th>Receipt Qty.</th>
-            <th>Issue Qty.</th>
+            <th rowSpan={2}>Date</th>
+            <th rowSpan={2}>Reference</th>
+            <th>Receipt</th>
+            <th colSpan={2}>Issue</th>
+            <th>Balance</th>
+            <th rowSpan={2}>No. of Days to Consume</th>
+          </tr>
+          <tr>
+            <th>Qty.</th>
+            <th>Quantity</th>
             <th>Office</th>
-            <th>Balance Qty.</th>
+            <th>Qty.</th>
           </tr>
         </thead>
         <tbody>
@@ -1241,6 +1618,7 @@ function StockCardPaper({
               </td>
               <td>{extractOffice(row?.remarks)}</td>
               <td className="right">{row?.balance ?? ""}</td>
+              <td></td>
             </tr>
           ))}
         </tbody>
@@ -1286,34 +1664,79 @@ function RisPaper({
   }
 
   return (
-    <div className={`flow-paper ${orientation} ris-paper`}>
+    <div className={`flow-paper ${orientation} ris-paper official-paper`}>
       <div className="paper-title-dark">Requisition and Issue Slip</div>
-      <div className="paper-meta two">
-        <PaperMeta label="Entity Name" value="Government Stock Manager" />
-        <PaperMeta label="Fund Cluster" value="01" />
-        <PaperMeta
-          label="Division"
-          value={form.office}
-          editable={editable}
-          onChange={(value) => onForm({ ...form, office: value })}
-        />
-        <PaperMeta
-          label="Responsibility Center Code"
-          value="16 009 03 0001 07"
-        />
-        <PaperMeta
-          label="Office"
-          value={form.office || "Supplies and Materials Management"}
-          editable={editable}
-          onChange={(value) => onForm({ ...form, office: value })}
-        />
-        <PaperMeta
-          label="RIS No."
-          value={form.risNo}
-          editable={editable}
-          onChange={(value) => onForm({ ...form, risNo: value })}
-        />
-      </div>
+      <table className="paper-grid official-meta-grid">
+        <tbody>
+          <tr>
+            <td colSpan={2}>
+              <strong>Entity Name :</strong>{" "}
+              <span className="strong">
+                PROVINCIAL TRAINING CENTER - DAVAO DEL NORTE
+              </span>
+            </td>
+            <td>
+              <strong>Fund Cluster :</strong>{" "}
+              <span className="strong">06-SSP</span>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <strong>Division :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  placeholder="e.g. Training and Assessment"
+                  value={form.office}
+                  onChange={(event) =>
+                    onForm({ ...form, office: event.target.value })
+                  }
+                />
+              ) : (
+                <span className="strong">{form.office}</span>
+              )}
+            </td>
+            <td>
+              <strong>Responsibility Center Code :</strong>{" "}
+              <span className="strong">{FORM_DEFAULTS.risResponsibilityCenter}</span>
+            </td>
+            <td>
+              <strong>RIS No. :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  placeholder="e.g. RIS-2026-07-10-143005123"
+                  value={form.risNo}
+                  onChange={(event) =>
+                    onForm({ ...form, risNo: event.target.value })
+                  }
+                />
+              ) : (
+                <span className="strong">{form.risNo}</span>
+              )}
+            </td>
+          </tr>
+          <tr>
+            <td colSpan={3}>
+              <strong>Office :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  placeholder="e.g. Supplies and Materials Management"
+                  value={form.office || "Supplies and Materials Management"}
+                  onChange={(event) =>
+                    onForm({ ...form, office: event.target.value })
+                  }
+                />
+              ) : (
+                <span className="strong">
+                  {form.office || "Supplies and Materials Management"}
+                </span>
+              )}
+            </td>
+          </tr>
+        </tbody>
+      </table>
       <table className="paper-grid ris-grid">
         <thead>
           <tr>
@@ -1330,7 +1753,7 @@ function RisPaper({
             <th>No</th>
             <th className="qty-col">Qty.</th>
             <th>Remarks</th>
-            {editable && <th className="action-col"></th>}
+            {editable && <th className="action-col print-hidden"></th>}
           </tr>
         </thead>
         <tbody>
@@ -1373,6 +1796,7 @@ function RisPaper({
                       className="paper-cell-control right"
                       type="number"
                       min={1}
+                      placeholder="Qty."
                       value={sourceLine.quantity}
                       onChange={(e) =>
                         updateLine(sourceLine.id, { quantity: e.target.value })
@@ -1405,7 +1829,7 @@ function RisPaper({
                   )}
                 </td>
                 {editable && (
-                  <td className="center">
+                  <td className="center print-hidden">
                     {sourceLine && (
                       <button
                         className="flow-icon text-destructive"
@@ -1432,6 +1856,7 @@ function RisPaper({
         {editable ? (
           <input
             className="paper-inline-control"
+            placeholder="e.g. For official supplies, maintenance, or project use"
             value={form.purpose}
             onChange={(event) =>
               onForm({ ...form, purpose: event.target.value })
@@ -1456,6 +1881,7 @@ function RisPaper({
               {editable ? (
                 <input
                   className="paper-cell-control center"
+                  placeholder={FORM_DEFAULTS.requestedBy}
                   value={form.requestedBy}
                   onChange={(e) =>
                     onForm({ ...form, requestedBy: e.target.value })
@@ -1469,6 +1895,7 @@ function RisPaper({
               {editable ? (
                 <input
                   className="paper-cell-control center"
+                  placeholder={FORM_DEFAULTS.approvedBy}
                   value={form.approvedBy}
                   onChange={(e) =>
                     onForm({ ...form, approvedBy: e.target.value })
@@ -1482,6 +1909,7 @@ function RisPaper({
               {editable ? (
                 <input
                   className="paper-cell-control center"
+                  placeholder={FORM_DEFAULTS.issuedBy}
                   value={form.issuedBy}
                   onChange={(e) =>
                     onForm({ ...form, issuedBy: e.target.value })
@@ -1495,6 +1923,7 @@ function RisPaper({
               {editable ? (
                 <input
                   className="paper-cell-control center"
+                  placeholder={FORM_DEFAULTS.receivedBy}
                   value={form.receivedBy}
                   onChange={(e) =>
                     onForm({ ...form, receivedBy: e.target.value })
@@ -1507,17 +1936,121 @@ function RisPaper({
           </tr>
           <tr>
             <td>Designation</td>
-            <td>End User</td>
-            <td>Head of Office</td>
-            <td>Supply Officer</td>
-            <td>End User</td>
+            <td>
+              {editable ? (
+                <input
+                  className="paper-cell-control center"
+                  placeholder={FORM_DEFAULTS.requestedDesignation}
+                  value={form.requestedDesignation}
+                  onChange={(e) =>
+                    onForm({ ...form, requestedDesignation: e.target.value })
+                  }
+                />
+              ) : (
+                form.requestedDesignation
+              )}
+            </td>
+            <td>
+              {editable ? (
+                <input
+                  className="paper-cell-control center"
+                  placeholder={FORM_DEFAULTS.approvedDesignation}
+                  value={form.approvedDesignation}
+                  onChange={(e) =>
+                    onForm({ ...form, approvedDesignation: e.target.value })
+                  }
+                />
+              ) : (
+                form.approvedDesignation
+              )}
+            </td>
+            <td>
+              {editable ? (
+                <input
+                  className="paper-cell-control center"
+                  placeholder={FORM_DEFAULTS.issuedDesignation}
+                  value={form.issuedDesignation}
+                  onChange={(e) =>
+                    onForm({ ...form, issuedDesignation: e.target.value })
+                  }
+                />
+              ) : (
+                form.issuedDesignation
+              )}
+            </td>
+            <td>
+              {editable ? (
+                <input
+                  className="paper-cell-control center"
+                  placeholder={FORM_DEFAULTS.receivedDesignation}
+                  value={form.receivedDesignation}
+                  onChange={(e) =>
+                    onForm({ ...form, receivedDesignation: e.target.value })
+                  }
+                />
+              ) : (
+                form.receivedDesignation
+              )}
+            </td>
           </tr>
           <tr>
             <td>Date</td>
-            <td>{format(new Date(), "MMM d, yyyy")}</td>
-            <td>{format(new Date(), "MMM d, yyyy")}</td>
-            <td>{format(new Date(), "MMM d, yyyy")}</td>
-            <td>{format(new Date(), "MMM d, yyyy")}</td>
+            <td>
+              {editable ? (
+                <input
+                  className="paper-cell-control center"
+                  type="date"
+                  value={form.requestedDate}
+                  onChange={(e) =>
+                    onForm({ ...form, requestedDate: e.target.value })
+                  }
+                />
+              ) : (
+                shortDate(form.requestedDate)
+              )}
+            </td>
+            <td>
+              {editable ? (
+                <input
+                  className="paper-cell-control center"
+                  type="date"
+                  value={form.approvedDate}
+                  onChange={(e) =>
+                    onForm({ ...form, approvedDate: e.target.value })
+                  }
+                />
+              ) : (
+                shortDate(form.approvedDate)
+              )}
+            </td>
+            <td>
+              {editable ? (
+                <input
+                  className="paper-cell-control center"
+                  type="date"
+                  value={form.issuedDate}
+                  onChange={(e) =>
+                    onForm({ ...form, issuedDate: e.target.value })
+                  }
+                />
+              ) : (
+                shortDate(form.issuedDate)
+              )}
+            </td>
+            <td>
+              {editable ? (
+                <input
+                  className="paper-cell-control center"
+                  type="date"
+                  value={form.receivedDate}
+                  onChange={(e) =>
+                    onForm({ ...form, receivedDate: e.target.value })
+                  }
+                />
+              ) : (
+                shortDate(form.receivedDate)
+              )}
+            </td>
           </tr>
         </tbody>
       </table>
@@ -1540,25 +2073,45 @@ function RsmiPaper({
 }) {
   const recapRows = getRsmiRecapRows(rows);
   return (
-    <div className={`flow-paper ${orientation} rsmi-paper`}>
+    <div className={`flow-paper ${orientation} rsmi-paper official-paper`}>
       <div className="paper-title-dark">
         Report of Supplies and Materials Issued
       </div>
-      <div className="paper-meta two">
-        <PaperMeta label="Entity Name" value="Government Stock Manager" />
-        <PaperMeta
-          label="Report Month"
-          value={reportMonth}
-          editable={editable}
-          type="month"
-          onChange={onReportMonth}
-        />
-        <PaperMeta label="Fund Cluster" value="01" />
-        <PaperMeta
-          label="Prepared By"
-          value="Supply and Property Division Unit"
-        />
-      </div>
+      <table className="paper-grid official-meta-grid">
+        <tbody>
+          <tr>
+            <td colSpan={2}>
+              <strong>Entity Name :</strong>{" "}
+              <span className="strong">
+                PROVINCIAL TRAINING CENTER - DAVAO DEL NORTE
+              </span>
+            </td>
+            <td>
+              <strong>Fund Cluster :</strong>{" "}
+              <span className="strong">06-SSP</span>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <strong>Report Month :</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  type="month"
+                  value={reportMonth}
+                  onChange={(event) => onReportMonth(event.target.value)}
+                />
+              ) : (
+                <span className="strong">{reportMonth}</span>
+              )}
+            </td>
+            <td colSpan={2}>
+              <strong>Prepared By :</strong>{" "}
+              <span className="strong">Supply and Property Division Unit</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
       <table className="paper-grid">
         <thead>
           <tr>
@@ -1628,7 +2181,10 @@ function RsmiPaper({
       </table>
       <SignatureBlock
         labels={["Certified Correct", "Posted By"]}
-        values={["Supply and Property Custodian", "Accounting Staff"]}
+        values={[
+          `${FORM_DEFAULTS.custodian}\nTESD Specialist II`,
+          `${FORM_DEFAULTS.accountingStaff}\n${FORM_DEFAULTS.accountingDesignation}`,
+        ]}
       />
     </div>
   );
@@ -1708,6 +2264,7 @@ function LineEditor({
                     className="flow-input text-right"
                     type="number"
                     min={1}
+                    placeholder="Qty."
                     value={line.quantity}
                     onChange={(e) =>
                       updateLine(line.id, { quantity: e.target.value })
@@ -1721,6 +2278,7 @@ function LineEditor({
                       type="number"
                       min={0}
                       step="0.01"
+                      placeholder="0.00"
                       value={line.unitCost}
                       onChange={(e) =>
                         updateLine(line.id, { unitCost: e.target.value })
@@ -1731,6 +2289,7 @@ function LineEditor({
                 <td>
                   <input
                     className="flow-input"
+                    placeholder="Optional remarks"
                     value={line.remarks}
                     onChange={(e) =>
                       updateLine(line.id, { remarks: e.target.value })
@@ -1783,11 +2342,11 @@ function FlowSupportPanel({
 }) {
   const isBottom = placement === "bottom";
   const iarRows = transactions
-    .filter((tx) => tx.type === "IN")
+    .filter((tx) => tx.type === "IN" && isIarTransaction(tx))
     .slice(-8)
     .reverse();
   const risRows = transactions
-    .filter((tx) => tx.type === "OUT")
+    .filter((tx) => tx.type === "OUT" && isRisTransaction(tx))
     .slice(-8)
     .reverse();
 
@@ -1986,6 +2545,7 @@ function PaperMeta({
         <input
           className="paper-meta-control"
           type={type}
+          placeholder={`Enter ${label.toLowerCase()}`}
           value={value || ""}
           onChange={(event) => onChange(event.target.value)}
         />
@@ -2054,6 +2614,28 @@ function FlowActions({ children }: { children: React.ReactNode }) {
   );
 }
 
+function normalizePrintControls(root: HTMLElement) {
+  root.querySelectorAll("select").forEach((select) => {
+    const selectedText = select.value
+      ? select.options[select.selectedIndex]?.textContent?.trim() || ""
+      : "";
+    replaceControlWithText(select, selectedText);
+  });
+
+  root.querySelectorAll("input").forEach((input) => {
+    const value =
+      input.type === "date" && input.value ? shortDate(input.value) : input.value;
+    replaceControlWithText(input, value || "");
+  });
+}
+
+function replaceControlWithText(control: HTMLElement, value: string) {
+  const span = document.createElement("span");
+  span.className = `${control.className} paper-print-value`;
+  span.textContent = value;
+  control.replaceWith(span);
+}
+
 function blankLine(): Line {
   return {
     id: createId(),
@@ -2064,10 +2646,37 @@ function blankLine(): Line {
   };
 }
 
+function makeFormNumber(prefix: "IAR" | "RIS", date: string) {
+  const now = new Date();
+  const timePart = [
+    now.getHours(),
+    now.getMinutes(),
+    now.getSeconds(),
+    now.getMilliseconds(),
+  ]
+    .map((part, index) => String(part).padStart(index === 3 ? 3 : 2, "0"))
+    .join("");
+  return `${prefix}-${date}-${timePart}`;
+}
+
+function isUniqueViolation(error: { code?: string; message?: string }) {
+  return (
+    error.code === "23505" ||
+    error.message?.toLowerCase().includes("duplicate key value")
+  );
+}
+
 function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto)
     return crypto.randomUUID();
   return `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function shortDate(value: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return format(date, "M/d/yyyy");
 }
 
 function getPreviewLines(items: Item[], lines: Line[]) {
@@ -2094,7 +2703,10 @@ function getStockRows(
   transactions: Transaction[],
 ): StockRow[] {
   if (!item) return [];
-  const itemTransactions = transactions.filter((tx) => tx.item_id === item.id);
+  const itemTransactions = transactions.filter(
+    (tx) =>
+      tx.item_id === item.id && (isIarTransaction(tx) || isRisTransaction(tx)),
+  );
   const netMovement = itemTransactions.reduce(
     (sum, tx) => sum + (tx.type === "IN" ? tx.quantity : -tx.quantity),
     0,
@@ -2119,14 +2731,23 @@ function getAcceptedStockItems(items: Item[], transactions: Transaction[]) {
 }
 
 function getStockCardItems(items: Item[], transactions: Transaction[]) {
-  const transactionItemIds = new Set(transactions.map((tx) => tx.item_id));
+  const transactionItemIds = new Set(
+    transactions
+      .filter((tx) => isIarTransaction(tx) || isRisTransaction(tx))
+      .map((tx) => tx.item_id),
+  );
   const transactionItems = items.filter((item) => transactionItemIds.has(item.id));
   return transactionItems.length > 0 ? transactionItems : items;
 }
 
 function isIarTransaction(transaction: Transaction) {
-  const source = (transaction as any).source_form_type;
+  const source = transaction.source_form_type;
   return source === "IAR" || extractReference(transaction.remarks).startsWith("IAR ");
+}
+
+function isRisTransaction(transaction: Transaction) {
+  const source = transaction.source_form_type;
+  return source === "RIS" || extractReference(transaction.remarks).startsWith("RIS ");
 }
 
 type RsmiRow = {
@@ -2163,11 +2784,18 @@ function getFlowStats(
 ): FlowStats {
   return {
     activeStage: activeStageLabel(tab),
-    iarReceipts: transactions.filter((tx) => tx.type === "IN").length,
-    risIssues: transactions.filter((tx) => tx.type === "OUT").length,
+    iarReceipts: transactions.filter(
+      (tx) => tx.type === "IN" && isIarTransaction(tx),
+    ).length,
+    risIssues: transactions.filter(
+      (tx) => tx.type === "OUT" && isRisTransaction(tx),
+    ).length,
     issuedThisMonth: transactions
       .filter(
-        (tx) => tx.type === "OUT" && tx.created_at.slice(0, 7) === reportMonth,
+        (tx) =>
+          tx.type === "OUT" &&
+          isRisTransaction(tx) &&
+          tx.created_at.slice(0, 7) === reportMonth,
       )
       .reduce((sum, tx) => sum + tx.quantity, 0),
   };
@@ -2186,7 +2814,10 @@ function getRsmiRows(
 ): RsmiRow[] {
   return transactions
     .filter(
-      (tx) => tx.type === "OUT" && tx.created_at.slice(0, 7) === reportMonth,
+      (tx) =>
+        tx.type === "OUT" &&
+        isRisTransaction(tx) &&
+        tx.created_at.slice(0, 7) === reportMonth,
     )
     .map((tx) => {
       const unitCost =
@@ -2397,6 +3028,7 @@ const flowStyles = `
 .flow-preview-shell{border:1px solid var(--color-border);border-radius:8px;background:var(--color-card);overflow:hidden}
 .flow-preview-bg{overflow:auto;background:#e5e7eb;padding:16px}
 .flow-preview-zoom{transform-origin:top center;margin:0 auto}
+.forms-print-root{display:none}
 .flow-paper{width:min(100%,8.5in);min-height:auto;aspect-ratio:8.5 / 13;margin:0 auto;background:white;color:#111;border:2px solid #111;padding:18px;font-family:Arial,sans-serif;font-size:11px}
 .flow-paper.landscape{width:min(100%,13in);aspect-ratio:13 / 8.5}
 .paper-header{display:grid;grid-template-columns:90px minmax(0,1fr) 135px;border:1px solid #111}
@@ -2407,6 +3039,29 @@ const flowStyles = `
 .form-no-box{background:#e6f6ff;padding:8px;font-weight:700}
 .small-label{font-size:9px;text-transform:uppercase}
 .paper-title-dark{margin:10px 0;background:#0f2348;color:#fff;text-align:center;text-transform:uppercase;font-weight:800;letter-spacing:.04em;padding:7px;font-size:12px}
+.official-paper,.stock-paper{border:0;padding:14px 18px;font-family:"Times New Roman",Times,serif;font-size:12px}
+.official-paper .paper-title-dark,.stock-paper .paper-title-dark{background:#fff;color:#111;letter-spacing:0;padding:0;margin:0 0 18px;font-size:18px;font-family:"Times New Roman",Times,serif}
+.stock-paper .paper-title-dark{font-size:16px}
+.official-paper .paper-meta,.stock-paper .paper-meta{border-color:#111}
+.official-paper .paper-meta-cell,.stock-paper .paper-meta-cell{min-height:28px;padding:5px;border-color:#111}
+.official-paper .paper-grid th,.stock-paper .paper-grid th{background:#fff;color:#111;font-size:11px;text-transform:none;font-style:italic}
+.official-paper .paper-grid td,.stock-paper .paper-grid td{height:27px}
+.official-meta-grid{border-top:0;margin-bottom:0}
+.official-meta-grid td{height:26px;padding:4px}
+.official-meta-grid tr:first-child td{border-top:0;border-left:0;border-right:0}
+.official-meta-grid tr:first-child td:first-child{border-right:0}
+.official-meta-grid .paper-inline-control{font-weight:800;text-decoration:underline;text-underline-offset:2px}
+.stock-paper .paper-meta.two{grid-template-columns:1.5fr 1fr}
+.stock-meta-grid td:first-child{width:50%}
+.stock-paper .stock-card th{font-size:11px}
+.stock-paper .stock-card th:first-child,.stock-paper .stock-card td:first-child{width:76px}
+.stock-paper .stock-card th:nth-child(2),.stock-paper .stock-card td:nth-child(2){width:110px}
+.stock-paper .stock-card th:last-child,.stock-paper .stock-card td:last-child{width:116px}
+.ris-paper .paper-title-dark{margin-bottom:14px}
+.ris-paper .ris-grid th{font-size:10px}
+.ris-paper .signature-table td{height:31px}
+.rsmi-paper .paper-title-dark{font-size:16px}
+.rsmi-paper .rsmi-recap{margin-top:0}
 .paper-meta{display:grid;border:1px solid #111;border-bottom:0}
 .paper-meta.two{grid-template-columns:1fr 1fr}
 .paper-meta.three{grid-template-columns:1fr 1fr 1fr}
@@ -2423,16 +3078,37 @@ const flowStyles = `
 .action-col{width:32px}
 .item-col{min-width:230px}
 .paper-cell-control,.paper-meta-control,.paper-inline-control{width:100%;border:0;background:transparent;color:#111;font:inherit;outline:none}
+.paper-print-value{display:inline-block;min-height:1em;white-space:pre-wrap}
 .paper-cell-control{height:22px;padding:1px 2px}
 .paper-meta-control{padding:0 2px;font-weight:400}
 .paper-inline-control{display:inline-block;width:calc(100% - 60px);padding:0 2px}
+.paper-inline-control.strong,.paper-cell-control.strong{font-weight:800;text-decoration:underline;text-underline-offset:2px}
 .paper-cell-control:focus,.paper-meta-control:focus,.paper-inline-control:focus{box-shadow:inset 0 -1px 0 #0f2348;background:#f8fafc}
+.iar-paper{border:0;padding:14px 18px;font-family:"Times New Roman",Times,serif;font-size:12px}
+.iar-title{text-align:center;text-transform:uppercase;font-weight:800;font-size:18px;margin:0 0 22px}
+.iar-meta-grid{border-top:0;margin-bottom:0}
+.iar-meta-grid td{height:26px;padding:4px}
+.iar-meta-grid tr:first-child td{border-top:0;border-left:0;border-right:0}
+.iar-meta-grid tr:first-child td:first-child{border-right:0}
+.iar-items-grid th{font-style:italic;font-size:12px;text-transform:none;background:#fff}
+.iar-items-grid td{height:34px}
+.iar-items-grid .stock-no-col{width:78px}
+.iar-items-grid .qty-col{width:110px}
+.iar-items-grid .item-col{min-width:330px}
+.iar-signoff-grid{margin-top:0}
+.iar-signoff-grid th{height:34px;background:#fff;font-style:italic;font-size:14px}
+.iar-signoff-grid td{height:86px;vertical-align:top;padding:8px}
+.iar-signoff-grid tr:last-child td{height:64px;vertical-align:bottom}
+.iar-checkbox-line{display:flex;align-items:flex-start;gap:6px;margin-top:22px;line-height:1.25}
+.paper-checkbox{display:inline-block;width:18px;height:18px;border:1px solid #111;background:#fff;flex:0 0 auto}
+.strong{font-weight:800}
 .right{text-align:right}
 .center{text-align:center}
 .paper-purpose{min-height:45px;border:1px solid #111;border-top:0;padding:7px}
 .signature-block{display:grid;gap:20px;margin-top:54px}
-.signature-line{border-bottom:1px solid #111;min-height:24px;text-align:center}
+.signature-line{border-bottom:1px solid #111;min-height:24px;text-align:center;white-space:pre-line}
 .signature-label{text-align:center;text-transform:uppercase;font-size:9px;font-weight:800;margin-top:4px}
+.signature-label.normal-case{text-transform:none}
 .signature-table{width:100%;border-collapse:collapse;font-size:10px}
 .signature-table td{border:1px solid #111;padding:5px;text-align:center;height:30px}
 .signature-table td:first-child{width:110px;text-align:left;font-weight:800}
@@ -2443,5 +3119,14 @@ const flowStyles = `
   .form-no-box{grid-column:1 / -1;border-top:1px solid #111}
   .paper-meta.two,.paper-meta.three{grid-template-columns:1fr}
   .paper-meta-cell:not(:last-child){border-right:0}
+}
+@media print{
+  @page{size:auto;margin:12mm}
+  html,body{width:100%!important;height:auto!important;margin:0!important;background:#fff!important;overflow:visible!important}
+  body.printing-form > :not(.forms-print-root){display:none!important}
+  body.printing-form .forms-print-root{display:block!important;width:100%!important;margin:0!important;padding:0!important;background:#fff!important}
+  body.printing-form .forms-print-root .flow-paper{display:block!important;width:100%!important;max-width:none!important;min-height:auto!important;aspect-ratio:auto!important;margin:0!important;box-shadow:none!important}
+  .flow-secondary,.flow-icon,.print-hidden,.action-col{display:none!important}
+  .paper-cell-control,.paper-meta-control,.paper-inline-control{appearance:none!important}
 }
 `;
