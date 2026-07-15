@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { listCategories, createCategory, updateCategory, deleteCategory } from "@/lib/data.functions";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { MobileCard, MobileCardRow } from "@/components/common/MobileCard";
@@ -19,17 +19,21 @@ function Categories() {
   const qc = useQueryClient();
   const { data: cats = [] } = useQuery({
     queryKey: ["categories"],
-    queryFn: async () => (await supabase.from("categories").select("*").order("name")).data ?? [],
+    queryFn: () => listCategories(),
+    refetchInterval: 3000,
   });
   const [editing, setEditing] = useState<any | null>(null);
   const [open, setOpen] = useState(false);
 
   async function del(id: string) {
     if (!confirm("Delete this category?")) return;
-    const { error } = await supabase.from("categories").delete().eq("id", id);
-    if (error) return toast.error(error.message);
-    toast.success("Deleted");
-    qc.invalidateQueries({ queryKey: ["categories"] });
+    try {
+      await deleteCategory({ data: { id } });
+      toast.success("Deleted");
+      qc.invalidateQueries({ queryKey: ["categories"] });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Delete failed");
+    }
   }
 
   const isMobileView = useIsMobile();
@@ -170,13 +174,19 @@ function CatDialog({ editing, onClose, onSaved }: any) {
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
-    const { error } = editing
-      ? await supabase.from("categories").update(form).eq("id", editing.id)
-      : await supabase.from("categories").insert(form);
-    setSaving(false);
-    if (error) return toast.error(error.message);
-    toast.success("Saved");
-    onSaved();
+    try {
+      if (editing) {
+        await updateCategory({ data: { ...form, id: editing.id } });
+      } else {
+        await createCategory({ data: form });
+      }
+      setSaving(false);
+      toast.success("Saved");
+      onSaved();
+    } catch (e: any) {
+      setSaving(false);
+      toast.error(e?.message ?? "Save failed");
+    }
   }
   return (
     <div className="fixed inset-0 bg-foreground/30 backdrop-blur-sm grid place-items-center z-50 p-4">

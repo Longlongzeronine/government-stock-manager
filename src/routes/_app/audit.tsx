@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { listAuditLogs } from "@/lib/data.functions";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { MobileCard, MobileCardRow } from "@/components/common/MobileCard";
@@ -16,7 +16,8 @@ function Audit() {
   const { isAdmin } = useAuth();
   const { data: rows = [] } = useQuery({
     queryKey: ["audit"],
-    queryFn: async () => (await supabase.from("audit_logs").select("*").order("created_at", { ascending: false }).limit(500)).data ?? [],
+    queryFn: () => listAuditLogs(),
+    refetchInterval: 3000,
   });
   const isMobileView = useIsMobile();
 

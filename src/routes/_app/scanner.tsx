@@ -3,7 +3,7 @@ import { useRef, useState } from "react";
 import { Camera, Search, Square } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/AppShell";
-import { supabase } from "@/integrations/supabase/client";
+import { getItem } from "@/lib/data.functions";
 
 export const Route = createFileRoute("/_app/scanner")({
   head: () => ({ meta: [{ title: "Scanner - Supplify" }] }),
@@ -20,22 +20,12 @@ function Scanner() {
   async function lookup(code: string) {
     const value = code.trim();
     if (!value) return;
-    const normalized = value.startsWith("ITEM:") ? value : value.replace("ITEM:", "");
-    const { data, error } = await supabase
-      .from("items")
-      .select("id,name,quantity,unit,acquisition_cost,inventory_classification,semi_expendable_tier,barcode_value,qr_code_value")
-      .or(`barcode_value.eq.${normalized},qr_code_value.eq.${value},id.eq.${normalized}`)
-      .maybeSingle();
-
-    if (error) {
-      toast.error(error.message);
-      return;
-    }
-    if (!data) {
+    const item = await getItem({ data: { id: value } });
+    if (!item) {
       toast.error("No item found for this code.");
       return;
     }
-    setResult(data);
+    setResult(item);
     toast.success("Item found");
   }
 
