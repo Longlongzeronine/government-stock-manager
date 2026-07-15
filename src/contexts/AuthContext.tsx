@@ -97,7 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setRole("viewer");
       return;
     }
-    const order: Record<string, number> = { admin: 1, staff: 2, viewer: 3 };
+    const order: Record<string, number> = { admin: 1, staff: 2, accounting: 3, viewer: 4 };
     const top = [...data].sort((a: any, b: any) => (order[a.role] ?? 9) - (order[b.role] ?? 9))[0];
     setRole((top as any).role as AppRole);
   }

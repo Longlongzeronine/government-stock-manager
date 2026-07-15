@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { listItems, listCategories, listSuppliers, createItem, updateItem, deleteItem } from "@/lib/data.functions";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { StatusBadge } from "@/components/common/StatusBadge";
@@ -42,21 +42,18 @@ function Inventory() {
 
   const { data: items = [] } = useQuery({
     queryKey: ["items"],
-    queryFn: async () =>
-      (
-        await supabase
-          .from("items")
-          .select("*, category:categories(id,name), supplier:suppliers(id,name)")
-          .order("name")
-      ).data ?? [],
+    queryFn: () => listItems(),
+    refetchInterval: 3000,
   });
   const { data: cats = [] } = useQuery({
     queryKey: ["categories"],
-    queryFn: async () => (await supabase.from("categories").select("*").order("name")).data ?? [],
+    queryFn: () => listCategories(),
+    refetchInterval: 3000,
   });
   const { data: sups = [] } = useQuery({
     queryKey: ["suppliers"],
-    queryFn: async () => (await supabase.from("suppliers").select("*").order("name")).data ?? [],
+    queryFn: () => listSuppliers(),
+    refetchInterval: 3000,
   });
 
   const filtered = useMemo(() => {
@@ -73,10 +70,13 @@ function Inventory() {
 
   async function onDelete(id: string) {
     if (!confirm("Delete this item permanently?")) return;
-    const { error } = await supabase.from("items").delete().eq("id", id);
-    if (error) return toast.error(error.message);
-    toast.success("Item deleted");
-    qc.invalidateQueries({ queryKey: ["items"] });
+    try {
+      await deleteItem({ data: { id } });
+      toast.success("Item deleted");
+      qc.invalidateQueries({ queryKey: ["items"] });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Delete failed");
+    }
   }
 
   function exportRows() {
@@ -86,6 +86,8 @@ function Inventory() {
       Category: i.category?.name ?? "",
       Supplier: i.supplier?.name ?? "",
       Type: i.item_type === "material" ? "Material" : "Supply",
+      Classification: classificationLabel(i),
+      AcquisitionCost: i.acquisition_cost ?? 0,
       Quantity: i.quantity,
       Unit: i.unit,
       ReorderLevel: i.reorder_level,
@@ -184,6 +186,8 @@ function Inventory() {
                   <Th>Category</Th>
                   <Th>Supplier</Th>
                   <Th>Type</Th>
+                  <Th>Classification</Th>
+                  <Th className="text-right">Cost</Th>
                   <Th className="text-right">Qty</Th>
                   <Th>Unit</Th>
                   <Th className="text-right">Reorder</Th>
@@ -203,6 +207,10 @@ function Inventory() {
                     <Td>
                       <TypeBadge itemType={i.item_type} />
                     </Td>
+                    <Td>
+                      <ClassificationBadge item={i} />
+                    </Td>
+                    <Td className="text-right tabular-nums">{money(Number(i.acquisition_cost || 0))}</Td>
                     <Td className="text-right tabular-nums font-medium">{i.quantity}</Td>
                     <Td>{i.unit}</Td>
                     <Td className="text-right tabular-nums">{i.reorder_level}</Td>
@@ -225,7 +233,7 @@ function Inventory() {
                 ))}
                 {paged.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="p-12 text-center text-sm text-muted-foreground">
+                    <td colSpan={11} className="p-12 text-center text-sm text-muted-foreground">
                       No items match your filters.
                     </td>
                   </tr>
@@ -251,6 +259,8 @@ function Inventory() {
                   <MobileCardRow label="Category" value={i.category?.name ?? "—"} />
                   <MobileCardRow label="Supplier" value={i.supplier?.name ?? "—"} />
                   <MobileCardRow label="Type" value={<TypeBadge itemType={i.item_type} />} />
+                  <MobileCardRow label="Classification" value={<ClassificationBadge item={i} />} />
+                  <MobileCardRow label="Acquisition Cost" value={money(Number(i.acquisition_cost || 0))} />
                   <div className="grid grid-cols-2 gap-2">
                     <MobileCardRow label="Qty" value={`${i.quantity} ${i.unit}`} />
                     <MobileCardRow label="Reorder" value={i.reorder_level} align="right" />
@@ -312,6 +322,30 @@ function TypeBadge({ itemType }: { itemType: string }) {
   );
 }
 
+function ClassificationBadge({ item }: { item: any }) {
+  const label = classificationLabel(item);
+  const tone =
+    item.inventory_classification === "ppe"
+      ? "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300"
+      : item.inventory_classification === "semi_expendable_property"
+        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+        : "bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200";
+
+  return <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${tone}`}>{label}</span>;
+}
+
+function classificationLabel(item: any) {
+  if (item.inventory_classification === "ppe") return "PPE";
+  if (item.inventory_classification === "semi_expendable_property") {
+    return item.semi_expendable_tier === "high_value" ? "Semi-Exp. High" : "Semi-Exp. Low";
+  }
+  return "Expendable";
+}
+
+function money(value: number) {
+  return new Intl.NumberFormat("en-PH", { style: "currency", currency: "PHP" }).format(value || 0);
+}
+
 function ItemDialog({ editing, cats, sups, onClose, onSaved }: any) {
   const [form, setForm] = useState({
     name: editing?.name ?? "",
@@ -319,6 +353,7 @@ function ItemDialog({ editing, cats, sups, onClose, onSaved }: any) {
     category_id: editing?.category_id ?? "",
     supplier_id: editing?.supplier_id ?? "",
     item_type: editing?.item_type ?? "supply",
+    acquisition_cost: editing?.acquisition_cost ?? 0,
     quantity: editing?.quantity ?? 0,
     unit: editing?.unit ?? "pcs",
     reorder_level: editing?.reorder_level ?? 10,
@@ -333,15 +368,22 @@ function ItemDialog({ editing, cats, sups, onClose, onSaved }: any) {
       category_id: form.category_id || null,
       supplier_id: form.supplier_id || null,
       quantity: Number(form.quantity),
+      acquisition_cost: Number(form.acquisition_cost),
       reorder_level: Number(form.reorder_level),
     };
-    const { error } = editing
-      ? await supabase.from("items").update(payload).eq("id", editing.id)
-      : await supabase.from("items").insert(payload);
-    setSaving(false);
-    if (error) return toast.error(error.message);
-    toast.success(editing ? "Item updated" : "Item created");
-    onSaved();
+    try {
+      if (editing) {
+        await updateItem({ data: { ...payload, id: editing.id } });
+      } else {
+        await createItem({ data: payload });
+      }
+      setSaving(false);
+      toast.success(editing ? "Item updated" : "Item created");
+      onSaved();
+    } catch (e: any) {
+      setSaving(false);
+      toast.error(e?.message ?? "Save failed");
+    }
   }
 
   return (
@@ -378,6 +420,9 @@ function ItemDialog({ editing, cats, sups, onClose, onSaved }: any) {
               <option value="">—</option>
               {sups.map((s: any) => (<option key={s.id} value={s.id}>{s.name}</option>))}
             </select>
+          </Field>
+          <Field label="Acquisition cost">
+            <input type="number" min={0} step="0.01" className="dlg-input" value={form.acquisition_cost} onChange={(e) => setForm({ ...form, acquisition_cost: e.target.value as any })} />
           </Field>
           <Field label="Quantity">
             <input type="number" min={0} className="dlg-input" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value as any })} />

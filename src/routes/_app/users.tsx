@@ -17,7 +17,7 @@ import {
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-mobile";
 
-type AssignableRole = "viewer" | "staff" | "admin";
+type AssignableRole = "viewer" | "staff" | "accounting" | "admin";
 
 export const Route = createFileRoute("/_app/users")({
   head: () => ({ meta: [{ title: "User Roles — Supplify" }] }),
@@ -432,6 +432,7 @@ function RoleSelect({
     >
       <option value="viewer">viewer</option>
       <option value="staff">staff</option>
+      <option value="accounting">accounting</option>
       <option value="admin">admin</option>
     </select>
   );
