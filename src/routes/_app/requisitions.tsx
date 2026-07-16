@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/AppShell";
-import { supabase } from "@/integrations/supabase/client";
+import { listItems, deleteItem as deleteInventoryItemFn } from "@/lib/data.functions";
 import { useAuth } from "@/contexts/AuthContext";
 
 export const Route = createFileRoute("/_app/requisitions")({
@@ -108,13 +108,8 @@ function Requisitions() {
 
   const { data: inventoryItems = [] } = useQuery({
     queryKey: ["items"],
-    queryFn: async () =>
-      (
-        await supabase
-          .from("items")
-          .select("id,name,unit,quantity,item_type")
-          .order("name")
-      ).data ?? [],
+    queryFn: () => listItems(),
+    refetchInterval: 3000,
   });
 
   const validItems = useMemo(() => getValidItems(form.items), [form.items]);
@@ -246,13 +241,13 @@ function Requisitions() {
 
   async function deleteInventoryItem(id: string) {
     if (!window.confirm("Delete this inventory item permanently?")) return;
-    const { error } = await supabase.from("items").delete().eq("id", id);
-    if (error) {
-      toast.error(error.message);
-      return;
+    try {
+      await deleteInventoryItemFn({ data: { id } });
+      toast.success("Inventory item deleted");
+      queryClient.invalidateQueries({ queryKey: ["items"] });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Delete failed");
     }
-    toast.success("Inventory item deleted");
-    queryClient.invalidateQueries({ queryKey: ["items"] });
   }
 
   return (
