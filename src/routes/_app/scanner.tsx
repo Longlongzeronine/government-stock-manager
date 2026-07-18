@@ -24,7 +24,7 @@ import {
 import QRCode from "qrcode";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/AppShell";
-import { supabase } from "@/integrations/supabase/client";
+import { getItem, listTransactions } from "@/lib/data.functions";
 
 export const Route = createFileRoute("/_app/scanner")({
   head: () => ({ meta: [{ title: "Scanner - Supplify" }] }),
@@ -60,9 +60,6 @@ type RecentTransaction = {
 
 type ScanEntry = { id: string; name: string; code: string; scannedAt: Date };
 
-const ITEM_SELECT =
-  "id,name,description,quantity,unit,reorder_level,acquisition_cost,inventory_classification,semi_expendable_tier,accountability_status,barcode_value,qr_code_value,updated_at,category:categories(name),supplier:suppliers(name)";
-
 function Scanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
@@ -83,43 +80,12 @@ function Scanner() {
 
   useEffect(() => () => stopCamera(), []);
 
-  async function findItem(code: string) {
-    const value = code.trim();
-    const withoutPrefix = value.replace(/^ITEM:/i, "");
-    const candidates: Array<{
-      column: "qr_code_value" | "barcode_value" | "id";
-      value: string;
-    }> = [
-      { column: "qr_code_value", value },
-      { column: "barcode_value", value: withoutPrefix },
-    ];
-    if (
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-        withoutPrefix,
-      )
-    ) {
-      candidates.push({ column: "id", value: withoutPrefix });
-    }
-
-    for (const candidate of candidates) {
-      const response = await supabase
-        .from("items")
-        .select(ITEM_SELECT)
-        .eq(candidate.column, candidate.value)
-        .limit(1)
-        .maybeSingle();
-      if (response.error) throw response.error;
-      if (response.data) return response.data as unknown as ScannerItem;
-    }
-    return null;
-  }
-
   async function lookup(code: string, fromCamera = false) {
     const value = code.trim();
     if (!value || loading) return;
     setLoading(true);
     try {
-      const item = await findItem(value);
+      const item = (await getItem({ data: { id: value } })) as ScannerItem | null;
       if (!item) {
         setResult(null);
         setTransactions([]);
@@ -127,15 +93,13 @@ function Scanner() {
         return;
       }
 
-      const transactionResponse = await supabase
-        .from("transactions")
-        .select("id,type,quantity,staff_name,remarks,created_at")
-        .eq("item_id", item.id)
-        .order("created_at", { ascending: false })
-        .limit(5);
+      const allTransactions = await listTransactions({ data: { limit: 200 } });
+      const recentTransactions = allTransactions
+        .filter((transaction: any) => transaction.item_id === item.id)
+        .slice(0, 5) as RecentTransaction[];
 
       setResult(item);
-      setTransactions((transactionResponse.data ?? []) as RecentTransaction[]);
+      setTransactions(recentTransactions);
       setManualCode(value);
       setHistory((current) =>
         [
@@ -492,7 +456,11 @@ function ItemResult({
         <button onClick={onCreateLabel} className="scanner-primary">
           <QrCode className="h-4 w-4" /> View label
         </button>
-        <Link to="/inventory" className="scanner-secondary">
+        <Link
+          to="/inventory"
+          search={{ add: false }}
+          className="scanner-secondary"
+        >
           <ExternalLink className="h-4 w-4" /> Open inventory
         </Link>
       </div>

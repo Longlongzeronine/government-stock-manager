@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { listItems, listCategories, listSuppliers, createItem, updateItem, deleteItem } from "@/lib/data.functions";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { StatusBadge } from "@/components/common/StatusBadge";
@@ -42,21 +42,18 @@ function Inventory() {
 
   const { data: items = [] } = useQuery({
     queryKey: ["items"],
-    queryFn: async () =>
-      (
-        await supabase
-          .from("items")
-          .select("*, category:categories(id,name), supplier:suppliers(id,name)")
-          .order("name")
-      ).data ?? [],
+    queryFn: () => listItems(),
+    refetchInterval: 3000,
   });
   const { data: cats = [] } = useQuery({
     queryKey: ["categories"],
-    queryFn: async () => (await supabase.from("categories").select("*").order("name")).data ?? [],
+    queryFn: () => listCategories(),
+    refetchInterval: 3000,
   });
   const { data: sups = [] } = useQuery({
     queryKey: ["suppliers"],
-    queryFn: async () => (await supabase.from("suppliers").select("*").order("name")).data ?? [],
+    queryFn: () => listSuppliers(),
+    refetchInterval: 3000,
   });
 
   const filtered = useMemo(() => {
@@ -73,10 +70,13 @@ function Inventory() {
 
   async function onDelete(id: string) {
     if (!confirm("Delete this item permanently?")) return;
-    const { error } = await supabase.from("items").delete().eq("id", id);
-    if (error) return toast.error(error.message);
-    toast.success("Item deleted");
-    qc.invalidateQueries({ queryKey: ["items"] });
+    try {
+      await deleteItem({ data: { id } });
+      toast.success("Item deleted");
+      qc.invalidateQueries({ queryKey: ["items"] });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Delete failed");
+    }
   }
 
   function exportRows() {
@@ -371,13 +371,19 @@ function ItemDialog({ editing, cats, sups, onClose, onSaved }: any) {
       acquisition_cost: Number(form.acquisition_cost),
       reorder_level: Number(form.reorder_level),
     };
-    const { error } = editing
-      ? await supabase.from("items").update(payload).eq("id", editing.id)
-      : await supabase.from("items").insert(payload);
-    setSaving(false);
-    if (error) return toast.error(error.message);
-    toast.success(editing ? "Item updated" : "Item created");
-    onSaved();
+    try {
+      if (editing) {
+        await updateItem({ data: { ...payload, id: editing.id } });
+      } else {
+        await createItem({ data: payload });
+      }
+      setSaving(false);
+      toast.success(editing ? "Item updated" : "Item created");
+      onSaved();
+    } catch (e: any) {
+      setSaving(false);
+      toast.error(e?.message ?? "Save failed");
+    }
   }
 
   return (
