@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -24,7 +25,7 @@ import {
 import QRCode from "qrcode";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/AppShell";
-import { getItem, listTransactions } from "@/lib/data.functions";
+import { getItem, listItems, listTransactions } from "@/lib/data.functions";
 
 export const Route = createFileRoute("/_app/scanner")({
   head: () => ({ meta: [{ title: "Scanner - Supplify" }] }),
@@ -71,7 +72,12 @@ function Scanner() {
   const [result, setResult] = useState<ScannerItem | null>(null);
   const [transactions, setTransactions] = useState<RecentTransaction[]>([]);
   const [history, setHistory] = useState<ScanEntry[]>([]);
-  const [labelOpen, setLabelOpen] = useState(false);
+  const [labelItem, setLabelItem] = useState<ScannerItem | null>(null);
+
+  const { data: inventoryItems = [], isLoading: itemsLoading } = useQuery({
+    queryKey: ["items", "scanner-labels"],
+    queryFn: () => listItems() as Promise<ScannerItem[]>,
+  });
 
   const isSecure = typeof window === "undefined" || window.isSecureContext;
   const hasCameraApi =
@@ -85,7 +91,9 @@ function Scanner() {
     if (!value || loading) return;
     setLoading(true);
     try {
-      const item = (await getItem({ data: { id: value } })) as ScannerItem | null;
+      const item = (await getItem({
+        data: { id: value },
+      })) as ScannerItem | null;
       if (!item) {
         setResult(null);
         setTransactions([]);
@@ -93,9 +101,11 @@ function Scanner() {
         return;
       }
 
-      const allTransactions = await listTransactions({ data: { limit: 200 } });
+      const allTransactions = (await listTransactions({
+        data: { limit: 200 },
+      })) as Array<RecentTransaction & { item_id: string }>;
       const recentTransactions = allTransactions
-        .filter((transaction: any) => transaction.item_id === item.id)
+        .filter((transaction) => transaction.item_id === item.id)
         .slice(0, 5) as RecentTransaction[];
 
       setResult(item);
@@ -276,9 +286,18 @@ function Scanner() {
           <ItemResult
             item={result}
             transactions={transactions}
-            onCreateLabel={() => setLabelOpen(true)}
+            onCreateLabel={() => result && setLabelItem(result)}
           />
         </section>
+
+        <InventoryLabels
+          items={inventoryItems}
+          loading={itemsLoading}
+          onOpenLabel={setLabelItem}
+          onLookup={(item) =>
+            void lookup(item.qr_code_value || `ITEM:${item.id}`)
+          }
+        />
 
         <ScanHistory
           entries={history}
@@ -293,16 +312,17 @@ function Scanner() {
               <p className="mt-1 text-muted-foreground">
                 A phone can use this page directly—no desktop pairing is
                 required. It must open the app over HTTPS and be able to reach
-                Supabase. Plain local-network HTTP may load the page but mobile
-                browsers will block its camera.
+                the computer running the application and local database. Plain
+                local-network HTTP may load the page, but mobile browsers will
+                block its camera.
               </p>
             </div>
           </div>
         </section>
       </div>
 
-      {labelOpen && result && (
-        <LabelDialog item={result} onClose={() => setLabelOpen(false)} />
+      {labelItem && (
+        <LabelDialog item={labelItem} onClose={() => setLabelItem(null)} />
       )}
       <style>{scannerStyles}</style>
     </div>
@@ -473,6 +493,195 @@ function Detail({ label, value }: { label: string; value: React.ReactNode }) {
     <div>
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-0.5 font-medium">{value}</div>
+    </div>
+  );
+}
+
+function InventoryLabels({
+  items,
+  loading,
+  onOpenLabel,
+  onLookup,
+}: {
+  items: ScannerItem[];
+  loading: boolean;
+  onOpenLabel: (item: ScannerItem) => void;
+  onLookup: (item: ScannerItem) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const pageSize = 12;
+  const filtered = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return items;
+    return items.filter((item) =>
+      [
+        item.name,
+        item.description,
+        item.category?.name,
+        item.barcode_value,
+        item.qr_code_value,
+      ].some((value) => value?.toLowerCase().includes(query)),
+    );
+  }, [items, search]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, totalPages - 1);
+  const visibleItems = filtered.slice(
+    safePage * pageSize,
+    safePage * pageSize + pageSize,
+  );
+
+  function updateSearch(value: string) {
+    setSearch(value);
+    setPage(0);
+  }
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2 font-semibold">
+            <QrCode className="h-5 w-5 text-primary" /> Inventory QR labels
+          </div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {loading
+              ? "Loading inventory items…"
+              : `${items.length} ${items.length === 1 ? "item" : "items"} ready for label generation`}
+          </p>
+        </div>
+        <div className="relative w-full sm:w-72">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            value={search}
+            onChange={(event) => updateSearch(event.target.value)}
+            placeholder="Search labels…"
+            className="scanner-input pl-9"
+          />
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="grid min-h-48 place-items-center">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Fetching inventory
+          </div>
+        </div>
+      ) : visibleItems.length ? (
+        <>
+          <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {visibleItems.map((item) => (
+              <div
+                key={item.id}
+                className="flex min-w-0 gap-3 rounded-lg border border-border p-3 transition-colors hover:bg-muted/30"
+              >
+                <button
+                  onClick={() => onOpenLabel(item)}
+                  className="shrink-0 rounded-md bg-white p-1 ring-1 ring-border"
+                  title={`Open QR label for ${item.name}`}
+                >
+                  <QrThumbnail
+                    value={item.qr_code_value || `ITEM:${item.id}`}
+                  />
+                </button>
+                <div className="min-w-0 flex-1">
+                  <div
+                    className="truncate text-sm font-medium"
+                    title={item.name}
+                  >
+                    {item.name}
+                  </div>
+                  <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                    {item.category?.name || classificationLabel(item)}
+                  </div>
+                  <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                    {item.qr_code_value || `ITEM:${item.id}`}
+                  </div>
+                  <div className="mt-2 flex gap-1.5">
+                    <button
+                      onClick={() => onOpenLabel(item)}
+                      className="scanner-secondary px-2 py-1 text-xs"
+                    >
+                      <Printer className="h-3 w-3" /> Label
+                    </button>
+                    <button
+                      onClick={() => onLookup(item)}
+                      className="scanner-secondary px-2 py-1 text-xs"
+                    >
+                      <ExternalLink className="h-3 w-3" /> Details
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-3 text-sm">
+            <span className="text-muted-foreground">
+              Showing {safePage * pageSize + 1}–
+              {Math.min((safePage + 1) * pageSize, filtered.length)} of{" "}
+              {filtered.length}
+            </span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPage((current) => Math.max(0, current - 1))}
+                disabled={safePage === 0}
+                className="scanner-secondary px-3 py-1.5"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() =>
+                  setPage((current) => Math.min(totalPages - 1, current + 1))
+                }
+                disabled={safePage >= totalPages - 1}
+                className="scanner-secondary px-3 py-1.5"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="grid min-h-48 place-items-center p-6 text-center">
+          <div>
+            <Package className="mx-auto h-7 w-7 text-muted-foreground" />
+            <p className="mt-2 text-sm font-medium">
+              {items.length
+                ? "No labels match your search"
+                : "No inventory items yet"}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {items.length
+                ? "Try a different item name or code."
+                : "Add an item from Inventory and its QR label will appear here."}
+            </p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function QrThumbnail({ value }: { value: string }) {
+  const [url, setUrl] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    QRCode.toDataURL(value, {
+      width: 112,
+      margin: 1,
+      errorCorrectionLevel: "L",
+      color: { dark: "#0f172a", light: "#ffffff" },
+    }).then((generatedUrl) => active && setUrl(generatedUrl));
+    return () => {
+      active = false;
+    };
+  }, [value]);
+
+  return url ? (
+    <img src={url} alt="" className="h-16 w-16" />
+  ) : (
+    <div className="grid h-16 w-16 place-items-center text-slate-400">
+      <Loader2 className="h-4 w-4 animate-spin" />
     </div>
   );
 }

@@ -122,6 +122,15 @@ export async function ensureSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- Give both existing and future inventory records stable scan values.
+    UPDATE items
+    SET barcode_value = id::text
+    WHERE barcode_value IS NULL OR btrim(barcode_value) = '';
+
+    UPDATE items
+    SET qr_code_value = 'ITEM:' || id::text
+    WHERE qr_code_value IS NULL OR btrim(qr_code_value) = '';
+
     CREATE OR REPLACE FUNCTION auto_classify_item()
     RETURNS TRIGGER AS $$
     BEGIN
@@ -136,6 +145,12 @@ export async function ensureSchema() {
           NEW.inventory_classification := 'semi_expendable_property';
           NEW.semi_expendable_tier := CASE WHEN NEW.acquisition_cost >= 15000 THEN 'high_value' ELSE 'low_value' END;
         END IF;
+      END IF;
+      IF NEW.barcode_value IS NULL OR btrim(NEW.barcode_value) = '' THEN
+        NEW.barcode_value := NEW.id::text;
+      END IF;
+      IF NEW.qr_code_value IS NULL OR btrim(NEW.qr_code_value) = '' THEN
+        NEW.qr_code_value := 'ITEM:' || NEW.id::text;
       END IF;
       RETURN NEW;
     END;
@@ -273,6 +288,8 @@ export async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_items_name ON items(name);
     CREATE INDEX IF NOT EXISTS idx_items_category_id ON items(category_id);
     CREATE INDEX IF NOT EXISTS idx_items_supplier_id ON items(supplier_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_items_barcode_value_unique ON items(barcode_value);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_items_qr_code_value_unique ON items(qr_code_value);
     CREATE INDEX IF NOT EXISTS idx_transactions_item_id ON transactions(item_id);
     CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);

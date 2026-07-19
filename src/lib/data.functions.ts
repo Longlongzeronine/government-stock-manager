@@ -6,6 +6,19 @@ async function getDb() {
   return getSql();
 }
 
+async function ensureItemCodes(sql: any) {
+  await sql`
+    UPDATE items
+    SET barcode_value = id::text
+    WHERE barcode_value IS NULL OR btrim(barcode_value) = ''
+  `;
+  await sql`
+    UPDATE items
+    SET qr_code_value = 'ITEM:' || id::text
+    WHERE qr_code_value IS NULL OR btrim(qr_code_value) = ''
+  `;
+}
+
 // ============================================
 // ITEMS
 // ============================================
@@ -13,6 +26,7 @@ async function getDb() {
 export const listItems = createServerFn({ method: "GET" }).handler(async () => {
   try {
     const sql = await getDb();
+    await ensureItemCodes(sql);
     const rows = await sql`
       SELECT
         i.*,
@@ -26,8 +40,12 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
     // Transform the nested JSON into the expected format
     return rows.map((r: any) => ({
       ...r,
-      category: r.category?.id ? { id: r.category.id, name: r.category.name } : null,
-      supplier: r.supplier?.id ? { id: r.supplier.id, name: r.supplier.name } : null,
+      category: r.category?.id
+        ? { id: r.category.id, name: r.category.name }
+        : null,
+      supplier: r.supplier?.id
+        ? { id: r.supplier.id, name: r.supplier.name }
+        : null,
     }));
   } catch (e: any) {
     console.error("listItems error:", e);
@@ -56,8 +74,12 @@ export const getItem = createServerFn({ method: "GET" })
     if (!row) return null;
     return {
       ...row,
-      category: row.category?.id ? { id: row.category.id, name: row.category.name } : null,
-      supplier: row.supplier?.id ? { id: row.supplier.id, name: row.supplier.name } : null,
+      category: row.category?.id
+        ? { id: row.category.id, name: row.category.name }
+        : null,
+      supplier: row.supplier?.id
+        ? { id: row.supplier.id, name: row.supplier.name }
+        : null,
     };
   });
 
@@ -81,7 +103,14 @@ export const createItem = createServerFn({ method: "POST" })
       })}
       RETURNING *
     `;
-    return row;
+    const [codedRow] = await sql`
+      UPDATE items
+      SET barcode_value = COALESCE(NULLIF(btrim(barcode_value), ''), id::text),
+          qr_code_value = COALESCE(NULLIF(btrim(qr_code_value), ''), 'ITEM:' || id::text)
+      WHERE id = ${row.id}
+      RETURNING *
+    `;
+    return codedRow;
   });
 
 export const updateItem = createServerFn({ method: "POST" })
@@ -120,14 +149,16 @@ export const deleteItem = createServerFn({ method: "POST" })
 // CATEGORIES
 // ============================================
 
-export const listCategories = createServerFn({ method: "GET" }).handler(async () => {
-  try {
-    const sql = await getDb();
-    return await sql`SELECT * FROM categories ORDER BY name ASC`;
-  } catch {
-    return [];
-  }
-});
+export const listCategories = createServerFn({ method: "GET" }).handler(
+  async () => {
+    try {
+      const sql = await getDb();
+      return await sql`SELECT * FROM categories ORDER BY name ASC`;
+    } catch {
+      return [];
+    }
+  },
+);
 
 export const createCategory = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
@@ -164,14 +195,16 @@ export const deleteCategory = createServerFn({ method: "POST" })
 // SUPPLIERS
 // ============================================
 
-export const listSuppliers = createServerFn({ method: "GET" }).handler(async () => {
-  try {
-    const sql = await getDb();
-    return await sql`SELECT * FROM suppliers ORDER BY name ASC`;
-  } catch {
-    return [];
-  }
-});
+export const listSuppliers = createServerFn({ method: "GET" }).handler(
+  async () => {
+    try {
+      const sql = await getDb();
+      return await sql`SELECT * FROM suppliers ORDER BY name ASC`;
+    } catch {
+      return [];
+    }
+  },
+);
 
 export const createSupplier = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
@@ -235,7 +268,9 @@ export const listTransactions = createServerFn({ method: "GET" })
       `;
       return rows.map((r: any) => ({
         ...r,
-        item: r.item?.id ? { id: r.item.id, name: r.item.name, unit: r.item.unit } : null,
+        item: r.item?.id
+          ? { id: r.item.id, name: r.item.name, unit: r.item.unit }
+          : null,
       }));
     } catch {
       return [];
@@ -300,29 +335,33 @@ export const createTransaction = createServerFn({ method: "POST" })
 // AUDIT LOGS
 // ============================================
 
-export const listAuditLogs = createServerFn({ method: "GET" }).handler(async () => {
-  try {
-    const sql = await getDb();
-    return await sql`
+export const listAuditLogs = createServerFn({ method: "GET" }).handler(
+  async () => {
+    try {
+      const sql = await getDb();
+      return await sql`
       SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 500
     `;
-  } catch {
-    return [];
-  }
-});
+    } catch {
+      return [];
+    }
+  },
+);
 
 // ============================================
 // FORMS (IAR, RIS, ICS, PAR)
 // ============================================
 
-export const listIarForms = createServerFn({ method: "GET" }).handler(async () => {
-  try {
-    const sql = await getDb();
-    return await sql`SELECT * FROM iar_forms ORDER BY created_at DESC`;
-  } catch {
-    return [];
-  }
-});
+export const listIarForms = createServerFn({ method: "GET" }).handler(
+  async () => {
+    try {
+      const sql = await getDb();
+      return await sql`SELECT * FROM iar_forms ORDER BY created_at DESC`;
+    } catch {
+      return [];
+    }
+  },
+);
 
 export const createIarForm = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
@@ -472,10 +511,11 @@ export const createParItem = createServerFn({ method: "POST" })
 // INVENTORY SNAPSHOT (for AI assistant)
 // ============================================
 
-export const getInventorySnapshot = createServerFn({ method: "GET" }).handler(async () => {
-  try {
-    const sql = await getDb();
-    const items = await sql`
+export const getInventorySnapshot = createServerFn({ method: "GET" }).handler(
+  async () => {
+    try {
+      const sql = await getDb();
+      const items = await sql`
       SELECT i.name, i.quantity, i.unit, i.reorder_level,
         c.name AS category_name,
         s.name AS supplier_name
@@ -484,7 +524,7 @@ export const getInventorySnapshot = createServerFn({ method: "GET" }).handler(as
       LEFT JOIN suppliers s ON s.id = i.supplier_id
       ORDER BY i.quantity ASC
     `;
-    const txs = await sql`
+      const txs = await sql`
       SELECT t.type, t.quantity, t.created_at,
         i.name AS item_name
       FROM transactions t
@@ -493,27 +533,30 @@ export const getInventorySnapshot = createServerFn({ method: "GET" }).handler(as
       LIMIT 100
     `;
 
-    const low = items.filter((i: any) => Number(i.quantity) <= Number(i.reorder_level)).slice(0, 25);
-    return {
-      total_items: items.length,
-      out_of_stock: items.filter((i: any) => Number(i.quantity) === 0).length,
-      low_stock_items: low.map((i: any) => ({
-        name: i.name,
-        qty: Number(i.quantity),
-        unit: i.unit,
-        reorder: Number(i.reorder_level),
-        category: i.category_name,
-        supplier: i.supplier_name,
-      })),
-      recent_transactions: txs.slice(0, 30).map((t: any) => ({
-        item: t.item_name,
-        type: t.type,
-        qty: Number(t.quantity),
-        at: t.created_at,
-      })),
-    };
-  } catch (e) {
-    console.error("getInventorySnapshot error:", e);
-    return null;
-  }
-});
+      const low = items
+        .filter((i: any) => Number(i.quantity) <= Number(i.reorder_level))
+        .slice(0, 25);
+      return {
+        total_items: items.length,
+        out_of_stock: items.filter((i: any) => Number(i.quantity) === 0).length,
+        low_stock_items: low.map((i: any) => ({
+          name: i.name,
+          qty: Number(i.quantity),
+          unit: i.unit,
+          reorder: Number(i.reorder_level),
+          category: i.category_name,
+          supplier: i.supplier_name,
+        })),
+        recent_transactions: txs.slice(0, 30).map((t: any) => ({
+          item: t.item_name,
+          type: t.type,
+          qty: Number(t.quantity),
+          at: t.created_at,
+        })),
+      };
+    } catch (e) {
+      console.error("getInventorySnapshot error:", e);
+      return null;
+    }
+  },
+);
