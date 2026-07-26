@@ -37,7 +37,7 @@ function Inventory() {
     if (!searchParams.add || !isAdmin) return;
     setEditing(null);
     setOpen(true);
-    navigate({ to: "/inventory", search: {} });
+    navigate({ to: "/inventory", search: {} as { add: boolean } });
   }, [isAdmin, navigate, searchParams.add]);
 
   const { data: items = [] } = useQuery({
