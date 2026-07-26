@@ -111,7 +111,7 @@ function Scanner() {
                     <div>Class: {classificationLabel(result)}</div>
                     <div>Barcode: {result.barcode_value || "-"}</div>
                   </div>
-                  <Link to="/inventory" search={{} as { add: boolean }} className="mt-3 inline-flex text-sm font-medium text-primary">
+                  <Link to="/inventory" className="mt-3 inline-flex text-sm font-medium text-primary">
                     Open inventory
                   </Link>
                 </div>
