@@ -6,6 +6,25 @@ async function getDb() {
   return getSql();
 }
 
+function normalizeUnit(value: unknown, itemName = "") {
+  const unit = String(value ?? "").trim().toLowerCase();
+  const name = itemName.toLowerCase();
+  if (!unit || /^\d+(\.\d+)?$/.test(unit)) {
+    if (/air conditioning|air cooler/.test(name)) return "unit";
+    if (/ticket/.test(name)) return "ticket";
+    return "pieces";
+  }
+  const aliases: Record<string, string> = {
+    pc: "pieces", pcs: "pieces", piece: "pieces", pieces: "pieces", each: "pieces", ea: "pieces",
+    gal: "gallon", gallon: "gallon", gallons: "gallon",
+    btl: "bottle", bottle: "bottle", bottles: "bottle",
+    pkt: "pack", packs: "pack", box: "box", boxes: "box", set: "set", sets: "set",
+    roll: "roll", rolls: "roll", ream: "ream", reams: "ream", unit: "unit", units: "unit",
+    ticket: "ticket", tickets: "ticket",
+  };
+  return aliases[unit] || unit;
+}
+
 // ============================================
 // ITEMS
 // ============================================
@@ -68,7 +87,7 @@ export const createItem = createServerFn({ method: "POST" })
         supplier_id: data.supplier_id || null,
         item_type: data.item_type || "supply",
         quantity: Number(data.quantity) || 0,
-        unit: data.unit || "pcs",
+        unit: normalizeUnit(data.unit, data.name),
         reorder_level: Number(data.reorder_level) || 10,
         acquisition_cost: Number(data.acquisition_cost) || 0,
         barcode_value: data.barcode_value || null,
@@ -77,6 +96,44 @@ export const createItem = createServerFn({ method: "POST" })
       RETURNING *
     `;
     return row;
+  });
+
+export const importItems = createServerFn({ method: "POST" })
+  .inputValidator((d: { items: any[] }) => d)
+  .handler(async ({ data }) => {
+    const sql = await getDb();
+    const existing = await sql`SELECT name, barcode_value FROM items`;
+    const names = new Set(existing.map((item: any) => String(item.name).trim().toLowerCase()));
+    const codes = new Set(existing.map((item: any) => String(item.barcode_value || "").trim().toLowerCase()).filter(Boolean));
+    let added = 0;
+    let skipped = 0;
+
+    for (const item of data.items || []) {
+      const name = String(item.name || "").trim();
+      const barcode = String(item.barcode_value || "").trim();
+      const nameKey = name.toLowerCase();
+      const codeKey = barcode.toLowerCase();
+      if (!name || names.has(nameKey) || (codeKey && codes.has(codeKey))) {
+        skipped += 1;
+        continue;
+      }
+      await sql`
+        INSERT INTO items ${sql({
+          name,
+          description: item.description || null,
+          item_type: item.item_type || "supply",
+          quantity: Number(item.quantity) || 0,
+          unit: normalizeUnit(item.unit, name),
+          reorder_level: Number(item.reorder_level) || 10,
+          acquisition_cost: Number(item.acquisition_cost) || 0,
+          barcode_value: barcode || null,
+        })}
+      `;
+      names.add(nameKey);
+      if (codeKey) codes.add(codeKey);
+      added += 1;
+    }
+    return { added, skipped };
   });
 
 export const updateItem = createServerFn({ method: "POST" })
@@ -91,12 +148,28 @@ export const updateItem = createServerFn({ method: "POST" })
         supplier_id: data.supplier_id || null,
         item_type: data.item_type || "supply",
         quantity: Number(data.quantity) || 0,
-        unit: data.unit || "pcs",
+        unit: normalizeUnit(data.unit, data.name),
         reorder_level: Number(data.reorder_level) || 10,
         acquisition_cost: Number(data.acquisition_cost) || 0,
         barcode_value: data.barcode_value || null,
         qr_code_value: data.qr_code_value || null,
       })}
+      WHERE id = ${data.id}
+      RETURNING *
+    `;
+    return row;
+  });
+
+const monthColumns = ["jan_quantity", "feb_quantity", "mar_quantity", "apr_quantity", "may_quantity", "jun_quantity", "jul_quantity", "aug_quantity", "sep_quantity", "oct_quantity", "nov_quantity", "dec_quantity"] as const;
+
+export const updateItemMonthlyQuantity = createServerFn({ method: "POST" })
+  .inputValidator((d: { id: string; month: number; quantity: number }) => d)
+  .handler(async ({ data }) => {
+    const column = monthColumns[data.month];
+    if (!column) throw new Error("Invalid month");
+    const sql = await getDb();
+    const [row] = await sql`
+      UPDATE items SET ${sql({ [column]: Math.max(0, Number(data.quantity) || 0) })}
       WHERE id = ${data.id}
       RETURNING *
     `;

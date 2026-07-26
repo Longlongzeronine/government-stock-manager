@@ -113,6 +113,18 @@ export async function ensureSchema() {
       semi_expendable_tier semi_expendable_tier_enum DEFAULT NULL,
       accountability_status accountability_status_enum NOT NULL DEFAULT 'available',
       quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      jan_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      feb_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      mar_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      apr_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      may_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      jun_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      jul_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      aug_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      sep_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      oct_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      nov_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      dec_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
       unit TEXT NOT NULL DEFAULT 'pcs',
       reorder_level NUMERIC(12,2) NOT NULL DEFAULT 10,
       acquisition_cost NUMERIC(14,2) NOT NULL DEFAULT 0,
@@ -121,6 +133,19 @@ export async function ensureSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS jan_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS feb_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS mar_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS apr_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS may_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS jun_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS jul_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS aug_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS sep_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS oct_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS nov_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS dec_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
 
     CREATE OR REPLACE FUNCTION auto_classify_item()
     RETURNS TRIGGER AS $$
