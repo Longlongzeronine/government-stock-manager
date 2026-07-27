@@ -1,144 +1,885 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useRef, useState } from "react";
-import { Camera, Search, Square } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  Camera,
+  CheckCircle2,
+  Clipboard,
+  Download,
+  ExternalLink,
+  History,
+  Loader2,
+  Package,
+  Printer,
+  QrCode,
+  Search,
+  ShieldCheck,
+  Square,
+  Wifi,
+} from "lucide-react";
+import {
+  BrowserMultiFormatReader,
+  type IScannerControls,
+} from "@zxing/browser";
+import QRCode from "qrcode";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/AppShell";
-import { getItem } from "@/lib/data.functions";
+import { getItem, listItems, listTransactions } from "@/lib/data.functions";
 
 export const Route = createFileRoute("/_app/scanner")({
   head: () => ({ meta: [{ title: "Scanner - Supplify" }] }),
   component: Scanner,
 });
 
+type ScannerItem = {
+  id: string;
+  name: string;
+  description: string | null;
+  quantity: number;
+  unit: string;
+  reorder_level: number;
+  acquisition_cost: number;
+  inventory_classification: string;
+  semi_expendable_tier: string | null;
+  accountability_status: string;
+  barcode_value: string | null;
+  qr_code_value: string | null;
+  updated_at: string;
+  category: { name: string } | null;
+  supplier: { name: string } | null;
+};
+
+type RecentTransaction = {
+  id: string;
+  type: "IN" | "OUT";
+  quantity: number;
+  staff_name: string | null;
+  remarks: string | null;
+  created_at: string;
+};
+
+type ScanEntry = { id: string; name: string; code: string; scannedAt: Date };
+
 function Scanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const controlsRef = useRef<IScannerControls | null>(null);
+  const processingRef = useRef(false);
   const [scanning, setScanning] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [cameraError, setCameraError] = useState("");
   const [manualCode, setManualCode] = useState("");
-  const [result, setResult] = useState<any | null>(null);
+  const [result, setResult] = useState<ScannerItem | null>(null);
+  const [transactions, setTransactions] = useState<RecentTransaction[]>([]);
+  const [history, setHistory] = useState<ScanEntry[]>([]);
+  const [labelItem, setLabelItem] = useState<ScannerItem | null>(null);
 
-  async function lookup(code: string) {
+  const { data: inventoryItems = [], isLoading: itemsLoading } = useQuery({
+    queryKey: ["items", "scanner-labels"],
+    queryFn: () => listItems() as Promise<ScannerItem[]>,
+  });
+
+  const isSecure = typeof window === "undefined" || window.isSecureContext;
+  const hasCameraApi =
+    typeof navigator !== "undefined" &&
+    Boolean(navigator.mediaDevices?.getUserMedia);
+
+  useEffect(() => () => stopCamera(), []);
+
+  async function lookup(code: string, fromCamera = false) {
     const value = code.trim();
-    if (!value) return;
-    const item = await getItem({ data: { id: value } });
-    if (!item) {
-      toast.error("No item found for this code.");
-      return;
+    if (!value || loading) return;
+    setLoading(true);
+    try {
+      const item = (await getItem({
+        data: { id: value },
+      })) as ScannerItem | null;
+      if (!item) {
+        setResult(null);
+        setTransactions([]);
+        toast.error("No inventory item matches that code.");
+        return;
+      }
+
+      const allTransactions = (await listTransactions({
+        data: { limit: 200 },
+      })) as Array<RecentTransaction & { item_id: string }>;
+      const recentTransactions = allTransactions
+        .filter((transaction) => transaction.item_id === item.id)
+        .slice(0, 5) as RecentTransaction[];
+
+      setResult(item);
+      setTransactions(recentTransactions);
+      setManualCode(value);
+      setHistory((current) =>
+        [
+          {
+            id: `${item.id}-${Date.now()}`,
+            name: item.name,
+            code: value,
+            scannedAt: new Date(),
+          },
+          ...current.filter(
+            (entry) => entry.id.split("-").slice(0, 5).join("-") !== item.id,
+          ),
+        ].slice(0, 5),
+      );
+      toast.success(fromCamera ? "Code scanned successfully" : "Item found");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Unable to look up this item.",
+      );
+    } finally {
+      setLoading(false);
+      processingRef.current = false;
     }
-    setResult(item);
-    toast.success("Item found");
   }
 
   async function startCamera() {
-    const Detector = (window as any).BarcodeDetector;
-    if (!Detector) {
-      toast.error("This browser does not support camera barcode detection. Use manual lookup.");
+    if (!isSecure) {
+      setCameraError(
+        "Camera access requires HTTPS when opened from another phone or computer.",
+      );
+      return;
+    }
+    if (!hasCameraApi || !videoRef.current) {
+      setCameraError(
+        "This browser does not provide camera access. Use manual lookup instead.",
+      );
       return;
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" },
-      audio: false,
-    });
-    streamRef.current = stream;
-    setScanning(true);
-    if (videoRef.current) {
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
-    }
-
-    const detector = new Detector({ formats: ["qr_code", "code_128", "ean_13", "ean_8", "upc_a", "upc_e"] });
-    const scan = async () => {
-      if (!videoRef.current || !streamRef.current) return;
-      try {
-        const codes = await detector.detect(videoRef.current);
-        if (codes.length > 0) {
+    setCameraError("");
+    processingRef.current = false;
+    try {
+      const reader = new BrowserMultiFormatReader();
+      const controls = await reader.decodeFromConstraints(
+        { audio: false, video: { facingMode: { ideal: "environment" } } },
+        videoRef.current,
+        (scanResult) => {
+          if (!scanResult || processingRef.current) return;
+          processingRef.current = true;
           stopCamera();
-          lookup(codes[0].rawValue);
-          return;
-        }
-      } catch {
-        stopCamera();
-        toast.error("Unable to scan from the camera.");
-        return;
-      }
-      requestAnimationFrame(scan);
-    };
-    requestAnimationFrame(scan);
+          void lookup(scanResult.getText(), true);
+        },
+      );
+      controlsRef.current = controls;
+      setScanning(true);
+    } catch (error) {
+      stopCamera();
+      const message = cameraMessage(error);
+      setCameraError(message);
+      toast.error(message);
+    }
   }
 
   function stopCamera() {
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
+    controlsRef.current?.stop();
+    controlsRef.current = null;
+    if (videoRef.current?.srcObject instanceof MediaStream) {
+      videoRef.current.srcObject.getTracks().forEach((track) => track.stop());
+      videoRef.current.srcObject = null;
+    }
     setScanning(false);
+  }
+
+  function submitManual(event: React.FormEvent) {
+    event.preventDefault();
+    void lookup(manualCode);
   }
 
   return (
     <div>
-      <PageHeader title="Scanner" subtitle="Scan or lookup item QR/barcode values" />
-      <div className="space-y-4 p-4 sm:p-6 lg:p-8">
-        <section className="rounded-lg border border-border bg-card p-4">
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="overflow-hidden rounded-lg border border-border bg-black">
-              <video ref={videoRef} className="aspect-video w-full object-cover" muted playsInline />
+      <PageHeader
+        title="Scanner"
+        subtitle="Scan a QR or barcode to open its inventory record"
+      />
+      <div className="space-y-5 p-4 sm:p-6 lg:p-8">
+        <ScannerReadiness isSecure={isSecure} hasCameraApi={hasCameraApi} />
+
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,.85fr)]">
+          <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+            <div className="relative aspect-[4/3] min-h-64 overflow-hidden bg-slate-950 sm:aspect-video">
+              <video
+                ref={videoRef}
+                className="h-full w-full object-cover"
+                muted
+                playsInline
+              />
+              {!scanning && (
+                <div className="absolute inset-0 grid place-items-center p-6 text-center">
+                  <div>
+                    <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-white/10 text-white">
+                      <QrCode className="h-8 w-8" />
+                    </div>
+                    <p className="mt-4 font-medium text-white">
+                      Camera preview
+                    </p>
+                    <p className="mt-1 max-w-sm text-sm text-slate-300">
+                      Place an inventory label inside the frame.
+                    </p>
+                  </div>
+                </div>
+              )}
+              {scanning && (
+                <div className="scanner-frame absolute inset-[12%] rounded-xl border-2 border-emerald-400" />
+              )}
+              {scanning && (
+                <div className="absolute left-1/2 top-4 -translate-x-1/2 rounded-full bg-black/65 px-3 py-1.5 text-xs font-medium text-white">
+                  Scanning…
+                </div>
+              )}
             </div>
-            <div className="space-y-3">
-              <div className="flex gap-2">
-                <button onClick={startCamera} disabled={scanning} className="scanner-primary">
-                  <Camera className="h-4 w-4" /> Start
+
+            <div className="space-y-3 border-t border-border p-4">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => void startCamera()}
+                  disabled={scanning}
+                  className="scanner-primary"
+                >
+                  <Camera className="h-4 w-4" /> Start camera
                 </button>
-                <button onClick={stopCamera} disabled={!scanning} className="scanner-secondary">
+                <button
+                  onClick={stopCamera}
+                  disabled={!scanning}
+                  className="scanner-secondary"
+                >
                   <Square className="h-4 w-4" /> Stop
                 </button>
               </div>
-              <div className="flex gap-2">
-                <input
-                  className="scanner-input"
-                  placeholder="Scan code or enter item id/barcode"
-                  value={manualCode}
-                  onChange={(event) => setManualCode(event.target.value)}
-                />
-                <button onClick={() => lookup(manualCode)} className="scanner-secondary">
-                  <Search className="h-4 w-4" />
-                </button>
-              </div>
-              {result && (
-                <div className="rounded-lg border border-border bg-background p-3 text-sm">
-                  <div className="font-semibold">{result.name}</div>
-                  <div className="mt-2 grid grid-cols-2 gap-2 text-muted-foreground">
-                    <div>Qty: {result.quantity} {result.unit}</div>
-                    <div>Cost: {money(Number(result.acquisition_cost || 0))}</div>
-                    <div>Class: {classificationLabel(result)}</div>
-                    <div>Barcode: {result.barcode_value || "-"}</div>
-                  </div>
-                  <Link to="/inventory" className="mt-3 inline-flex text-sm font-medium text-primary">
-                    Open inventory
-                  </Link>
+              {cameraError && (
+                <div className="flex gap-2 rounded-lg border border-amber-300/60 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{cameraError}</span>
                 </div>
               )}
+              <div className="relative flex items-center gap-3 py-1 text-xs uppercase tracking-wide text-muted-foreground">
+                <span className="h-px flex-1 bg-border" />
+                <span>or enter a code</span>
+                <span className="h-px flex-1 bg-border" />
+              </div>
+              <form onSubmit={submitManual} className="flex gap-2">
+                <input
+                  className="scanner-input"
+                  placeholder="ITEM:…, UUID, or barcode value"
+                  value={manualCode}
+                  onChange={(event) => setManualCode(event.target.value)}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                />
+                <button
+                  disabled={loading || !manualCode.trim()}
+                  className="scanner-secondary min-w-11"
+                  aria-label="Find item"
+                >
+                  {loading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Search className="h-4 w-4" />
+                  )}
+                </button>
+              </form>
+            </div>
+          </div>
+
+          <ItemResult
+            item={result}
+            transactions={transactions}
+            onCreateLabel={() => result && setLabelItem(result)}
+          />
+        </section>
+
+        <InventoryLabels
+          items={inventoryItems}
+          loading={itemsLoading}
+          onOpenLabel={setLabelItem}
+          onLookup={(item) =>
+            void lookup(item.qr_code_value || `ITEM:${item.id}`)
+          }
+        />
+
+        <ScanHistory
+          entries={history}
+          onSelect={(entry) => void lookup(entry.code)}
+        />
+
+        <section className="rounded-xl border border-dashed border-border bg-muted/25 p-4 text-sm">
+          <div className="flex items-start gap-3">
+            <Wifi className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+            <div>
+              <p className="font-medium">Phone showcase note</p>
+              <p className="mt-1 text-muted-foreground">
+                A phone can use this page directly—no desktop pairing is
+                required. It must open the app over HTTPS and be able to reach
+                the computer running the application and local database. Plain
+                local-network HTTP may load the page, but mobile browsers will
+                block its camera.
+              </p>
             </div>
           </div>
         </section>
       </div>
-      <style>{`
-.scanner-primary,.scanner-secondary{display:inline-flex;align-items:center;justify-content:center;gap:.45rem;border-radius:6px;padding:.55rem .85rem;font-size:.875rem;font-weight:600}
-.scanner-primary{background:var(--color-primary);color:var(--color-primary-foreground)}
-.scanner-secondary{border:1px solid var(--color-input);background:var(--color-card);color:var(--color-foreground)}
-.scanner-primary:disabled,.scanner-secondary:disabled{opacity:.55;cursor:not-allowed}
-.scanner-input{width:100%;border:1px solid var(--color-input);background:var(--color-card);border-radius:6px;padding:.55rem .7rem;font-size:.875rem;outline:none}
-      `}</style>
+
+      {labelItem && (
+        <LabelDialog item={labelItem} onClose={() => setLabelItem(null)} />
+      )}
+      <style>{scannerStyles}</style>
     </div>
   );
 }
 
-function classificationLabel(item: any) {
-  if (item.inventory_classification === "ppe") return "PPE";
-  if (item.inventory_classification === "semi_expendable_property") {
-    return item.semi_expendable_tier === "high_value" ? "Semi-Exp. High" : "Semi-Exp. Low";
+function ScannerReadiness({
+  isSecure,
+  hasCameraApi,
+}: {
+  isSecure: boolean;
+  hasCameraApi: boolean;
+}) {
+  const ready = isSecure && hasCameraApi;
+  return (
+    <div
+      className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3 text-sm ${ready ? "border-emerald-200 bg-emerald-50/70 dark:border-emerald-900 dark:bg-emerald-950/25" : "border-amber-200 bg-amber-50/70 dark:border-amber-900 dark:bg-amber-950/25"}`}
+    >
+      <div className="flex items-center gap-2">
+        {ready ? (
+          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+        ) : (
+          <AlertTriangle className="h-4 w-4 text-amber-600" />
+        )}
+        <span className="font-medium">
+          {ready
+            ? "Camera scanning is available"
+            : "Manual lookup is available"}
+        </span>
+      </div>
+      <div className="flex gap-4 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1">
+          <ShieldCheck className="h-3.5 w-3.5" />{" "}
+          {isSecure ? "Secure page" : "HTTPS required"}
+        </span>
+        <span className="flex items-center gap-1">
+          <Camera className="h-3.5 w-3.5" />{" "}
+          {hasCameraApi ? "Camera detected" : "Camera unavailable"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ItemResult({
+  item,
+  transactions,
+  onCreateLabel,
+}: {
+  item: ScannerItem | null;
+  transactions: RecentTransaction[];
+  onCreateLabel: () => void;
+}) {
+  if (!item) {
+    return (
+      <section className="grid min-h-80 place-items-center rounded-xl border border-border bg-card p-8 text-center shadow-sm">
+        <div>
+          <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-muted text-muted-foreground">
+            <Package className="h-7 w-7" />
+          </div>
+          <h2 className="mt-4 font-semibold">No item selected</h2>
+          <p className="mt-1 max-w-xs text-sm text-muted-foreground">
+            Scan a label or enter its code to display current inventory details.
+          </p>
+        </div>
+      </section>
+    );
   }
-  return "Expendable";
+
+  const lowStock = item.quantity <= item.reorder_level;
+  return (
+    <section className="rounded-xl border border-border bg-card shadow-sm">
+      <div className="flex items-start justify-between gap-3 border-b border-border p-4">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold">{item.name}</h2>
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${lowStock ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"}`}
+            >
+              {lowStock ? "Low stock" : "In stock"}
+            </span>
+          </div>
+          {item.description && (
+            <p className="mt-1 text-sm text-muted-foreground">
+              {item.description}
+            </p>
+          )}
+        </div>
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+          <Package className="h-5 w-5" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-x-4 gap-y-3 p-4 text-sm">
+        <Detail label="Available" value={`${item.quantity} ${item.unit}`} />
+        <Detail
+          label="Reorder level"
+          value={`${item.reorder_level} ${item.unit}`}
+        />
+        <Detail label="Classification" value={classificationLabel(item)} />
+        <Detail
+          label="Accountability"
+          value={titleCase(item.accountability_status || "available")}
+        />
+        <Detail label="Category" value={item.category?.name || "—"} />
+        <Detail label="Supplier" value={item.supplier?.name || "—"} />
+        <Detail
+          label="Acquisition cost"
+          value={money(Number(item.acquisition_cost || 0))}
+        />
+        <Detail
+          label="Updated"
+          value={new Date(item.updated_at).toLocaleDateString("en-PH")}
+        />
+      </div>
+
+      <div className="border-t border-border p-4">
+        <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+          <History className="h-4 w-4" /> Recent activity
+        </div>
+        {transactions.length ? (
+          <div className="space-y-2">
+            {transactions.slice(0, 3).map((transaction) => (
+              <div
+                key={transaction.id}
+                className="flex items-center justify-between gap-3 text-sm"
+              >
+                <span className="truncate text-muted-foreground">
+                  {transaction.type === "IN"
+                    ? "Stock received"
+                    : "Stock issued"}
+                  {transaction.staff_name ? ` · ${transaction.staff_name}` : ""}
+                </span>
+                <span
+                  className={`shrink-0 font-medium ${transaction.type === "IN" ? "text-emerald-600" : "text-amber-600"}`}
+                >
+                  {transaction.type === "IN" ? "+" : "−"}
+                  {transaction.quantity}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            No transactions recorded yet.
+          </p>
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-2 border-t border-border p-4">
+        <button onClick={onCreateLabel} className="scanner-primary">
+          <QrCode className="h-4 w-4" /> View label
+        </button>
+        <Link
+          to="/inventory"
+          search={{ add: false }}
+          className="scanner-secondary"
+        >
+          <ExternalLink className="h-4 w-4" /> Open inventory
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+function Detail({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-0.5 font-medium">{value}</div>
+    </div>
+  );
+}
+
+function InventoryLabels({
+  items,
+  loading,
+  onOpenLabel,
+  onLookup,
+}: {
+  items: ScannerItem[];
+  loading: boolean;
+  onOpenLabel: (item: ScannerItem) => void;
+  onLookup: (item: ScannerItem) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const pageSize = 12;
+  const filtered = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return items;
+    return items.filter((item) =>
+      [
+        item.name,
+        item.description,
+        item.category?.name,
+        item.barcode_value,
+        item.qr_code_value,
+      ].some((value) => value?.toLowerCase().includes(query)),
+    );
+  }, [items, search]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, totalPages - 1);
+  const visibleItems = filtered.slice(
+    safePage * pageSize,
+    safePage * pageSize + pageSize,
+  );
+
+  function updateSearch(value: string) {
+    setSearch(value);
+    setPage(0);
+  }
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2 font-semibold">
+            <QrCode className="h-5 w-5 text-primary" /> Inventory QR labels
+          </div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {loading
+              ? "Loading inventory items…"
+              : `${items.length} ${items.length === 1 ? "item" : "items"} ready for label generation`}
+          </p>
+        </div>
+        <div className="relative w-full sm:w-72">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            value={search}
+            onChange={(event) => updateSearch(event.target.value)}
+            placeholder="Search labels…"
+            className="scanner-input pl-9"
+          />
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="grid min-h-48 place-items-center">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Fetching inventory
+          </div>
+        </div>
+      ) : visibleItems.length ? (
+        <>
+          <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {visibleItems.map((item) => (
+              <div
+                key={item.id}
+                className="flex min-w-0 gap-3 rounded-lg border border-border p-3 transition-colors hover:bg-muted/30"
+              >
+                <button
+                  onClick={() => onOpenLabel(item)}
+                  className="shrink-0 rounded-md bg-white p-1 ring-1 ring-border"
+                  title={`Open QR label for ${item.name}`}
+                >
+                  <QrThumbnail
+                    value={item.qr_code_value || `ITEM:${item.id}`}
+                  />
+                </button>
+                <div className="min-w-0 flex-1">
+                  <div
+                    className="truncate text-sm font-medium"
+                    title={item.name}
+                  >
+                    {item.name}
+                  </div>
+                  <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                    {item.category?.name || classificationLabel(item)}
+                  </div>
+                  <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                    {item.qr_code_value || `ITEM:${item.id}`}
+                  </div>
+                  <div className="mt-2 flex gap-1.5">
+                    <button
+                      onClick={() => onOpenLabel(item)}
+                      className="scanner-secondary px-2 py-1 text-xs"
+                    >
+                      <Printer className="h-3 w-3" /> Label
+                    </button>
+                    <button
+                      onClick={() => onLookup(item)}
+                      className="scanner-secondary px-2 py-1 text-xs"
+                    >
+                      <ExternalLink className="h-3 w-3" /> Details
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-3 text-sm">
+            <span className="text-muted-foreground">
+              Showing {safePage * pageSize + 1}–
+              {Math.min((safePage + 1) * pageSize, filtered.length)} of{" "}
+              {filtered.length}
+            </span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPage((current) => Math.max(0, current - 1))}
+                disabled={safePage === 0}
+                className="scanner-secondary px-3 py-1.5"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() =>
+                  setPage((current) => Math.min(totalPages - 1, current + 1))
+                }
+                disabled={safePage >= totalPages - 1}
+                className="scanner-secondary px-3 py-1.5"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="grid min-h-48 place-items-center p-6 text-center">
+          <div>
+            <Package className="mx-auto h-7 w-7 text-muted-foreground" />
+            <p className="mt-2 text-sm font-medium">
+              {items.length
+                ? "No labels match your search"
+                : "No inventory items yet"}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {items.length
+                ? "Try a different item name or code."
+                : "Add an item from Inventory and its QR label will appear here."}
+            </p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function QrThumbnail({ value }: { value: string }) {
+  const [url, setUrl] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    QRCode.toDataURL(value, {
+      width: 112,
+      margin: 1,
+      errorCorrectionLevel: "L",
+      color: { dark: "#0f172a", light: "#ffffff" },
+    }).then((generatedUrl) => active && setUrl(generatedUrl));
+    return () => {
+      active = false;
+    };
+  }, [value]);
+
+  return url ? (
+    <img src={url} alt="" className="h-16 w-16" />
+  ) : (
+    <div className="grid h-16 w-16 place-items-center text-slate-400">
+      <Loader2 className="h-4 w-4 animate-spin" />
+    </div>
+  );
+}
+
+function ScanHistory({
+  entries,
+  onSelect,
+}: {
+  entries: ScanEntry[];
+  onSelect: (entry: ScanEntry) => void;
+}) {
+  if (!entries.length) return null;
+  return (
+    <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+      <div className="mb-3 flex items-center gap-2 font-medium">
+        <History className="h-4 w-4" /> Recent scans
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {entries.map((entry) => (
+          <button
+            key={entry.id}
+            onClick={() => onSelect(entry)}
+            className="rounded-lg border border-border p-3 text-left transition-colors hover:bg-muted/50"
+          >
+            <div className="truncate text-sm font-medium">{entry.name}</div>
+            <div className="mt-1 flex justify-between gap-2 text-xs text-muted-foreground">
+              <span className="truncate">{entry.code}</span>
+              <span>
+                {entry.scannedAt.toLocaleTimeString([], {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </span>
+            </div>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function LabelDialog({
+  item,
+  onClose,
+}: {
+  item: ScannerItem;
+  onClose: () => void;
+}) {
+  const [qrUrl, setQrUrl] = useState("");
+  const code = useMemo(() => item.qr_code_value || `ITEM:${item.id}`, [item]);
+
+  useEffect(() => {
+    let active = true;
+    QRCode.toDataURL(code, {
+      width: 720,
+      margin: 2,
+      errorCorrectionLevel: "M",
+      color: { dark: "#0f172a", light: "#ffffff" },
+    })
+      .then((url) => active && setQrUrl(url))
+      .catch(() => toast.error("Unable to generate this QR label."));
+    return () => {
+      active = false;
+    };
+  }, [code]);
+
+  function download() {
+    const anchor = document.createElement("a");
+    anchor.href = qrUrl;
+    anchor.download = `${safeFileName(item.name)}-qr.png`;
+    anchor.click();
+  }
+
+  async function copyCode() {
+    await navigator.clipboard.writeText(code);
+    toast.success("Code copied");
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-slate-950/60 p-4 backdrop-blur-sm"
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
+      <div className="w-full max-w-md overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
+        <div className="flex items-center justify-between border-b border-border p-4">
+          <div>
+            <h2 className="font-semibold">Inventory label</h2>
+            <p className="text-xs text-muted-foreground">
+              Print and attach this label to the item.
+            </p>
+          </div>
+          <button onClick={onClose} className="scanner-secondary px-3">
+            Close
+          </button>
+        </div>
+        <div className="p-5">
+          <div
+            id="inventory-print-label"
+            className="mx-auto max-w-xs rounded-lg border-2 border-slate-900 bg-white p-4 text-center text-slate-950"
+          >
+            <div className="text-xs font-bold uppercase tracking-wider">
+              TESDA Inventory
+            </div>
+            <div className="mt-1 truncate text-base font-bold">{item.name}</div>
+            {qrUrl ? (
+              <img
+                src={qrUrl}
+                alt={`QR code for ${item.name}`}
+                className="mx-auto mt-3 aspect-square w-52"
+              />
+            ) : (
+              <div className="mx-auto mt-3 grid h-52 w-52 place-items-center bg-slate-100">
+                <Loader2 className="animate-spin" />
+              </div>
+            )}
+            <div className="mt-2 break-all font-mono text-[10px]">{code}</div>
+            <div className="mt-2 text-[10px] text-slate-600">
+              Scan with the Supplify inventory scanner
+            </div>
+          </div>
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            <button
+              onClick={() => void copyCode()}
+              className="scanner-secondary"
+            >
+              <Clipboard className="h-4 w-4" /> Copy
+            </button>
+            <button
+              onClick={download}
+              disabled={!qrUrl}
+              className="scanner-secondary"
+            >
+              <Download className="h-4 w-4" /> Save
+            </button>
+            <button onClick={() => window.print()} className="scanner-primary">
+              <Printer className="h-4 w-4" /> Print
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function cameraMessage(error: unknown) {
+  if (error instanceof DOMException) {
+    if (error.name === "NotAllowedError")
+      return "Camera permission was denied. Allow camera access in the browser settings and try again.";
+    if (error.name === "NotFoundError")
+      return "No camera was found on this device.";
+    if (error.name === "NotReadableError")
+      return "The camera is currently being used by another application.";
+  }
+  return "Unable to start the camera. You can still enter the item code manually.";
+}
+
+function classificationLabel(
+  item: Pick<ScannerItem, "inventory_classification" | "semi_expendable_tier">,
+) {
+  if (item.inventory_classification === "ppe") return "PPE";
+  if (item.inventory_classification === "semi_expendable_property")
+    return item.semi_expendable_tier === "high_value"
+      ? "Semi-expendable · High value"
+      : "Semi-expendable · Low value";
+  return "Expendable supply";
 }
 
 function money(value: number) {
-  return new Intl.NumberFormat("en-PH", { style: "currency", currency: "PHP" }).format(value || 0);
+  return new Intl.NumberFormat("en-PH", {
+    style: "currency",
+    currency: "PHP",
+  }).format(value || 0);
 }
+
+function titleCase(value: string) {
+  return value
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function safeFileName(value: string) {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "inventory-item"
+  );
+}
+
+const scannerStyles = `
+.scanner-primary,.scanner-secondary{display:inline-flex;align-items:center;justify-content:center;gap:.45rem;border-radius:6px;padding:.55rem .85rem;font-size:.875rem;font-weight:600;transition:background-color .15s,opacity .15s}
+.scanner-primary{background:var(--color-primary);color:var(--color-primary-foreground)}
+.scanner-primary:hover{opacity:.9}
+.scanner-secondary{border:1px solid var(--color-input);background:var(--color-card);color:var(--color-foreground)}
+.scanner-secondary:hover{background:var(--color-muted)}
+.scanner-primary:disabled,.scanner-secondary:disabled{opacity:.5;cursor:not-allowed}
+.scanner-input{width:100%;min-width:0;border:1px solid var(--color-input);background:var(--color-card);border-radius:6px;padding:.6rem .75rem;font-size:.875rem;outline:none}
+.scanner-input:focus{border-color:var(--color-ring);box-shadow:0 0 0 2px color-mix(in srgb,var(--color-ring) 20%,transparent)}
+.scanner-frame{box-shadow:0 0 0 999px rgba(2,6,23,.38),0 0 24px rgba(52,211,153,.25)}
+@media print{body *{visibility:hidden!important}#inventory-print-label,#inventory-print-label *{visibility:visible!important}#inventory-print-label{position:fixed;left:0;top:0;width:76mm;max-width:none!important;border-color:#0f172a!important}}
+`;
