@@ -5,7 +5,7 @@ import { Shield } from "lucide-react";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/login")({
-  head: () => ({ meta: [{ title: "Sign in — GovInventory" }] }),
+  head: () => ({ meta: [{ title: "Sign in — Supplify" }] }),
   component: LoginPage,
 });
 
@@ -38,19 +38,17 @@ function LoginPage() {
 
   return (
     <div className="min-h-screen grid lg:grid-cols-2">
-      <div className="hidden lg:flex flex-col justify-between bg-sidebar text-sidebar-foreground p-12">
-        <div className="flex items-center gap-3">
-          <div className="h-11 w-11 rounded-md bg-sidebar-primary/20 grid place-items-center">
-            <Shield className="h-6 w-6 text-sidebar-primary" />
-          </div>
+      <div className="hidden lg:flex flex-col justify-center bg-sidebar text-sidebar-foreground p-12">
+        <div className="flex items-center gap-3 mb-16">
+          <img src="/favicon.svg" alt="Supplify" className="h-11 w-11 rounded-md" />
           <div>
-            <div className="font-display text-xl">GovInventory</div>
+            <div className="font-display text-xl">Supplify</div>
             <div className="text-xs uppercase tracking-widest text-sidebar-foreground/60">
-              Republic Records System
+              Supplies & Materials Management
             </div>
           </div>
         </div>
-        <div>
+        <div className="mb-12">
           <h2 className="font-display text-4xl leading-tight max-w-md">
             Official record-keeping for public office supplies and equipment.
           </h2>
@@ -58,9 +56,6 @@ function LoginPage() {
             Track materials, monitor stock movements, audit transactions, and generate reports —
             built for the operational standards of government agencies.
           </p>
-        </div>
-        <div className="text-xs text-sidebar-foreground/50">
-          © {new Date().getFullYear()} Office of Inventory Management
         </div>
       </div>
 

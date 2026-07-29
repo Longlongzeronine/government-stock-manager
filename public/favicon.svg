@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a3a5c"/>
+      <stop offset="100%" stop-color="#0f1f35"/>
+    </linearGradient>
+    <linearGradient id="box1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5ba3f5"/>
+      <stop offset="100%" stop-color="#3a7bd5"/>
+    </linearGradient>
+    <linearGradient id="box2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6ab4ff"/>
+      <stop offset="100%" stop-color="#4a90d9"/>
+    </linearGradient>
+    <linearGradient id="box3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4a90d9"/>
+      <stop offset="100%" stop-color="#2a70b9"/>
+    </linearGradient>
+  </defs>
+  <!-- Background rounded square -->
+  <rect width="32" height="32" rx="7" fill="url(#bg)"/>
+  <!-- Shelf line -->
+  <rect x="5" y="21" width="22" height="1.5" rx="0.5" fill="#4a90d9" opacity="0.5"/>
+  <!-- Back box (tallest) -->
+  <rect x="15" y="9" width="9" height="12" rx="1.5" fill="url(#box3)" opacity="0.6"/>
+  <rect x="15" y="9" width="9" height="2" rx="0.5" fill="#4a90d9" opacity="0.7"/>
+  <!-- Middle box -->
+  <rect x="8" y="12" width="8.5" height="9" rx="1.5" fill="url(#box2)" opacity="0.8"/>
+  <rect x="8" y="12" width="8.5" height="2" rx="0.5" fill="#6aafff" opacity="0.9"/>
+  <!-- Front small box -->
+  <rect x="10.5" y="15" width="6" height="6" rx="1.2" fill="url(#box1)"/>
+  <rect x="10.5" y="15" width="6" height="1.5" rx="0.5" fill="#7bbaff"/>
+  <!-- Checkmark overlay -->
+  <path d="M12.5 18l1.2 1.2 2.8-2.8" stroke="white" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

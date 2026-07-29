@@ -1,5 +1,6 @@
 import { Outlet } from "@tanstack/react-router";
 import { Sidebar } from "./Sidebar";
+import { AiChatWidget } from "./AiChatWidget";
 import { Menu } from "lucide-react";
 import { useState } from "react";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -30,6 +31,9 @@ export function AppShell() {
         <Outlet />
       </main>
 
+      {/* Floating AI assistant */}
+      <AiChatWidget />
+
       {/* Mobile menu drawer */}
       {isMobile && mobileMenuOpen && (
         <Sidebar mobileOpen={mobileMenuOpen} onMobileOpenChange={setMobileMenuOpen} />
@@ -41,14 +45,14 @@ export function AppShell() {
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: React.ReactNode }) {
   return (
     <header className="border-b border-border bg-card px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3 flex-1">
           <div>
             <h1 className="text-xl sm:text-2xl text-foreground">{title}</h1>
             {subtitle && <p className="text-sm text-muted-foreground mt-1">{subtitle}</p>}
           </div>
         </div>
-        {actions && <div className="flex items-center gap-2 flex-wrap shrink-0">{actions}</div>}
+        {actions && <div className="flex w-full items-center gap-2 sm:w-auto sm:flex-wrap sm:shrink-0">{actions}</div>}
       </div>
     </header>
   );

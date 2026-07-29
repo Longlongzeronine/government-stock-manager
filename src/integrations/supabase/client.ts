@@ -7,7 +7,7 @@ export const supabase = createClient(url, key, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
 
-export type AppRole = "admin" | "staff" | "viewer";
+export type AppRole = "admin" | "staff" | "accounting" | "viewer";
 export type TxType = "IN" | "OUT";
 
 export interface Item {
@@ -19,6 +19,12 @@ export interface Item {
   quantity: number;
   unit: string;
   reorder_level: number;
+  acquisition_cost: number;
+  inventory_classification: "expendable_supply" | "semi_expendable_property" | "ppe";
+  semi_expendable_tier: "low_value" | "high_value" | null;
+  accountability_status: "available" | "issued" | "returned" | "lost" | "damaged" | "disposed" | "transferred";
+  barcode_value: string | null;
+  qr_code_value: string | null;
   created_at: string;
   updated_at: string;
   category?: { id: string; name: string } | null;
