@@ -1,8 +1,12 @@
 import { createServerFn } from "@tanstack/react-start";
 
+let localSchemaReady: Promise<void> | null = null;
+
 // Helper to get local DB on the server
 async function getDb() {
-  const { getSql } = await import("@/lib/local-db");
+  const { ensureSchema, getSql } = await import("@/lib/local-db");
+  localSchemaReady ??= ensureSchema().then(() => undefined);
+  await localSchemaReady;
   return getSql();
 }
 
@@ -298,6 +302,7 @@ export const listTransactionsAsc = createServerFn({ method: "GET" })
           ? {
               id: r.item.id,
               name: r.item.name,
+              description: r.item.description,
               unit: r.item.unit,
               quantity: r.item.quantity,
               acquisition_cost: r.item.acquisition_cost,
@@ -315,20 +320,35 @@ export const createTransaction = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
     const sql = await getDb();
-    const [row] = await sql`
-      INSERT INTO transactions ${sql({
-        item_id: data.item_id,
-        type: data.type,
-        quantity: Number(data.quantity),
-        staff_id: data.staff_id || null,
-        staff_name: data.staff_name || null,
-        remarks: data.remarks || null,
-        source_form_type: data.source_form_type || null,
-        source_form_id: data.source_form_id || null,
-      })}
-      RETURNING *
-    `;
-    return row;
+    const quantity = Number(data.quantity);
+    return await sql.begin(async (tx: any) => {
+      const [item] = await tx`
+        SELECT quantity FROM items WHERE id = ${data.item_id} FOR UPDATE
+      `;
+      if (!item) throw new Error("Inventory item was not found.");
+      if (data.type === "OUT" && Number(item.quantity) < quantity) {
+        throw new Error(`Only ${item.quantity} units are available.`);
+      }
+      const [row] = await tx`
+        INSERT INTO transactions ${tx({
+          item_id: data.item_id,
+          type: data.type,
+          quantity,
+          staff_id: data.staff_id || null,
+          staff_name: data.staff_name || null,
+          remarks: data.remarks || null,
+          source_form_type: data.source_form_type || null,
+          source_form_id: data.source_form_id || null,
+        })}
+        RETURNING *
+      `;
+      await tx`
+        UPDATE items
+        SET quantity = quantity + ${data.type === "IN" ? quantity : -quantity}
+        WHERE id = ${data.item_id}
+      `;
+      return row;
+    });
   });
 
 // ============================================
@@ -391,6 +411,9 @@ export const createIarItem = createServerFn({ method: "POST" })
         item_id: data.item_id,
         quantity: Number(data.quantity),
         unit_cost: Number(data.unit_cost || 0),
+        amount:
+          Number(data.amount) ||
+          Number(data.quantity) * Number(data.unit_cost || 0),
         remarks: data.remarks || null,
         transaction_id: data.transaction_id || null,
       })}
@@ -412,6 +435,13 @@ export const createRisForm = createServerFn({ method: "POST" })
         approved_by: data.approved_by || null,
         issued_by: data.issued_by || null,
         received_by: data.received_by || null,
+        approved_date: data.approved_date || null,
+        issued_date: data.issued_date || null,
+        verification_token: data.verification_token || null,
+        verification_code: data.verification_code || null,
+        document_version: Number(data.document_version || 1),
+        verification_status: data.verification_status || "draft",
+        verification_published_at: data.verification_published_at || null,
         created_by: data.created_by || null,
         created_by_name: data.created_by_name || null,
       })}
@@ -435,6 +465,97 @@ export const createRisItem = createServerFn({ method: "POST" })
       RETURNING *
     `;
     return row;
+  });
+
+export const getRisVerification = createServerFn({ method: "GET" })
+  .inputValidator((d: { token: string }) => d)
+  .handler(async ({ data }) => {
+    const sql = await getDb();
+    const [form] = await sql`
+      SELECT
+        r.verification_code,
+        r.ris_no,
+        r.verification_status AS status,
+        r.office,
+        r.purpose,
+        r.approved_by,
+        r.issued_by,
+        to_char(r.approved_date, 'YYYY-MM-DD') AS approved_date,
+        to_char(r.issued_date, 'YYYY-MM-DD') AS issued_date,
+        r.document_version,
+        r.verification_published_at::text AS published_at,
+        r.created_at::text AS updated_at,
+        count(ri.id)::integer AS item_count,
+        coalesce(
+          json_agg(
+            json_build_object(
+              'description', coalesce(nullif(i.description, ''), i.name),
+              'quantity', ri.quantity,
+              'unit', i.unit
+            )
+            ORDER BY ri.created_at
+          ) FILTER (WHERE ri.id IS NOT NULL),
+          '[]'::json
+        ) AS items
+      FROM ris_forms r
+      LEFT JOIN ris_items ri ON ri.ris_id = r.id
+      LEFT JOIN items i ON i.id = ri.item_id
+      WHERE r.verification_token = ${data.token}
+      GROUP BY r.id
+      LIMIT 1
+    `;
+    return form || null;
+  });
+
+export const listFormPersonnelMemory = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const sql = await getDb();
+    return await sql`
+      SELECT role, person_name, last_used_at
+      FROM form_personnel_memory
+      ORDER BY last_used_at DESC
+    `;
+  },
+);
+
+export const rememberFormPersonnel = createServerFn({ method: "POST" })
+  .inputValidator(
+    (d: { role: string; person_name: string; created_by?: string }) => d,
+  )
+  .handler(async ({ data }) => {
+    const sql = await getDb();
+    const [row] = await sql`
+      INSERT INTO form_personnel_memory (
+        role, person_name, created_by, last_used_at
+      )
+      VALUES (
+        ${data.role}, ${data.person_name.trim()}, ${data.created_by || null}, now()
+      )
+      ON CONFLICT (role, person_name)
+      DO UPDATE SET last_used_at = now(), created_by = EXCLUDED.created_by
+      RETURNING *
+    `;
+    return row;
+  });
+
+export const reserveNextFormNumber = createServerFn({ method: "POST" })
+  .inputValidator((d: { prefix: string; date: string }) => d)
+  .handler(async ({ data }) => {
+    const sql = await getDb();
+    const date = data.date;
+    const year = Number(date.slice(0, 4));
+    const prefix = data.prefix.toUpperCase();
+    const [counter] = await sql`
+      INSERT INTO form_number_counters (form_prefix, series_year, last_number)
+      VALUES (${prefix}, ${year}, 1)
+      ON CONFLICT (form_prefix, series_year)
+      DO UPDATE SET last_number = form_number_counters.last_number + 1
+      RETURNING last_number
+    `;
+    const series = String(counter.last_number).padStart(7, "0");
+    return prefix === "RIS"
+      ? `${date}-${series}`
+      : `${prefix}-${date}-${series}`;
   });
 
 export const createIcsForm = createServerFn({ method: "POST" })
