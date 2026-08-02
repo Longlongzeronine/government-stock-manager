@@ -24,6 +24,7 @@ import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
 import { Route as AppCategoriesRouteImport } from './routes/_app/categories'
 import { Route as AppAuditRouteImport } from './routes/_app/audit'
 import { Route as AppAssistantRouteImport } from './routes/_app/assistant'
+import { Route as AppVerifyRisTokenRouteImport } from './routes/_app/verify.ris.$token'
 
 const SignupRoute = SignupRouteImport.update({
   id: '/signup',
@@ -99,6 +100,11 @@ const AppAssistantRoute = AppAssistantRouteImport.update({
   path: '/assistant',
   getParentRoute: () => AppRoute,
 } as any)
+const AppVerifyRisTokenRoute = AppVerifyRisTokenRouteImport.update({
+  id: '/verify/ris/$token',
+  path: '/verify/ris/$token',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -115,6 +121,7 @@ export interface FileRoutesByFullPath {
   '/stock': typeof AppStockRoute
   '/suppliers': typeof AppSuppliersRoute
   '/users': typeof AppUsersRoute
+  '/verify/ris/$token': typeof AppVerifyRisTokenRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -131,6 +138,7 @@ export interface FileRoutesByTo {
   '/stock': typeof AppStockRoute
   '/suppliers': typeof AppSuppliersRoute
   '/users': typeof AppUsersRoute
+  '/verify/ris/$token': typeof AppVerifyRisTokenRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -149,6 +157,7 @@ export interface FileRoutesById {
   '/_app/stock': typeof AppStockRoute
   '/_app/suppliers': typeof AppSuppliersRoute
   '/_app/users': typeof AppUsersRoute
+  '/_app/verify/ris/$token': typeof AppVerifyRisTokenRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -167,6 +176,7 @@ export interface FileRouteTypes {
     | '/stock'
     | '/suppliers'
     | '/users'
+    | '/verify/ris/$token'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -183,6 +193,7 @@ export interface FileRouteTypes {
     | '/stock'
     | '/suppliers'
     | '/users'
+    | '/verify/ris/$token'
   id:
     | '__root__'
     | '/'
@@ -200,6 +211,7 @@ export interface FileRouteTypes {
     | '/_app/stock'
     | '/_app/suppliers'
     | '/_app/users'
+    | '/_app/verify/ris/$token'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -316,6 +328,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAssistantRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/verify/ris/$token': {
+      id: '/_app/verify/ris/$token'
+      path: '/verify/ris/$token'
+      fullPath: '/verify/ris/$token'
+      preLoaderRoute: typeof AppVerifyRisTokenRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
@@ -331,6 +350,7 @@ interface AppRouteChildren {
   AppStockRoute: typeof AppStockRoute
   AppSuppliersRoute: typeof AppSuppliersRoute
   AppUsersRoute: typeof AppUsersRoute
+  AppVerifyRisTokenRoute: typeof AppVerifyRisTokenRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -345,6 +365,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppStockRoute: AppStockRoute,
   AppSuppliersRoute: AppSuppliersRoute,
   AppUsersRoute: AppUsersRoute,
+  AppVerifyRisTokenRoute: AppVerifyRisTokenRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

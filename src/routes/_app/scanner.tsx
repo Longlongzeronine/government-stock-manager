@@ -62,6 +62,14 @@ type RecentTransaction = {
 type ScanEntry = { id: string; name: string; code: string; scannedAt: Date };
 
 function Scanner() {
+  return <InventoryScanner />;
+}
+
+export function InventoryScanner({
+  embedded = false,
+}: {
+  embedded?: boolean;
+}) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
   const processingRef = useRef(false);
@@ -190,11 +198,13 @@ function Scanner() {
 
   return (
     <div>
-      <PageHeader
-        title="Scanner"
-        subtitle="Scan a QR or barcode to open its inventory record"
-      />
-      <div className="space-y-5 p-4 sm:p-6 lg:p-8">
+      {!embedded && (
+        <PageHeader
+          title="Scanner"
+          subtitle="Scan a QR or barcode to open its inventory record"
+        />
+      )}
+      <div className={embedded ? "space-y-5" : "space-y-5 p-4 sm:p-6 lg:p-8"}>
         <ScannerReadiness isSecure={isSecure} hasCameraApi={hasCameraApi} />
 
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,.85fr)]">
@@ -478,7 +488,7 @@ function ItemResult({
         </button>
         <Link
           to="/inventory"
-          search={{} as { add: boolean }}
+          search={{ add: false }}
           className="scanner-secondary"
         >
           <ExternalLink className="h-4 w-4" /> Open inventory

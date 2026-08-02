@@ -72,10 +72,10 @@ begin
     new.semi_expendable_tier := null;
   end if;
 
-  -- NOTE: barcode_value is intentionally left untouched. The app treats
-  -- barcode_value IS NULL as "Part II (other items)". Auto-assigning a UUID here
-  -- pushed Part II items into Part I and broke the APP-CSE Part I/Part II totals.
-  -- (qr_code_value is still derived for the scanner.)
+  if new.barcode_value is null or new.barcode_value = '' then
+    new.barcode_value := new.id::text;
+  end if;
+
   if new.qr_code_value is null or new.qr_code_value = '' then
     new.qr_code_value := concat('ITEM:', new.id::text);
   end if;
