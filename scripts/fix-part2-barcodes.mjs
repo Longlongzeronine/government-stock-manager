@@ -105,8 +105,7 @@ for (let r = subHdrRow + 1; r < rows.length; r++) {
 console.log(`Parsed Part II items from file: ${part2Items.length}`);
 
 // ── 1. Recreate trigger WITHOUT the barcode auto-assign line ──
-console.log("\n[1] Recreating classify_inventory_item() without barcode auto-assign…");
-await sql`
+console.log("\n[1] Recreating classify_inventory_item() without barcode auto-assign…");await sql`
   CREATE OR REPLACE FUNCTION public.classify_inventory_item()
   RETURNS trigger
   LANGUAGE plpgsql
@@ -138,6 +137,33 @@ await sql`
     END IF;
 
     RETURN new;
+  END;
+  $$;
+`;
+
+// Also recreate local-db's auto_classify_item() (the trigger that actually assigned
+// UUID barcodes on this DB) WITHOUT the barcode auto-assign line.
+console.log("[1b] Recreating auto_classify_item() without barcode auto-assign…");
+await sql`
+  CREATE OR REPLACE FUNCTION public.auto_classify_item()
+  RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+  BEGIN
+    IF NEW.item_type = 'supply' THEN
+      NEW.inventory_classification := 'expendable_supply';
+      NEW.semi_expendable_tier := NULL;
+    ELSIF NEW.item_type = 'material' THEN
+      IF NEW.acquisition_cost >= 50000 THEN
+        NEW.inventory_classification := 'ppe';
+        NEW.semi_expendable_tier := NULL;
+      ELSE
+        NEW.inventory_classification := 'semi_expendable_property';
+        NEW.semi_expendable_tier := CASE WHEN NEW.acquisition_cost >= 15000 THEN 'high_value' ELSE 'low_value' END;
+      END IF;
+    END IF;
+    -- barcode_value intentionally left untouched: NULL = Part II (other items).
+    RETURN NEW;
   END;
   $$;
 `;

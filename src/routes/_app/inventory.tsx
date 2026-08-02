@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { exportCSV, exportPDF, exportXLSX, exportAppCseXlsx, exportAppCsePdf } from "@/lib/export";
 import { format } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { appCseCode, appCseCleanDescription } from "@/lib/utils";
 import QRCode from "qrcode";
 
 export const Route = createFileRoute("/_app/inventory")({
@@ -378,6 +379,25 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
   }, [layoutOpen]);
   const monthsFor = (item: any) => monthlyPlan[item.id] || ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].map((month, index) => Number(item[`${month}_quantity`] ?? (index === 0 ? item.quantity : 0)) || 0);
   const isNewItem = (item: any) => !!item?.created_at && !seenNewIds.has(item.id) && Date.now() - new Date(item.created_at).getTime() < NEW_ITEM_WINDOW_MS;
+  // Display code: real barcode wins; Part II items keep their template code in the
+  // description as "[CODE] name", so surface it instead of the internal "ITEM:" QR value.
+  const displayCode = (item: any) => appCseCode(item);
+  // Strip the redundant "[CODE] " prefix when the description only repeats the code + name.
+  const cleanDescription = (item: any) => appCseCleanDescription(item);
+  // Save an edited code cell. For Part II items (no barcode_value) the template code
+  // lives in the description prefix, so update that instead of setting barcode_value
+  // (which would silently move the item into Part I).
+  const saveItemCode = async (item: any, value: string) => {
+    const v = String(value || "").trim();
+    if (item.barcode_value) {
+      await saveItem(item, { barcode_value: v || null });
+      return;
+    }
+    const d = item.description || "";
+    const m = d.match(/^\[([^\]]+)\]/);
+    const rest = m ? d.slice(m[0].length).trim() : d;
+    await saveItem(item, { description: v ? `[${v}] ${rest}` : rest });
+  };
   // Part I = items with barcode_value (PS-DBM catalog items from XLSX import)
   const part1Items = (items as any[]).filter((item: any) => item.barcode_value);
   // Part II = items without barcode_value (custom/manually added items)
@@ -853,17 +873,17 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
               const months = monthsFor(item);
               const price = Number(item.acquisition_cost || 0);
               const totalQty = months.reduce((sum, q) => sum + q, 0);
-              const code = item.barcode_value || item.qr_code_value || "";
+              const code = displayCode(item);
               const qrValue = item.qr_code_value || item.barcode_value || item.id;
               return (
                 <tr key={item.id || code} className={`${selected.has(item.id) ? "is-selected" : ""}`} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}>
                   <td>{canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td>
-                  <td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => saveItem(item, { barcode_value: event.target.value })} /></td>
+                  <td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => { const v = event.target.value.trim(); if (v !== code) saveItemCode(item, v); }} /></td>
                   <td>
                     <span className="app-cse-product">
                       {isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}
                       <button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={`https://api.qrserver.com/v1/create-qr-code/?size=96x96&format=svg&data=${encodeURIComponent(qrValue)}`} alt="" title={qrValue} loading="lazy" /></button>
-                      <span><input disabled={!canEdit} defaultValue={item.name} onBlur={(event) => saveItem(item, { name: event.target.value })} /><small>{item.description || ""}</small></span>
+                      <span><input disabled={!canEdit} defaultValue={item.name} onBlur={(event) => saveItem(item, { name: event.target.value })} /><small>{cleanDescription(item)}</small></span>
                     </span>
                   </td>
                   <td><input disabled={!canEdit} defaultValue={item.unit} onBlur={(event) => saveItem(item, { unit: event.target.value })} /></td>
@@ -899,7 +919,8 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
     const months = monthsFor(item);
     const price = Number(item.acquisition_cost || 0);
     const totalQty = months.reduce((sum, q) => sum + q, 0);
-    const code = item.barcode_value || item.qr_code_value || "";
+    const code = displayCode(item);
+    const desc = cleanDescription(item);
     const qrValue = item.qr_code_value || item.barcode_value || item.id;
     return (
       <article key={item.id || code} className={`app-cse-easy-card ${selected.has(item.id) ? "is-selected" : ""}`} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}>
@@ -910,7 +931,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
           <button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={`https://api.qrserver.com/v1/create-qr-code/?size=96x96&format=svg&data=${encodeURIComponent(qrValue)}`} alt="" title={qrValue} loading="lazy" /></button>
         </div>
         <h3 className="app-cse-easy-card-name" title={item.name}>{item.name}</h3>
-        {item.description && <p className="app-cse-easy-card-desc">{item.description}</p>}
+        {desc && <p className="app-cse-easy-card-desc">{desc}</p>}
         <dl className="app-cse-easy-card-meta">
           <div><dt>Unit</dt><dd>{item.unit || "—"}</dd></div>
           <div><dt>Total Qty</dt><dd>{totalQty}</dd></div>
@@ -989,10 +1010,10 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
                   const months = monthsFor(item);
                   const price = Number(item.acquisition_cost || 0);
                   const totalQty = months.reduce((sum, q) => sum + q, 0);
-                  const code = item.barcode_value || item.qr_code_value || "";
+                  const code = displayCode(item);
                   const qrValue = item.qr_code_value || item.barcode_value || item.id;
                   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=96x96&format=svg&data=${encodeURIComponent(qrValue)}`;
-                  return <tr className={`app-cse-item ${selected.has(item.id) ? "is-selected" : ""}`} key={item.id || code} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}><td>{canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td><td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => saveItem(item, { barcode_value: event.target.value })} /></td><td><span className="app-cse-product">{isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}<button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={qrUrl} alt="" title={qrValue} loading="lazy" /></button><span><input disabled={!canEdit} defaultValue={item.name} onBlur={(event) => saveItem(item, { name: event.target.value })} /><small>{item.description || ""}</small></span></span></td><td><input disabled={!canEdit} defaultValue={item.unit} onBlur={(event) => saveItem(item, { unit: event.target.value })} /></td>{cells(months, price).map((value, cellIndex) => <td key={cellIndex}>{cellIndex % 5 < 3 ? <input disabled={!canEdit} type="number" min="0" value={value} onChange={(event) => saveMonthlyPlan(item.id, Math.floor(cellIndex / 5) * 3 + (cellIndex % 5), event.target.value)} /> : value}</td>)}<td>{totalQty}</td><td><input disabled={!canEdit} type="number" min="0" step=".01" defaultValue={price} onBlur={(event) => saveItem(item, { acquisition_cost: Number(event.target.value) || 0 })} /></td><td>{peso(totalQty * price)}</td></tr>;
+                  return <tr className={`app-cse-item ${selected.has(item.id) ? "is-selected" : ""}`} key={item.id || code} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}><td>{canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td><td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => { const v = event.target.value.trim(); if (v !== code) saveItemCode(item, v); }} /></td><td><span className="app-cse-product">{isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}<button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={qrUrl} alt="" title={qrValue} loading="lazy" /></button><span><input disabled={!canEdit} defaultValue={item.name} onBlur={(event) => saveItem(item, { name: event.target.value })} /><small>{cleanDescription(item)}</small></span></span></td><td><input disabled={!canEdit} defaultValue={item.unit} onBlur={(event) => saveItem(item, { unit: event.target.value })} /></td>{cells(months, price).map((value, cellIndex) => <td key={cellIndex}>{cellIndex % 5 < 3 ? <input disabled={!canEdit} type="number" min="0" value={value} onChange={(event) => saveMonthlyPlan(item.id, Math.floor(cellIndex / 5) * 3 + (cellIndex % 5), event.target.value)} /> : value}</td>)}<td>{totalQty}</td><td><input disabled={!canEdit} type="number" min="0" step=".01" defaultValue={price} onBlur={(event) => saveItem(item, { acquisition_cost: Number(event.target.value) || 0 })} /></td><td>{peso(totalQty * price)}</td></tr>;
                 })
               ])}
               <tr className="app-cse-part"><td colSpan={27}>PART II. OTHER ITEMS NOT AVAILABLE AT PS-DBM BUT ARE REGULARLY PURCHASED FROM OTHER SOURCES</td></tr>
@@ -1002,10 +1023,10 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
                   const months = monthsFor(item);
                   const price = Number(item.acquisition_cost || 0);
                   const quantity = months.reduce((sum, value) => sum + value, 0);
-                  const code = item.barcode_value || item.qr_code_value || "";
+                  const code = displayCode(item);
                   const qrValue = item.qr_code_value || item.barcode_value || item.id;
                   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=96x96&format=svg&data=${encodeURIComponent(qrValue)}`;
-                  return <tr className={`app-cse-item ${selected.has(item.id) ? "is-selected" : ""}`} key={item.id} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}><td>{canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td><td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => saveItem(item, { barcode_value: event.target.value })} /></td><td><span className="app-cse-product">{isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}<button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={qrUrl} alt="" title={qrValue} loading="lazy" /></button><span><input disabled={!canEdit} defaultValue={item.name} onBlur={(event) => saveItem(item, { name: event.target.value })} /><small>{item.description || ""}</small></span></span></td><td><input disabled={!canEdit} defaultValue={item.unit} onBlur={(event) => saveItem(item, { unit: event.target.value })} /></td>{cells(months, price).map((value, cellIndex) => <td key={cellIndex}>{cellIndex % 5 < 3 ? <input disabled={!canEdit} type="number" min="0" value={value} onChange={(event) => saveMonthlyPlan(item.id, Math.floor(cellIndex / 5) * 3 + (cellIndex % 5), event.target.value)} /> : value}</td>)}<td>{quantity}</td><td><input disabled={!canEdit} type="number" min="0" step=".01" defaultValue={price} onBlur={(event) => saveItem(item, { acquisition_cost: Number(event.target.value) || 0 })} /></td><td>{peso(quantity * price)}</td></tr>;
+                  return <tr className={`app-cse-item ${selected.has(item.id) ? "is-selected" : ""}`} key={item.id} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}><td>{canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td><td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => { const v = event.target.value.trim(); if (v !== code) saveItemCode(item, v); }} /></td><td><span className="app-cse-product">{isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}<button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={qrUrl} alt="" title={qrValue} loading="lazy" /></button><span><input disabled={!canEdit} defaultValue={item.name} onBlur={(event) => saveItem(item, { name: event.target.value })} /><small>{cleanDescription(item)}</small></span></span></td><td><input disabled={!canEdit} defaultValue={item.unit} onBlur={(event) => saveItem(item, { unit: event.target.value })} /></td>{cells(months, price).map((value, cellIndex) => <td key={cellIndex}>{cellIndex % 5 < 3 ? <input disabled={!canEdit} type="number" min="0" value={value} onChange={(event) => saveMonthlyPlan(item.id, Math.floor(cellIndex / 5) * 3 + (cellIndex % 5), event.target.value)} /> : value}</td>)}<td>{quantity}</td><td><input disabled={!canEdit} type="number" min="0" step=".01" defaultValue={price} onBlur={(event) => saveItem(item, { acquisition_cost: Number(event.target.value) || 0 })} /></td><td>{peso(quantity * price)}</td></tr>;
                 })
               ])}
               <tr className="app-cse-grand"><td colSpan={26}>TOTAL APP-CSE REQUIREMENT (Part I + Part II)</td><td>{peso(part1Total + part2Total)}</td></tr>
