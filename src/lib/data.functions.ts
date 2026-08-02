@@ -42,9 +42,12 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
       LEFT JOIN suppliers s ON s.id = i.supplier_id
       ORDER BY i.sort_order ASC NULLS LAST, i.name ASC
     `;
-    // Transform the nested JSON into the expected format
+    // Transform the nested JSON into the expected format.
+    // Guard: a barcode equal to the row's own id is a stale auto-assign artifact (not a real
+    // PS-DBM code) — surface it as no barcode so Part II items render under Part II.
     return rows.map((r: any) => ({
       ...r,
+      barcode_value: r.barcode_value && String(r.barcode_value) === String(r.id) ? null : r.barcode_value,
       category: r.category?.id ? { id: r.category.id, name: r.category.name } : null,
       supplier: r.supplier?.id ? { id: r.supplier.id, name: r.supplier.name } : null,
     }));
@@ -70,6 +73,7 @@ export const getItem = createServerFn({ method: "GET" })
     if (!row) return null;
     return {
       ...row,
+      barcode_value: row.barcode_value && String(row.barcode_value) === String(row.id) ? null : row.barcode_value,
       category: row.category?.id ? { id: row.category.id, name: row.category.name } : null,
       supplier: row.supplier?.id ? { id: row.supplier.id, name: row.supplier.name } : null,
     };
@@ -226,6 +230,15 @@ export const importItems = createServerFn({ method: "POST" })
       if (codeKey) codes.set(codeKey, { id: null, name, description: item.description || null });
       added += 1;
     }
+
+    // Self-healing: if any stale trigger auto-assigned a UUID barcode (barcode = own row id)
+    // during this import, clear it so Part II items (barcode_value IS NULL) stay in Part II.
+    // Safe: a bare UPDATE on barcode_value does not fire the item_type/acquisition_cost triggers.
+    await sql`
+      UPDATE items SET barcode_value = NULL
+      WHERE barcode_value = id::text
+        AND barcode_value ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    `;
     return { added, skipped, updated };
   });
 
