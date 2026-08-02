@@ -8,7 +8,7 @@ import { StatusBadge } from "@/components/common/StatusBadge";
 import { MobileCard, MobileCardRow } from "@/components/common/MobileCard";
 import { Plus, Search, Pencil, Trash2, Download, FileText, FileSpreadsheet, Clipboard, Printer, Loader2, LayoutGrid, Check, Upload } from "lucide-react";
 import { toast } from "sonner";
-import { exportCSV, exportPDF, exportXLSX, exportAppCseXlsx } from "@/lib/export";
+import { exportCSV, exportPDF, exportXLSX, exportAppCseXlsx, exportAppCsePdf } from "@/lib/export";
 import { format } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
 import QRCode from "qrcode";
@@ -349,12 +349,12 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const importInput = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
-  const [layout, setLayout] = useState<"template" | "compact">(() => {
-    try { return (typeof window !== "undefined" && window.localStorage.getItem("app-cse-layout") === "compact") ? "compact" : "template"; } catch { return "template"; }
+  const [layout, setLayout] = useState<"template" | "compact" | "easy">(() => {
+    try { const saved = typeof window !== "undefined" ? window.localStorage.getItem("app-cse-layout") : null; if (saved === "compact") return "compact"; if (saved === "simple" || saved === "easy") return "easy"; return "template"; } catch { return "template"; }
   });
   const [layoutOpen, setLayoutOpen] = useState(false);
   const layoutWrapRef = useRef<HTMLDivElement | null>(null);
-  const chooseLayout = (next: "template" | "compact") => {
+  const chooseLayout = (next: "template" | "compact" | "easy") => {
     setLayout(next);
     setLayoutOpen(false);
     try { window.localStorage.setItem("app-cse-layout", next); } catch {}
@@ -756,7 +756,8 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
       <input ref={importInput} type="file" accept=".xlsx,.xls" onChange={importXlsx} />
       {canEdit && <button className="app-cse-add" onClick={() => setAddOpen(true)} title="Add a new item to the list"><Plus className="h-4 w-4" /> Add item</button>}
       <button disabled={importing} onClick={() => importInput.current?.click()} title="Import APP-CSE XLSX file"><Upload className="h-4 w-4" /> {importing ? "Importing…" : "Import XLSX"}</button>
-      <button className="app-cse-export-xlsx" onClick={() => exportAppCseXlsx(items, monthlyPlan, fields)} title="Download APP-CSE 2026 as XLSX"><FileSpreadsheet className="h-4 w-4" /> Export XLSX</button>
+      <button className="app-cse-export-xlsx" onClick={() => exportAppCseXlsx(items, monthlyPlan, fields)} title="Download APP-CSE 2026 as Excel (.xlsx)"><FileSpreadsheet className="h-4 w-4" /> Export Excel</button>
+      <button className="app-cse-export-pdf" onClick={() => exportAppCsePdf(items, monthlyPlan, fields)} title="Download APP-CSE 2026 as PDF (.pdf)"><FileText className="h-4 w-4" /> Export PDF</button>
       <div className="app-cse-layout-wrap" ref={layoutWrapRef}>
         <button className="app-cse-layout-btn" onClick={() => setLayoutOpen((open) => !open)} title="Choose form layout"><LayoutGrid className="h-4 w-4" /> Layout</button>
         {layoutOpen && (
@@ -770,6 +771,11 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
               <span className="app-cse-layout-preview preview-compact" aria-hidden="true" />
               <span className="app-cse-layout-label"><strong>Compact View</strong><small>Easier to navigate, same data</small></span>
               {layout === "compact" && <Check className="app-cse-layout-check" />}
+            </button>
+            <button type="button" className={layout === "easy" ? "is-active" : ""} onClick={() => chooseLayout("easy")}>
+              <span className="app-cse-layout-preview preview-easy" aria-hidden="true" />
+              <span className="app-cse-layout-label"><strong>Easy View</strong><small>Friendly cards, quick search & edits</small></span>
+              {layout === "easy" && <Check className="app-cse-layout-check" />}
             </button>
           </div>
         )}
@@ -888,6 +894,57 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
     </details>
   );
 
+  // ── Easy view: friendly grouped cards — search, totals, and quick edit/delete. ──
+  const easyCard = (item: any, rowIndex: number) => {
+    const months = monthsFor(item);
+    const price = Number(item.acquisition_cost || 0);
+    const totalQty = months.reduce((sum, q) => sum + q, 0);
+    const code = item.barcode_value || item.qr_code_value || "";
+    const qrValue = item.qr_code_value || item.barcode_value || item.id;
+    return (
+      <article key={item.id || code} className={`app-cse-easy-card ${selected.has(item.id) ? "is-selected" : ""}`} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}>
+        <div className="app-cse-easy-card-top">
+          {canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : <span className="app-cse-easy-card-count">{rowIndex + 1}</span>}
+          <span className="app-cse-easy-card-code">{code || item.category?.name || "—"}</span>
+          {isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}
+          <button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={`https://api.qrserver.com/v1/create-qr-code/?size=96x96&format=svg&data=${encodeURIComponent(qrValue)}`} alt="" title={qrValue} loading="lazy" /></button>
+        </div>
+        <h3 className="app-cse-easy-card-name" title={item.name}>{item.name}</h3>
+        {item.description && <p className="app-cse-easy-card-desc">{item.description}</p>}
+        <dl className="app-cse-easy-card-meta">
+          <div><dt>Unit</dt><dd>{item.unit || "—"}</dd></div>
+          <div><dt>Total Qty</dt><dd>{totalQty}</dd></div>
+          <div><dt>Unit Price</dt><dd>₱ {peso(price)}</dd></div>
+          <div><dt>Total Amount</dt><dd>₱ {peso(totalQty * price)}</dd></div>
+        </dl>
+        {canEdit && (
+          <div className="app-cse-easy-card-actions">
+            <button type="button" className="app-cse-action-btn" title="Edit item" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setEditItem(item); }}><Pencil className="h-3.5 w-3.5" /> Edit</button>
+            <button type="button" className="app-cse-action-btn danger" title="Delete item" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); deleteSingleItem(item); }}><Trash2 className="h-3.5 w-3.5" /> Delete</button>
+          </div>
+        )}
+      </article>
+    );
+  };
+  const easyCategory = (category: string, categoryItems: any[], offset: number) => (
+    <details className="app-cse-easy-category" key={category} open>
+      <summary>{category} <em>{categoryItems.length} item{categoryItems.length === 1 ? "" : "s"}</em></summary>
+      <div className="app-cse-easy-grid">
+        {categoryItems.map((item: any, catIndex: number) => easyCard(item, offset + catIndex))}
+      </div>
+    </details>
+  );
+  const easySection = (title: string, groups: Record<string, any[]>, empty: string) => {
+    const entries = Object.entries(groups);
+    let offset = 0;
+    return (
+      <section className="app-cse-easy-part">
+        <h2>{title}</h2>
+        {entries.length ? entries.map(([category, categoryItems]) => { const block = easyCategory(category, categoryItems as any[], offset); offset += (categoryItems as any[]).length; return block; }) : <p className="app-cse-compact-empty">{empty}</p>}
+      </section>
+    );
+  };
+
   return (
     <main className="app-cse-shell">
       {layout === "template" && (
@@ -991,6 +1048,32 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
           {Object.entries(compactItemGroups).map(([category, categoryItems]) => compactCategory(category, categoryItems as any[]))}
           {Object.keys(compactItemGroups).length === 0 && <p className="app-cse-compact-empty">{compactQuery ? `No Part II items match "${compactSearch}".` : "No Part II items yet — import an XLSX or add items."}</p>}
         </section>
+        {summarySection}
+        {certificationSection}
+      </section>
+      )}
+      {layout === "easy" && (
+      <section className="app-cse-sheet app-cse-easy">
+        <header className="app-cse-compact-header">
+          <p>APP-CSE 2026 FORM — EASY VIEW</p>
+          <h1>ANNUAL PROCUREMENT PLAN - COMMON-USE SUPPLIES AND EQUIPMENT (APP-CSE) 2026 FORM</h1>
+          <small>Friendly cards grouped by category — search and edit in seconds.</small>
+        </header>
+        {toolbar}
+        <div className="app-cse-compact-search">
+          <Search className="app-cse-search-icon" />
+          <input value={compactSearch} onChange={(event) => setCompactSearch(event.target.value)} placeholder="Search items by name, code, or category…" aria-label="Search items" />
+          {compactSearch && <button type="button" className="app-cse-search-clear" onClick={() => setCompactSearch("")}>Clear</button>}
+          <span className="app-cse-search-count">{compactPart1.length + compactPart2.length} of {items.length} items</span>
+        </div>
+        {bulkActions}
+        <section className="app-cse-compact-totals">
+          <div><span>Part I total</span><strong>₱ {peso(compactPart1Total)}</strong></div>
+          <div><span>Part II total</span><strong>₱ {peso(compactPart2Total)}</strong></div>
+          <div className="grand"><span>Grand total</span><strong>₱ {peso(compactPart1Total + compactPart2Total)}</strong></div>
+        </section>
+        {easySection("PART I. AVAILABLE AT PS-DBM (MAIN WAREHOUSE AND DEPOTS)", compactGroups, compactQuery ? `No Part I items match "${compactSearch}".` : "No Part I items yet — import an XLSX or add items.")}
+        {easySection("PART II. OTHER ITEMS NOT AVAILABLE AT PS-DBM BUT ARE REGULARLY PURCHASED FROM OTHER SOURCES", compactItemGroups, compactQuery ? `No Part II items match "${compactSearch}".` : "No Part II items yet — import an XLSX or add items.")}
         {summarySection}
         {certificationSection}
       </section>
