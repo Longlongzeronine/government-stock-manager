@@ -1,7 +1,6 @@
 import XLSX from "xlsx-js-style";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { appCseCode } from "@/lib/utils";
 
 // ── Official APP-CSE 2026 form texts (shared by the XLSX and PDF exports) ──
 const APP_CSE_INTRO =
@@ -267,7 +266,7 @@ export function exportAppCseXlsx(
         const months = monthsFor(item);
         const price = Number(item.acquisition_cost || 0);
         const totalQty = months.reduce((s, v) => s + v, 0);
-        const code = appCseCode(item);
+        const code = item.barcode_value || item.qr_code_value || "";
         n += 1;
         const itemRow = data.length;
         data.push([
@@ -651,7 +650,7 @@ export function exportAppCsePdf(
         const months = monthsFor(item);
         const price = Number(item.acquisition_cost || 0);
         const totalQty = months.reduce((s, v) => s + v, 0);
-        const code = appCseCode(item);
+        const code = item.barcode_value || item.qr_code_value || "";
         n += 1;
         body.push([
           n,
