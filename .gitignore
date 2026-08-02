@@ -1,3 +1,4 @@
 # Existing content of .gitignore
 nul
 node_modules
+.env
