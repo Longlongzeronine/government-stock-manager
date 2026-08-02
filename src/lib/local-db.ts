@@ -6,15 +6,30 @@
 
 // @ts-ignore - postgres is ESM, but this works in TanStack Start server functions
 import postgres from "postgres";
+import { readFileSync } from "fs";
 
 let sql: ReturnType<typeof postgres> | null = null;
 
 function getDbUrl(): string {
-  return (
-    process.env.DATABASE_URL ||
-    process.env.VITE_DATABASE_URL ||
-    "postgres://postgres:postgres@localhost:5432/government_stock_manager"
-  );
+  let url = process.env.DATABASE_URL || process.env.VITE_DATABASE_URL || "";
+  let port = process.env.DB_PORT || "";
+
+  // The Vite dev server does not surface non-VITE_* vars from .env onto process.env,
+  // so fall back to reading .env directly (mirrors scripts/migrate-app-cse-full.mjs).
+  if (!url || !port) {
+    try {
+      const env = readFileSync(".env", "utf8");
+      if (!url) url = env.match(/^DATABASE_URL=(.+)$/m)?.[1]?.trim() || "";
+      if (!port) port = env.match(/^DB_PORT=(.+)$/m)?.[1]?.trim() || "";
+    } catch { /* no .env (edge runtime) — rely on process.env only */ }
+  }
+
+  if (!url) url = "postgres://postgres:postgres@localhost:5433/government_stock_manager";
+
+  // The live local DB listens on DB_PORT (e.g. 5433). Honor it so the app always
+  // connects to the database that actually has data.
+  if (port) url = url.replace(/:\d+\//, `:${port}/`);
+  return url;
 }
 
 export function getSql() {
@@ -113,14 +128,41 @@ export async function ensureSchema() {
       semi_expendable_tier semi_expendable_tier_enum DEFAULT NULL,
       accountability_status accountability_status_enum NOT NULL DEFAULT 'available',
       quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      jan_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      feb_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      mar_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      apr_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      may_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      jun_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      jul_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      aug_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      sep_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      oct_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      nov_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      dec_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
       unit TEXT NOT NULL DEFAULT 'pcs',
       reorder_level NUMERIC(12,2) NOT NULL DEFAULT 10,
       acquisition_cost NUMERIC(14,2) NOT NULL DEFAULT 0,
       barcode_value TEXT DEFAULT NULL,
       qr_code_value TEXT DEFAULT NULL,
+      sort_order INTEGER DEFAULT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS jan_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS feb_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS mar_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS apr_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS may_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS jun_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS jul_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS aug_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS sep_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS oct_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS nov_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS dec_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT NULL;
 
     CREATE OR REPLACE FUNCTION auto_classify_item()
     RETURNS TRIGGER AS $$
@@ -271,6 +313,7 @@ export async function ensureSchema() {
 
     -- Indexes
     CREATE INDEX IF NOT EXISTS idx_items_name ON items(name);
+    CREATE INDEX IF NOT EXISTS idx_items_sort_order ON items(sort_order);
     CREATE INDEX IF NOT EXISTS idx_items_category_id ON items(category_id);
     CREATE INDEX IF NOT EXISTS idx_items_supplier_id ON items(supplier_id);
     CREATE INDEX IF NOT EXISTS idx_transactions_item_id ON transactions(item_id);
