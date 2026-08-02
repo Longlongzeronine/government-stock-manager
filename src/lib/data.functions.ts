@@ -40,7 +40,7 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
       FROM items i
       LEFT JOIN categories c ON c.id = i.category_id
       LEFT JOIN suppliers s ON s.id = i.supplier_id
-      ORDER BY i.name ASC
+      ORDER BY i.sort_order ASC NULLS LAST, i.name ASC
     `;
     // Transform the nested JSON into the expected format
     return rows.map((r: any) => ({
@@ -79,6 +79,9 @@ export const createItem = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
     const sql = await getDb();
+    // Place new items after the highest existing sort_order so the file order stays stable.
+    const [maxRow] = await sql`SELECT COALESCE(MAX(sort_order), 0) AS m FROM items`;
+    const nextSort = Number(maxRow.m) + 1;
     const [row] = await sql`
       INSERT INTO items ${sql({
         name: data.name,
@@ -92,6 +95,19 @@ export const createItem = createServerFn({ method: "POST" })
         acquisition_cost: Number(data.acquisition_cost) || 0,
         barcode_value: data.barcode_value || null,
         qr_code_value: data.qr_code_value || null,
+        jan_quantity: Number(data.jan_quantity) || 0,
+        feb_quantity: Number(data.feb_quantity) || 0,
+        mar_quantity: Number(data.mar_quantity) || 0,
+        apr_quantity: Number(data.apr_quantity) || 0,
+        may_quantity: Number(data.may_quantity) || 0,
+        jun_quantity: Number(data.jun_quantity) || 0,
+        jul_quantity: Number(data.jul_quantity) || 0,
+        aug_quantity: Number(data.aug_quantity) || 0,
+        sep_quantity: Number(data.sep_quantity) || 0,
+        oct_quantity: Number(data.oct_quantity) || 0,
+        nov_quantity: Number(data.nov_quantity) || 0,
+        dec_quantity: Number(data.dec_quantity) || 0,
+        sort_order: nextSort,
       })}
       RETURNING *
     `;
@@ -102,38 +118,115 @@ export const importItems = createServerFn({ method: "POST" })
   .inputValidator((d: { items: any[] }) => d)
   .handler(async ({ data }) => {
     const sql = await getDb();
-    const existing = await sql`SELECT name, barcode_value FROM items`;
-    const names = new Set(existing.map((item: any) => String(item.name).trim().toLowerCase()));
+    const existing = await sql`SELECT id, name, barcode_value FROM items`;
+    const names = new Map<string, { id: string | null; hasBarcode: boolean }>(existing.map((item: any) => [String(item.name).trim().toLowerCase(), { id: item.id, hasBarcode: !!item.barcode_value }]));
     const codes = new Set(existing.map((item: any) => String(item.barcode_value || "").trim().toLowerCase()).filter(Boolean));
     let added = 0;
     let skipped = 0;
+    let updated = 0;
+    let nextSort = Number((await sql`SELECT COALESCE(MAX(sort_order), 0) AS m FROM items`)[0].m) + 1;
 
     for (const item of data.items || []) {
       const name = String(item.name || "").trim();
       const barcode = String(item.barcode_value || "").trim();
       const nameKey = name.toLowerCase();
       const codeKey = barcode.toLowerCase();
-      if (!name || names.has(nameKey) || (codeKey && codes.has(codeKey))) {
+      if (!name) {
         skipped += 1;
         continue;
       }
+      // Use code (barcode_value) as primary identity — different codes = different products
+      if (codeKey && codes.has(codeKey)) {
+        skipped += 1;
+        continue;
+      }
+
+      // Find or create category if category_name is provided
+      let categoryId: string | null = null;
+      if (item.category_name) {
+        const catName = String(item.category_name).trim();
+        if (catName) {
+          let [cat] = await sql`SELECT id FROM categories WHERE LOWER(name) = ${catName.toLowerCase()}`;
+          if (!cat) {
+            [cat] = await sql`INSERT INTO categories (name) VALUES (${catName}) RETURNING id`;
+          }
+          categoryId = cat?.id || null;
+        }
+      }
+
+      // ── Handle case: no barcode but name already exists ──
+      // This happens when Part II items from a previous import had barcode_value erroneously set,
+      // and now we need to "move" them to Part II by clearing the barcode.
+      const existingMatch = names.get(nameKey);
+      if (!codeKey && existingMatch) {
+        if (existingMatch.hasBarcode) {
+          // Update existing item: clear barcode, update fields
+          await sql`
+            UPDATE items SET ${sql({
+              name,
+              description: item.description || null,
+              category_id: categoryId,
+              item_type: item.item_type || "supply",
+              quantity: Number(item.quantity) || 0,
+              unit: normalizeUnit(item.unit, name),
+              reorder_level: Number(item.reorder_level) || 10,
+              acquisition_cost: Number(item.acquisition_cost) || 0,
+              barcode_value: null,
+              jan_quantity: Number(item.jan_quantity) || 0,
+              feb_quantity: Number(item.feb_quantity) || 0,
+              mar_quantity: Number(item.mar_quantity) || 0,
+              apr_quantity: Number(item.apr_quantity) || 0,
+              may_quantity: Number(item.may_quantity) || 0,
+              jun_quantity: Number(item.jun_quantity) || 0,
+              jul_quantity: Number(item.jul_quantity) || 0,
+              aug_quantity: Number(item.aug_quantity) || 0,
+              sep_quantity: Number(item.sep_quantity) || 0,
+              oct_quantity: Number(item.oct_quantity) || 0,
+              nov_quantity: Number(item.nov_quantity) || 0,
+              dec_quantity: Number(item.dec_quantity) || 0,
+            })}
+            WHERE id = ${existingMatch.id}
+          `;
+          updated += 1;
+        } else {
+          // Name exists and already has no barcode — skip as duplicate
+          skipped += 1;
+        }
+        continue;
+      }
+
       await sql`
         INSERT INTO items ${sql({
           name,
           description: item.description || null,
+          category_id: categoryId,
           item_type: item.item_type || "supply",
           quantity: Number(item.quantity) || 0,
           unit: normalizeUnit(item.unit, name),
           reorder_level: Number(item.reorder_level) || 10,
           acquisition_cost: Number(item.acquisition_cost) || 0,
           barcode_value: barcode || null,
+          jan_quantity: Number(item.jan_quantity) || 0,
+          feb_quantity: Number(item.feb_quantity) || 0,
+          mar_quantity: Number(item.mar_quantity) || 0,
+          apr_quantity: Number(item.apr_quantity) || 0,
+          may_quantity: Number(item.may_quantity) || 0,
+          jun_quantity: Number(item.jun_quantity) || 0,
+          jul_quantity: Number(item.jul_quantity) || 0,
+          aug_quantity: Number(item.aug_quantity) || 0,
+          sep_quantity: Number(item.sep_quantity) || 0,
+          oct_quantity: Number(item.oct_quantity) || 0,
+          nov_quantity: Number(item.nov_quantity) || 0,
+          dec_quantity: Number(item.dec_quantity) || 0,
+          sort_order: nextSort,
         })}
       `;
-      names.add(nameKey);
+      nextSort += 1;
+      names.set(nameKey, { id: null, hasBarcode: !!codeKey });
       if (codeKey) codes.add(codeKey);
       added += 1;
     }
-    return { added, skipped };
+    return { added, skipped, updated };
   });
 
 export const updateItem = createServerFn({ method: "POST" })
@@ -153,6 +246,18 @@ export const updateItem = createServerFn({ method: "POST" })
         acquisition_cost: Number(data.acquisition_cost) || 0,
         barcode_value: data.barcode_value || null,
         qr_code_value: data.qr_code_value || null,
+        jan_quantity: Number(data.jan_quantity) || 0,
+        feb_quantity: Number(data.feb_quantity) || 0,
+        mar_quantity: Number(data.mar_quantity) || 0,
+        apr_quantity: Number(data.apr_quantity) || 0,
+        may_quantity: Number(data.may_quantity) || 0,
+        jun_quantity: Number(data.jun_quantity) || 0,
+        jul_quantity: Number(data.jul_quantity) || 0,
+        aug_quantity: Number(data.aug_quantity) || 0,
+        sep_quantity: Number(data.sep_quantity) || 0,
+        oct_quantity: Number(data.oct_quantity) || 0,
+        nov_quantity: Number(data.nov_quantity) || 0,
+        dec_quantity: Number(data.dec_quantity) || 0,
       })}
       WHERE id = ${data.id}
       RETURNING *

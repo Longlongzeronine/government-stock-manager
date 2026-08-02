@@ -478,7 +478,7 @@ function ItemResult({
         </button>
         <Link
           to="/inventory"
-          search={{ add: false }}
+          search={{} as { add: boolean }}
           className="scanner-secondary"
         >
           <ExternalLink className="h-4 w-4" /> Open inventory
