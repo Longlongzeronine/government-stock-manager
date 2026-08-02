@@ -626,8 +626,8 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
           if (/^\d+$/.test(s)) return false;
           // Skip if it looks like a summary/total row
           if (/^(a\.\s+total|b\.\s+additional|c\.\s+additional|d\.\s+grand|e\.\s+approved|total|grand\s+total|we\s+hereby|consistent\s+with)/i.test(s)) return false;
-          // Skip rows that are just form field labels
-          if (/^(date\s+prepared|department|bureau|office\s*:|region|organization|contact|position|address|e-?mail|telephone|mobile\s+nos|agency|fund|prepared\s+by|supply\s+officer|accountant|funds\s+available)/i.test(s)) return false;
+          // Skip rows that are just form field labels or signature-block text
+          if (/^(date\s+prepared|department|bureau|office\s*:|region|organization|contact|position|address|e-?mail|telephone|mobile\s+nos|agency|fund|prepared\s+by|prepared,|approved\s+by|approved,|supply\s+officer|accountant|funds\s+available|certified\s+funds|head\s+of|en[grs]+\.)/i.test(s)) return false;
           // Allow all-caps section names with punctuation
           if (/^[A-Z][A-Z\s,&\-\(\)\"\.\/]+$/.test(s)) return true;
           // Allow mixed-case section names like "Software (Note:"
@@ -635,7 +635,8 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
           return false;
         });
         if (!text) return null;
-        const cleaned = toStr(text).replace(/\(Note:[^)]*\)/gi, "").trim();
+        // Keep only the first line of a merged cell (e.g. "MOTOR VEHICLE (Note:...)\nPlease refer to the Budget Circular...") and strip "(Note: ...)"
+        const cleaned = toStr(text).split(/\r?\n/)[0].replace(/\(Note:[^)]*\)/gi, "").trim();
         return cleaned || null;
       };
       // ── Step 5: Known form-field / non-product patterns to skip ──
@@ -799,21 +800,26 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
       {field("telephone", "Telephone/Mobile Nos:")}
     </section>
   );
+  // ── Summary section: official APP-CSE grid — yellow PART headers, blue A–D rows, white E row. ──
+  const summaryRows = (total: number, inflation: number, grandTotal: number) => (
+    <>
+      <tr className="app-cse-summary-blue"><td>A. TOTAL</td><td className="app-cse-summary-sign">₱</td><td className="app-cse-summary-amount">{peso(total)}</td></tr>
+      <tr className="app-cse-summary-blue"><td>B. ADDITIONAL PROVISION FOR INFLATION (10% of TOTAL)</td><td className="app-cse-summary-sign">₱</td><td className="app-cse-summary-amount">{peso(inflation)}</td></tr>
+      <tr className="app-cse-summary-blue"><td>C. ADDITIONAL PROVISION FOR TRANSPORT AND FREIGHT COST (If Applicable)</td><td className="app-cse-summary-sign">₱</td><td className="app-cse-summary-amount">-</td></tr>
+      <tr className="app-cse-summary-blue"><td>D. GRAND TOTAL (A + B+ C)</td><td className="app-cse-summary-sign">₱</td><td className="app-cse-summary-amount">{peso(grandTotal)}</td></tr>
+      <tr className="app-cse-summary-approved"><td colSpan={3}>E. APPROVED BUDGET BY THE AGENCY HEAD<small>In Figures and Words:</small></td></tr>
+    </>
+  );
   const summarySection = (
     <section className="app-cse-summary">
-      <h2>PART I. AVAILABLE AT PS-DBM (MAIN WAREHOUSE AND DEPOTS)</h2>
-      <p>A. TOTAL <output>₱ {peso(part1Total)}</output></p>
-      <p>B. ADDITIONAL PROVISION FOR INFLATION (10% of TOTAL) <output>₱ {peso(part1Inflation)}</output></p>
-      <p>C. ADDITIONAL PROVISION FOR TRANSPORT AND FREIGHT COST (If Applicable) <output>₱ -</output></p>
-      <p>D. GRAND TOTAL (A + B+ C) <output>₱ {peso(part1GrandTotal)}</output></p>
-      <p className="app-cse-approved-budget">E. APPROVED BUDGET BY THE AGENCY HEAD<br /><small>In Figures and Words:</small></p>
-      <h2>PART II. OTHER ITEMS NOT AVAILABLE AT PS-DBM BUT ARE REGULARLY PURCHASED FROM OTHER SOURCES</h2>
-      <p className="app-cse-part2-note">Consistent with Section 4.4 of Circular Letter No. 2011-6 and 2011-6, all agencies and concerned units are enjoined to include in the APP-CSE all supplies, commodities or materials and equipment which are consumed and needed in their day-to-day operations. This shall be one of the bases for the PS-DBM in expanding the Electronic Catalogue to include other products commonly purchased by government entities.</p>
-      <p>A. TOTAL <output>₱ {peso(part2Total)}</output></p>
-      <p>B. ADDITIONAL PROVISION FOR INFLATION (10% of TOTAL) <output>₱ {peso(part2Inflation)}</output></p>
-      <p>C. ADDITIONAL PROVISION FOR TRANSPORT AND FREIGHT COST (If Applicable) <output>₱ -</output></p>
-      <p>D. GRAND TOTAL (A + B+ C) <output>₱ {peso(part2GrandTotal)}</output></p>
-      <p className="app-cse-approved-budget">E. APPROVED BUDGET BY THE AGENCY HEAD<br /><small>In Figures and Words:</small></p>
+      <table className="app-cse-summary-table">
+        <tbody>
+          <tr className="app-cse-summary-part"><th colSpan={3}>PART I. AVAILABLE AT PS-DBM (MAIN WAREHOUSE AND DEPOTS)</th></tr>
+          {summaryRows(part1Total, part1Inflation, part1GrandTotal)}
+          <tr className="app-cse-summary-part"><th colSpan={3}>PART II. OTHER ITEMS NOT AVAILABLE AT PS-DBM BUT ARE REGULARLY PURCHASED FROM OTHER SOURCES<span className="app-cse-summary-note">Consistent with Section 4.4 of Circular Letter No. 2011-6 and 2011-6, all agencies and concerned units are enjoined to include in the APP-CSE all supplies, commodities or materials and equipment which are consumed and needed in their day-to-day operations. This shall be one of the bases for the PS-DBM in expanding the Electronic Catalogue to include other products commonly purchased by government entities.</span></th></tr>
+          {summaryRows(part2Total, part2Inflation, part2GrandTotal)}
+        </tbody>
+      </table>
     </section>
   );
   const certificationSection = (

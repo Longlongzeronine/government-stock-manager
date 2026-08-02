@@ -118,13 +118,49 @@ export const importItems = createServerFn({ method: "POST" })
   .inputValidator((d: { items: any[] }) => d)
   .handler(async ({ data }) => {
     const sql = await getDb();
-    const existing = await sql`SELECT id, name, barcode_value FROM items`;
-    const names = new Map<string, { id: string | null; hasBarcode: boolean }>(existing.map((item: any) => [String(item.name).trim().toLowerCase(), { id: item.id, hasBarcode: !!item.barcode_value }]));
-    const codes = new Set(existing.map((item: any) => String(item.barcode_value || "").trim().toLowerCase()).filter(Boolean));
+    const existing = await sql`SELECT id, name, barcode_value FROM items ORDER BY (barcode_value IS NOT NULL) DESC, name ASC`;
+    // Name → existing record (first wins so Part I items aren't shadowed by Part II duplicates)
+    const names = new Map<string, { id: string | null; barcode: string | null; description: string | null }>();
+    // Code → existing record — the primary identity for Part I (PS-DBM catalog) items
+    const codes = new Map<string, { id: string | null; name: string; description: string | null }>();
+    for (const item of existing as any[]) {
+      const nameKey = String(item.name).trim().toLowerCase();
+      const barcode = String(item.barcode_value || "").trim();
+      if (!names.has(nameKey)) names.set(nameKey, { id: item.id, barcode: barcode || null, description: item.description || null });
+      if (barcode && !codes.has(barcode.toLowerCase())) codes.set(barcode.toLowerCase(), { id: item.id, name: String(item.name).trim(), description: item.description || null });
+    }
     let added = 0;
     let skipped = 0;
     let updated = 0;
     let nextSort = Number((await sql`SELECT COALESCE(MAX(sort_order), 0) AS m FROM items`)[0].m) + 1;
+
+    // Shared payload builder so adds and updates stay in sync (units, prices, monthly qty, etc.)
+    // The file's description (e.g. "[CODE] name" for Part II) wins; otherwise keep the existing one.
+    const payload = (item: any, name: string, barcode: string | null, categoryId: string | null, existingDescription: string | null) => ({
+      name,
+      description: item.description ? String(item.description).trim() : existingDescription,
+      category_id: categoryId,
+      item_type: item.item_type || "supply",
+      quantity: Number(item.quantity) || 0,
+      unit: normalizeUnit(item.unit, name),
+      reorder_level: Number(item.reorder_level) || 10,
+      acquisition_cost: Number(item.acquisition_cost) || 0,
+      barcode_value: barcode,
+      jan_quantity: Number(item.jan_quantity) || 0,
+      feb_quantity: Number(item.feb_quantity) || 0,
+      mar_quantity: Number(item.mar_quantity) || 0,
+      apr_quantity: Number(item.apr_quantity) || 0,
+      may_quantity: Number(item.may_quantity) || 0,
+      jun_quantity: Number(item.jun_quantity) || 0,
+      jul_quantity: Number(item.jul_quantity) || 0,
+      aug_quantity: Number(item.aug_quantity) || 0,
+      sep_quantity: Number(item.sep_quantity) || 0,
+      oct_quantity: Number(item.oct_quantity) || 0,
+      nov_quantity: Number(item.nov_quantity) || 0,
+      dec_quantity: Number(item.dec_quantity) || 0,
+    });
+    // A code that is a full UUID is NOT a real PS-DBM code — it was auto-assigned by an old trigger
+    const isUuidCode = (c: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(c);
 
     for (const item of data.items || []) {
       const name = String(item.name || "").trim();
@@ -132,11 +168,6 @@ export const importItems = createServerFn({ method: "POST" })
       const nameKey = name.toLowerCase();
       const codeKey = barcode.toLowerCase();
       if (!name) {
-        skipped += 1;
-        continue;
-      }
-      // Use code (barcode_value) as primary identity — different codes = different products
-      if (codeKey && codes.has(codeKey)) {
         skipped += 1;
         continue;
       }
@@ -154,76 +185,45 @@ export const importItems = createServerFn({ method: "POST" })
         }
       }
 
-      // ── Handle case: no barcode but name already exists ──
-      // This happens when Part II items from a previous import had barcode_value erroneously set,
-      // and now we need to "move" them to Part II by clearing the barcode.
-      const existingMatch = names.get(nameKey);
-      if (!codeKey && existingMatch) {
-        if (existingMatch.hasBarcode) {
-          // Update existing item: clear barcode, update fields
-          await sql`
-            UPDATE items SET ${sql({
-              name,
-              description: item.description || null,
-              category_id: categoryId,
-              item_type: item.item_type || "supply",
-              quantity: Number(item.quantity) || 0,
-              unit: normalizeUnit(item.unit, name),
-              reorder_level: Number(item.reorder_level) || 10,
-              acquisition_cost: Number(item.acquisition_cost) || 0,
-              barcode_value: null,
-              jan_quantity: Number(item.jan_quantity) || 0,
-              feb_quantity: Number(item.feb_quantity) || 0,
-              mar_quantity: Number(item.mar_quantity) || 0,
-              apr_quantity: Number(item.apr_quantity) || 0,
-              may_quantity: Number(item.may_quantity) || 0,
-              jun_quantity: Number(item.jun_quantity) || 0,
-              jul_quantity: Number(item.jul_quantity) || 0,
-              aug_quantity: Number(item.aug_quantity) || 0,
-              sep_quantity: Number(item.sep_quantity) || 0,
-              oct_quantity: Number(item.oct_quantity) || 0,
-              nov_quantity: Number(item.nov_quantity) || 0,
-              dec_quantity: Number(item.dec_quantity) || 0,
-            })}
-            WHERE id = ${existingMatch.id}
-          `;
+      // ── Part I: barcode is the identity → re-import UPDATES the existing item ──
+      if (codeKey) {
+        const existingByCode = codes.get(codeKey);
+        if (existingByCode?.id) {
+          await sql`UPDATE items SET ${sql(payload(item, name, barcode, categoryId, existingByCode.description))} WHERE id = ${existingByCode.id}`;
           updated += 1;
-        } else {
-          // Name exists and already has no barcode — skip as duplicate
-          skipped += 1;
+          continue;
         }
-        continue;
+        // Already inserted earlier in this same import batch
+        if (existingByCode) {
+          skipped += 1;
+          continue;
+        }
+      } else {
+        // ── Part II: name is the identity → re-import UPDATES the matching item ──
+        const existingMatch = names.get(nameKey);
+        if (existingMatch) {
+          // id null = already inserted earlier in this batch → skip as duplicate.
+          // A real record is updated, unless it carries a genuine Part I barcode (only a stale
+          // UUID from the old auto-assign trigger may be cleared to move it back to Part II).
+          if (existingMatch.id && (!existingMatch.barcode || isUuidCode(existingMatch.barcode))) {
+            await sql`UPDATE items SET ${sql(payload(item, name, null, categoryId, existingMatch.description))} WHERE id = ${existingMatch.id}`;
+            updated += 1;
+          } else {
+            skipped += 1;
+          }
+          continue;
+        }
       }
 
       await sql`
         INSERT INTO items ${sql({
-          name,
-          description: item.description || null,
-          category_id: categoryId,
-          item_type: item.item_type || "supply",
-          quantity: Number(item.quantity) || 0,
-          unit: normalizeUnit(item.unit, name),
-          reorder_level: Number(item.reorder_level) || 10,
-          acquisition_cost: Number(item.acquisition_cost) || 0,
-          barcode_value: barcode || null,
-          jan_quantity: Number(item.jan_quantity) || 0,
-          feb_quantity: Number(item.feb_quantity) || 0,
-          mar_quantity: Number(item.mar_quantity) || 0,
-          apr_quantity: Number(item.apr_quantity) || 0,
-          may_quantity: Number(item.may_quantity) || 0,
-          jun_quantity: Number(item.jun_quantity) || 0,
-          jul_quantity: Number(item.jul_quantity) || 0,
-          aug_quantity: Number(item.aug_quantity) || 0,
-          sep_quantity: Number(item.sep_quantity) || 0,
-          oct_quantity: Number(item.oct_quantity) || 0,
-          nov_quantity: Number(item.nov_quantity) || 0,
-          dec_quantity: Number(item.dec_quantity) || 0,
+          ...payload(item, name, barcode || null, categoryId, null),
           sort_order: nextSort,
         })}
       `;
       nextSort += 1;
-      names.set(nameKey, { id: null, hasBarcode: !!codeKey });
-      if (codeKey) codes.add(codeKey);
+      if (!names.has(nameKey)) names.set(nameKey, { id: null, barcode: barcode || null, description: item.description || null });
+      if (codeKey) codes.set(codeKey, { id: null, name, description: item.description || null });
       added += 1;
     }
     return { added, skipped, updated };

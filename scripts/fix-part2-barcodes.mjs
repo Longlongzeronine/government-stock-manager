@@ -4,6 +4,9 @@
  * and Part II showed ₱0.00.
  *
  * This script:
+ *   0. Recreates public.auto_classify_item() (the real culprit from ensureSchema) WITHOUT the
+ *      `barcode_value := NEW.id::text` line and re-creates trg_auto_classify_item. This trigger
+ *      re-assigned UUID barcodes to Part II items on every UPDATE, moving them into Part I.
  *   1. Recreates public.classify_inventory_item() WITHOUT the `barcode_value := new.id::text`
  *      line (keeps inventory_classification + qr_code_value). Prevents future corruption from
  *      importItems / createItem / updateItem.
@@ -103,6 +106,41 @@ for (let r = subHdrRow + 1; r < rows.length; r++) {
   });
 }
 console.log(`Parsed Part II items from file: ${part2Items.length}`);
+
+// ── 0. Recreate auto_classify_item (the real culprit from ensureSchema) WITHOUT the barcode line ──
+console.log("\n[0] Recreating auto_classify_item() without barcode auto-assign…");
+await sql`
+  CREATE OR REPLACE FUNCTION public.auto_classify_item()
+  RETURNS trigger
+  LANGUAGE plpgsql
+  AS $function$
+    BEGIN
+      IF NEW.item_type = 'supply' THEN
+        NEW.inventory_classification := 'expendable_supply';
+        NEW.semi_expendable_tier := NULL;
+      ELSIF NEW.item_type = 'material' THEN
+        IF NEW.acquisition_cost >= 50000 THEN
+          NEW.inventory_classification := 'ppe';
+          NEW.semi_expendable_tier := NULL;
+        ELSE
+          NEW.inventory_classification := 'semi_expendable_property';
+          NEW.semi_expendable_tier := CASE WHEN NEW.acquisition_cost >= 15000 THEN 'high_value' ELSE 'low_value' END;
+        END IF;
+      END IF;
+      -- NOTE: barcode_value intentionally left untouched. barcode_value IS NULL = Part II.
+      IF NEW.qr_code_value IS NULL OR btrim(NEW.qr_code_value) = '' THEN
+        NEW.qr_code_value := 'ITEM:' || NEW.id::text;
+      END IF;
+      RETURN NEW;
+    END;
+  $function$
+`;
+await sql`DROP TRIGGER IF EXISTS trg_auto_classify_item ON items;`;
+await sql`
+  CREATE TRIGGER trg_auto_classify_item
+    BEFORE INSERT OR UPDATE OF item_type, acquisition_cost ON items
+    FOR EACH ROW EXECUTE FUNCTION auto_classify_item()
+`;
 
 // ── 1. Recreate trigger WITHOUT the barcode auto-assign line ──
 console.log("\n[1] Recreating classify_inventory_item() without barcode auto-assign…");
