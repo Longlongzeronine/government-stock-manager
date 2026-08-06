@@ -313,19 +313,19 @@ export default function App() {
     submittedAt: r.created_at || "",
     neededBy: r.needed_by || "",
     priority: (r.priority as Priority) || "normal",
-    status: r.status === "issued" ? "approved" : r.status === "cancelled" ? "rejected" : "pending",
+    status: r.status === "issued" || r.status === "approved" ? "approved" : r.status === "cancelled" || r.status === "rejected" ? "rejected" : "pending",
     notes: r.remarks || "",
     vendor: r.supplier_name || "",
   }));
 
   const approve = async (id: string) => {
-    await updateRisFormStatus({ data: { id, status: "approved" } });
+    await updateRisFormStatus({ data: { id, status: "issued" } });
     qc.invalidateQueries({ queryKey: ["risForms"] });
     setSelected(null);
   };
 
   const reject = async (id: string) => {
-    await updateRisFormStatus({ data: { id, status: "rejected" } });
+    await updateRisFormStatus({ data: { id, status: "cancelled" } });
     qc.invalidateQueries({ queryKey: ["risForms"] });
     setSelected(null);
   };
