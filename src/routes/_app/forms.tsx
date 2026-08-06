@@ -1,10 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { format } from "date-fns";
 import {
-  Boxes,
-  Building2,
   FileCheck2,
   FileSpreadsheet,
   FileText,
@@ -20,41 +18,22 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { toast } from "sonner";
-import QRCode from "qrcode";
 import { PageHeader } from "@/components/layout/AppShell";
+import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import {
-  createIarForm,
-  createIarItem,
-  createIcsForm,
-  createIcsItem,
-  createParForm,
-  createParItem,
-  createRisForm,
-  createRisItem,
-  createTransaction,
-  listFormPersonnelMemory,
-  listItems,
-  listTransactionsAsc,
-  rememberFormPersonnel,
-  reserveNextFormNumber,
-} from "@/lib/data.functions";
 
 export const Route = createFileRoute("/_app/forms")({
   head: () => ({ meta: [{ title: "Forms Flow - Supplify" }] }),
   component: FormsFlow,
 });
 
-type FlowTab = "iar" | "stock-card" | "ris" | "rsmi" | "rpci";
-type PropertyFlow = "supplies" | "semi-expendable" | "ppe";
+type FlowTab = "iar" | "stock-card" | "ris" | "rsmi";
 type ViewMode = "preview" | "split";
 type Orientation = "portrait" | "landscape";
 
 type Item = {
   id: string;
   name: string;
-  description?: string | null;
-  item_type?: "supply" | "material";
   quantity: number;
   unit: string;
   acquisition_cost?: number;
@@ -122,39 +101,6 @@ type RisState = {
   approvedDate: string;
   issuedDate: string;
   receivedDate: string;
-  verificationToken: string;
-  verificationCode: string;
-  verificationStatus: "draft" | "issued" | "verified";
-  issuedAt: string;
-};
-
-type PersonnelRole =
-  | "iar_accepted_by"
-  | "ris_requested_by"
-  | "ris_approved_by"
-  | "ris_issued_by"
-  | "ris_received_by";
-
-type PersonnelMemory = {
-  role: PersonnelRole;
-  person_name: string;
-  last_used_at: string;
-};
-
-type RpciEntry = { onHand: string; remarks: string };
-
-type RpciRow = {
-  id: string;
-  article: string;
-  description: string;
-  stockNo: string;
-  unit: string;
-  unitValue: number;
-  cardBalance: number;
-  onHand: number;
-  varianceQuantity: number;
-  varianceValue: number;
-  remarks: string;
 };
 
 const FORM_DEFAULTS = {
@@ -181,18 +127,13 @@ function FormsFlow() {
   const queryClient = useQueryClient();
   const userName = user?.user_metadata?.full_name || user?.email || "";
   const today = new Date().toISOString().slice(0, 10);
-  const initialVerification = useRef(createVerificationIdentity());
 
-  const [propertyFlow, setPropertyFlow] = useState<PropertyFlow>("supplies");
   const [tab, setTab] = useState<FlowTab>("iar");
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [orientation, setOrientation] = useState<Orientation>("portrait");
   const [zoom, setZoom] = useState(1);
   const [selectedItemId, setSelectedItemId] = useState("");
   const [reportMonth, setReportMonth] = useState(today.slice(0, 7));
-  const [reportYear, setReportYear] = useState(today.slice(0, 4));
-  const [rpciFundCluster, setRpciFundCluster] = useState(FORM_DEFAULTS.fundCluster);
-  const [rpciEntries, setRpciEntries] = useState<Record<string, RpciEntry>>({});
   const [iar, setIar] = useState<IarState>({
     iarNo: makeFormNumber("IAR", today),
     entityName: FORM_DEFAULTS.entityName,
@@ -228,73 +169,43 @@ function FormsFlow() {
     approvedDate: today,
     issuedDate: today,
     receivedDate: today,
-    verificationToken: initialVerification.current.token,
-    verificationCode: initialVerification.current.code,
-    verificationStatus: "draft",
-    issuedAt: "",
   });
   const [risLines, setRisLines] = useState<Line[]>([blankLine()]);
   const [saving, setSaving] = useState(false);
-  const initializedPersonnel = useRef(false);
-  const initializedRisNumber = useRef(false);
 
   const { data: items = [] } = useQuery({
     queryKey: ["items"],
-    queryFn: () => listItems() as Promise<Item[]>,
+    queryFn: async () =>
+      (
+        await supabase
+          .from("items")
+          .select(
+            "id,name,quantity,unit,acquisition_cost,inventory_classification,semi_expendable_tier",
+          )
+          .order("name")
+      ).data ?? [],
   });
 
   const { data: transactions = [] } = useQuery({
     queryKey: ["transactions", "forms-flow"],
-    queryFn: () => listTransactionsAsc() as Promise<Transaction[]>,
+    queryFn: async () =>
+      (
+        await supabase
+          .from("transactions")
+          .select(
+            "*, item:items(id,name,quantity,unit,acquisition_cost,inventory_classification,semi_expendable_tier)",
+          )
+          .order("created_at", { ascending: true })
+      ).data ?? [],
   });
 
-  const { data: personnelMemory = [] } = useQuery({
-    queryKey: ["form-personnel-memory"],
-    queryFn: () =>
-      listFormPersonnelMemory() as Promise<PersonnelMemory[]>,
-  });
-
-  const personnelOptions = useMemo(
-    () => groupPersonnelMemory(personnelMemory as PersonnelMemory[]),
-    [personnelMemory],
-  );
-
-  useEffect(() => {
-    if (initializedPersonnel.current || personnelMemory.length === 0) return;
-    initializedPersonnel.current = true;
-    const latest = groupPersonnelMemory(personnelMemory as PersonnelMemory[]);
-    setIar((current) => ({
-      ...current,
-      acceptedBy: latest.iar_accepted_by?.[0] || current.acceptedBy,
-    }));
-    setRis((current) => ({
-      ...current,
-      requestedBy: latest.ris_requested_by?.[0] || current.requestedBy,
-      approvedBy: latest.ris_approved_by?.[0] || current.approvedBy,
-      issuedBy: latest.ris_issued_by?.[0] || current.issuedBy,
-      receivedBy: latest.ris_received_by?.[0] || current.receivedBy,
-    }));
-  }, [personnelMemory]);
-
-  useEffect(() => {
-    if (initializedRisNumber.current) return;
-    initializedRisNumber.current = true;
-    void reserveNextRisNumber(today).then((risNo) => {
-      if (risNo) setRis((current) => ({ ...current, risNo }));
-    });
-  }, [today]);
-
-  const flowItems = useMemo(
-    () => items.filter((item) => itemMatchesPropertyFlow(item, propertyFlow)),
-    [items, propertyFlow],
-  );
   const acceptedStockItems = useMemo(
-    () => getAcceptedStockItems(flowItems, transactions),
-    [flowItems, transactions],
+    () => getAcceptedStockItems(items, transactions),
+    [items, transactions],
   );
   const stockCardItems = useMemo(
-    () => getStockCardItems(flowItems, transactions),
-    [flowItems, transactions],
+    () => getStockCardItems(items, transactions),
+    [items, transactions],
   );
   const selectedItem = stockCardItems.find(
     (item: Item) => item.id === (selectedItemId || stockCardItems[0]?.id),
@@ -306,10 +217,6 @@ function FormsFlow() {
   const rsmiRows = useMemo(
     () => getRsmiRows(transactions, reportMonth),
     [transactions, reportMonth],
-  );
-  const rpciRows = useMemo(
-    () => getRpciRows(items, transactions, reportYear, rpciEntries),
-    [items, transactions, reportYear, rpciEntries],
   );
   const flowStats = useMemo(
     () => getFlowStats(transactions, reportMonth, tab),
@@ -331,18 +238,36 @@ function FormsFlow() {
       return toast.error("Add at least one accepted item.");
 
     setSaving(true);
-    try {
-      const iarRecord = await createIarForm({ data: {
+    const { data: iarRecord, error: iarError } = await supabase
+      .from("iar_forms")
+      .insert({
         iar_no: iar.iarNo,
         supplier: iar.supplier || null,
         invoice_no: iar.invoiceNo || null,
         accepted_by: iar.acceptedBy || null,
         created_by: user?.id,
         created_by_name: userName,
-      } });
+      })
+      .select("id")
+      .single();
 
-      for (const line of validLines) {
-        const tx = await createTransaction({ data: {
+    if (iarError) {
+      if (isUniqueViolation(iarError)) {
+        const nextIarNo = makeFormNumber("IAR", today);
+        setIar({ ...iar, iarNo: nextIarNo });
+        setSaving(false);
+        return toast.error(
+          `IAR No. ${iar.iarNo} already exists. I prepared ${nextIarNo}; try posting again.`,
+        );
+      }
+      setSaving(false);
+      return toast.error(iarError.message);
+    }
+
+    for (const line of validLines) {
+      const { data: tx, error: txError } = await supabase
+        .from("transactions")
+        .insert({
           item_id: line.item_id,
           type: "IN",
           quantity: Number(line.quantity),
@@ -359,32 +284,30 @@ function FormsFlow() {
           ]
             .filter(Boolean)
             .join(" | "),
-        } });
+        })
+        .select("id")
+        .single();
 
-        await createIarItem({ data: {
+      if (txError) {
+        setSaving(false);
+        return toast.error(txError.message);
+      }
+
+      const { error: lineError } = await supabase.from("iar_items").insert({
         iar_id: iarRecord.id,
         item_id: line.item_id,
         quantity: Number(line.quantity),
         unit_cost: Number(line.unitCost || 0),
-        amount: Number(line.quantity) * Number(line.unitCost || 0),
         remarks: line.remarks || null,
         transaction_id: tx.id,
-        } });
-      }
-    } catch (error) {
-      if (isUniqueViolation(error as { code?: string; message?: string })) {
-        const nextIarNo = makeFormNumber("IAR", today);
-        setIar({ ...iar, iarNo: nextIarNo });
+      });
+
+      if (lineError) {
         setSaving(false);
-        return toast.error(
-          `IAR No. ${iar.iarNo} already exists. I prepared ${nextIarNo}; try posting again.`,
-        );
+        return toast.error(lineError.message);
       }
-      setSaving(false);
-      return toast.error(errorMessage(error));
     }
 
-    await rememberPersonnel("iar_accepted_by", iar.acceptedBy);
     setSaving(false);
     toast.success("IAR posted. Stock card receipts were added.");
     refreshFlow();
@@ -397,12 +320,10 @@ function FormsFlow() {
       invoiceNo: "",
     });
     setIarLines(Array.from({ length: 4 }, blankLine));
-    setTab(propertyFlow === "supplies" ? "stock-card" : "iar");
+    setTab("stock-card");
   }
 
   async function saveRis() {
-    if (ris.verificationStatus === "verified")
-      return toast.info("This RIS is already issued and verified. Reset to start a new RIS.");
     const validLines = risLines.filter(
       (line) => line.item_id && Number(line.quantity) > 0,
     );
@@ -427,9 +348,9 @@ function FormsFlow() {
     }
 
     setSaving(true);
-    let risRecord: any;
-    try {
-      risRecord = await createRisForm({ data: {
+    const { data: risRecord, error: risError } = await supabase
+      .from("ris_forms")
+      .insert({
         ris_no: ris.risNo,
         office: ris.office,
         purpose: ris.purpose || null,
@@ -437,20 +358,15 @@ function FormsFlow() {
         approved_by: ris.approvedBy || null,
         issued_by: ris.issuedBy || null,
         received_by: ris.receivedBy || null,
-        approved_date: ris.approvedDate || null,
-        issued_date: ris.issuedDate || null,
-        verification_token: ris.verificationToken,
-        verification_code: ris.verificationCode,
-        document_version: 1,
-        verification_status: "issued",
-        verification_published_at: new Date().toISOString(),
         created_by: user?.id,
         created_by_name: userName,
-      } });
-    } catch (error) {
-      if (isUniqueViolation(error as { code?: string; message?: string })) {
-        const nextRisNo =
-          (await reserveNextRisNumber(today)) || makeFormNumber("RIS", today);
+      })
+      .select("id")
+      .single();
+
+    if (risError) {
+      if (isUniqueViolation(risError)) {
+        const nextRisNo = makeFormNumber("RIS", today);
         setRis({ ...ris, risNo: nextRisNo });
         setSaving(false);
         return toast.error(
@@ -458,7 +374,7 @@ function FormsFlow() {
         );
       }
       setSaving(false);
-      return toast.error(errorMessage(error));
+      return toast.error(risError.message);
     }
 
     const issuedLines: Array<Line & { item?: Item }> = [];
@@ -468,8 +384,9 @@ function FormsFlow() {
         acceptedStockItems.find(
           (candidate: Item) => candidate.id === line.item_id,
         ) ?? items.find((candidate: Item) => candidate.id === line.item_id);
-      try {
-        const tx = await createTransaction({ data: {
+      const { data: tx, error: txError } = await supabase
+        .from("transactions")
+        .insert({
           item_id: line.item_id,
           type: "OUT",
           quantity: Number(line.quantity),
@@ -486,18 +403,26 @@ function FormsFlow() {
           ]
             .filter(Boolean)
             .join(" | "),
-        } });
+        })
+        .select("id")
+        .single();
 
-        await createRisItem({ data: {
+      if (txError) {
+        setSaving(false);
+        return toast.error(txError.message);
+      }
+
+      const { error: lineError } = await supabase.from("ris_items").insert({
         ris_id: risRecord.id,
         item_id: line.item_id,
         quantity: Number(line.quantity),
         remarks: line.remarks || null,
         transaction_id: tx.id,
-        } });
-      } catch (error) {
+      });
+
+      if (lineError) {
         setSaving(false);
-        return toast.error(errorMessage(error));
+        return toast.error(lineError.message);
       }
 
       issuedLines.push({ ...line, item });
@@ -518,24 +443,19 @@ function FormsFlow() {
       return toast.error(accountabilityError);
     }
 
-    await Promise.all([
-      rememberPersonnel("ris_requested_by", ris.requestedBy),
-      rememberPersonnel("ris_approved_by", ris.approvedBy),
-      rememberPersonnel("ris_issued_by", ris.issuedBy),
-      rememberPersonnel("ris_received_by", ris.receivedBy),
-    ]);
     setSaving(false);
-    toast.success("RIS issued. Authenticated QR verification is active.");
+    toast.success("RIS issued. Stock balances were deducted.");
     refreshFlow();
     setRis({
       ...ris,
-      verificationStatus: "verified",
-      issuedAt: new Date().toISOString(),
+      risNo: makeFormNumber("RIS", today),
+      purpose: "",
     });
-    setTab("ris");
+    setRisLines([blankLine()]);
+    setTab("rsmi");
   }
 
-  async function resetActiveForm() {
+  function resetActiveForm() {
     if (!window.confirm(`Clear the current ${activeStageLabel(tab)} input?`))
       return;
     if (tab === "iar") {
@@ -557,11 +477,8 @@ function FormsFlow() {
       });
       setIarLines(Array.from({ length: 4 }, blankLine));
     } else if (tab === "ris") {
-      const verification = createVerificationIdentity();
-      const nextRisNo =
-        (await reserveNextRisNumber(today)) || makeFormNumber("RIS", today);
       setRis({
-        risNo: nextRisNo,
+        risNo: makeFormNumber("RIS", today),
         office: "",
         purpose: "",
         requestedBy: FORM_DEFAULTS.requestedBy,
@@ -576,10 +493,6 @@ function FormsFlow() {
         approvedDate: today,
         issuedDate: today,
         receivedDate: today,
-        verificationToken: verification.token,
-        verificationCode: verification.code,
-        verificationStatus: "draft",
-        issuedAt: "",
       });
       setRisLines([blankLine()]);
     }
@@ -621,22 +534,15 @@ function FormsFlow() {
     <div>
       <PageHeader
         title="Forms Flow"
-        subtitle="Manage forms by inventory and property classification"
+        subtitle="Preview and encode IAR, Stock Card, RIS, and RSMI"
         actions={
           <>
-            <button
-              onClick={printActiveForm}
-              className="flow-header-btn"
-            >
+            <button onClick={printActiveForm} className="flow-header-btn">
               <Printer className="h-4 w-4" /> Print Form
             </button>
             <button
               onClick={resetActiveForm}
-              disabled={
-                tab === "stock-card" ||
-                tab === "rsmi" ||
-                tab === "rpci"
-              }
+              disabled={tab === "stock-card" || tab === "rsmi"}
               className="flow-header-btn"
             >
               <X className="h-4 w-4" /> Cancel
@@ -644,8 +550,7 @@ function FormsFlow() {
             <button
               onClick={saveActiveStage}
               disabled={
-                !canWrite || saving || tab === "stock-card" || tab === "rsmi" || tab === "rpci"
-                || (tab === "ris" && ris.verificationStatus === "verified")
+                !canWrite || saving || tab === "stock-card" || tab === "rsmi"
               }
               className="flow-header-primary"
             >
@@ -657,11 +562,7 @@ function FormsFlow() {
               {saving
                 ? "Saving..."
                 : tab === "ris"
-                  ? ris.verificationStatus === "verified"
-                    ? "RIS Verified"
-                    : ris.verificationStatus === "issued"
-                      ? "Verify RIS"
-                      : "Issue RIS"
+                  ? "Issue RIS"
                   : tab === "iar"
                     ? "Post IAR"
                     : "Generated"}
@@ -671,24 +572,7 @@ function FormsFlow() {
       />
 
       <div className="space-y-4 p-4 sm:p-6 lg:p-8">
-        <PropertyFlowSwitcher
-          active={propertyFlow}
-          onChange={(nextFlow) => {
-            setPropertyFlow(nextFlow);
-            setTab("iar");
-            setSelectedItemId("");
-          }}
-        />
-
-        {propertyFlow === "supplies" ? (
-          <WorkflowStepper active={tab} onChange={setTab} />
-        ) : (
-          <FoundationStepper
-            propertyFlow={propertyFlow}
-            active={tab === "ris" ? "ris" : "iar"}
-            onChange={setTab}
-          />
-        )}
+        <WorkflowStepper active={tab} onChange={setTab} />
 
         <div
           className={`flex flex-col gap-3 lg:flex-row lg:items-center ${
@@ -784,7 +668,7 @@ function FormsFlow() {
               {viewMode === "split" && (
                 <EntryPanel
                   tab={tab}
-                  inventoryItems={flowItems}
+                  inventoryItems={items}
                   risItems={acceptedStockItems}
                   stockCardItems={stockCardItems}
                   canWrite={canWrite}
@@ -801,13 +685,8 @@ function FormsFlow() {
                   setSelectedItemId={setSelectedItemId}
                   reportMonth={reportMonth}
                   setReportMonth={setReportMonth}
-                  reportYear={reportYear}
-                  setReportYear={setReportYear}
-                  rpciFundCluster={rpciFundCluster}
-                  setRpciFundCluster={setRpciFundCluster}
                   onSaveIar={saveIar}
                   onSaveRis={saveRis}
-                  personnelOptions={personnelOptions}
                 />
               )}
 
@@ -816,7 +695,7 @@ function FormsFlow() {
                 orientation={orientation}
                 zoom={zoom}
                 editable
-                inventoryItems={flowItems}
+                inventoryItems={items}
                 risItems={acceptedStockItems}
                 stockCardItems={stockCardItems}
                 iar={iar}
@@ -834,14 +713,6 @@ function FormsFlow() {
                 reportMonth={reportMonth}
                 setReportMonth={setReportMonth}
                 rsmiRows={rsmiRows}
-                reportYear={reportYear}
-                setReportYear={setReportYear}
-                rpciFundCluster={rpciFundCluster}
-                setRpciFundCluster={setRpciFundCluster}
-                rpciRows={rpciRows}
-                rpciEntries={rpciEntries}
-                setRpciEntries={setRpciEntries}
-                personnelOptions={personnelOptions}
               />
             </div>
           </main>
@@ -849,7 +720,7 @@ function FormsFlow() {
           <FlowSupportPanel
             placement={viewMode === "split" ? "bottom" : "side"}
             stats={flowStats}
-            inventoryItems={flowItems}
+            inventoryItems={items}
             transactions={transactions}
             reportMonth={reportMonth}
           />
@@ -857,186 +728,6 @@ function FormsFlow() {
       </div>
       <style>{flowStyles}</style>
     </div>
-  );
-}
-
-const PROPERTY_FLOWS: {
-  value: PropertyFlow;
-  label: string;
-  shortLabel: string;
-  detail: string;
-  icon: any;
-}[] = [
-  {
-    value: "supplies",
-    label: "Supplies & Materials",
-    shortLabel: "Supplies",
-    detail: "Consumable and expendable inventory",
-    icon: Boxes,
-  },
-  {
-    value: "semi-expendable",
-    label: "Semi-Expendable Property",
-    shortLabel: "Semi-Expendable",
-    detail: "Property below the PPE capitalization threshold",
-    icon: PackageCheck,
-  },
-  {
-    value: "ppe",
-    label: "Property, Plant & Equipment",
-    shortLabel: "PPE",
-    detail: "Capitalized property and equipment",
-    icon: Building2,
-  },
-];
-
-function PropertyFlowSwitcher({
-  active,
-  onChange,
-}: {
-  active: PropertyFlow;
-  onChange: (flow: PropertyFlow) => void;
-}) {
-  return (
-    <section className="rounded-xl border border-border bg-card p-2 shadow-sm">
-      <div className="grid gap-2 lg:grid-cols-3">
-        {PROPERTY_FLOWS.map((flow) => {
-          const Icon = flow.icon;
-          const isActive = active === flow.value;
-          return (
-            <button
-              key={flow.value}
-              type="button"
-              onClick={() => onChange(flow.value)}
-              aria-pressed={isActive}
-              className={`flex items-center gap-3 rounded-lg border px-4 py-3 text-left transition-colors ${
-                isActive
-                  ? "border-primary bg-primary text-primary-foreground shadow-sm"
-                  : "border-transparent hover:border-border hover:bg-accent"
-              }`}
-            >
-              <span
-                className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg ${
-                  isActive ? "bg-white/15" : "bg-muted text-foreground"
-                }`}
-              >
-                <Icon className="h-5 w-5" />
-              </span>
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold sm:hidden">
-                  {flow.shortLabel}
-                </span>
-                <span className="hidden text-sm font-semibold sm:block">
-                  {flow.label}
-                </span>
-                <span
-                  className={`mt-0.5 block truncate text-xs ${
-                    isActive
-                      ? "text-primary-foreground/75"
-                      : "text-muted-foreground"
-                  }`}
-                >
-                  {flow.detail}
-                </span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-function FoundationStepper({
-  propertyFlow,
-  active,
-  onChange,
-}: {
-  propertyFlow: Exclude<PropertyFlow, "supplies">;
-  active: "iar" | "ris";
-  onChange: (tab: FlowTab) => void;
-}) {
-  const isSemiExpendable = propertyFlow === "semi-expendable";
-  const title = isSemiExpendable
-    ? "Semi-Expendable Property"
-    : "Property, Plant & Equipment";
-  const stages = isSemiExpendable
-    ? [
-        { label: "IAR", detail: "Inspection and acceptance", tab: "iar" as const },
-        { label: "Semi-Expendable Property Card", detail: "Individual property ledger" },
-        { label: "RIS", detail: "Property issuance request", tab: "ris" as const },
-        { label: "ICS", detail: "Inventory Custodian Slip" },
-        { label: "Registry & Reports", detail: "Semi-expendable monitoring" },
-      ]
-    : [
-        { label: "IAR", detail: "Inspection and acceptance", tab: "iar" as const },
-        { label: "Property Card", detail: "Individual property ledger" },
-        { label: "RIS", detail: "Property issuance request", tab: "ris" as const },
-        { label: "PAR", detail: "Property Acknowledgment Receipt" },
-        { label: "RCPPE", detail: "Annual physical count report" },
-      ];
-
-  return (
-    <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-      <div className="border-b border-border bg-muted/35 px-4 py-3 sm:px-5">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-sm font-semibold">{title} Flow</h2>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              IAR and RIS are active. Remaining documents are prepared for future development.
-            </p>
-          </div>
-          <span className="w-fit rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
-            2 active forms
-          </span>
-        </div>
-      </div>
-
-      <div className="p-2">
-        <div className="grid gap-2 lg:grid-cols-5">
-          {stages.map((stage, index) => {
-            const enabled = Boolean(stage.tab);
-            const isActive = stage.tab === active;
-            return (
-            <button
-              key={stage.label}
-              type="button"
-              disabled={!enabled}
-              onClick={() => stage.tab && onChange(stage.tab)}
-              className={`relative rounded-lg border p-3 text-left transition-colors ${
-                isActive
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : enabled
-                    ? "border-border bg-background hover:bg-accent"
-                    : "cursor-not-allowed border-dashed border-border bg-muted/30 opacity-65"
-              }`}
-            >
-              <span className={`mb-2 grid h-7 w-7 place-items-center rounded-full text-xs font-bold ${
-                isActive ? "bg-white/15" : "bg-muted text-foreground"
-              }`}>
-                {index + 1}
-              </span>
-              <h3 className="text-sm font-semibold">{stage.label}</h3>
-              <p className={`mt-1 text-xs leading-5 ${
-                isActive ? "text-primary-foreground/75" : "text-muted-foreground"
-              }`}>
-                {stage.detail}
-              </p>
-              {!enabled && (
-                <span className="mt-2 inline-block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Coming next
-                </span>
-              )}
-              {index < stages.length - 1 && (
-                <span className="absolute -right-2.5 top-1/2 z-10 hidden h-5 w-5 place-items-center rounded-full border border-border bg-card text-xs text-muted-foreground lg:grid">
-                  →
-                </span>
-              )}
-            </button>
-          )})}
-        </div>
-      </div>
-    </section>
   );
 }
 
@@ -1068,16 +759,10 @@ function WorkflowStepper({
         detail: "Monthly report",
         icon: FileCheck2,
       },
-      {
-        value: "rpci",
-        label: "RPCI",
-        detail: "Annual physical count",
-        icon: FileSpreadsheet,
-      },
     ];
 
   return (
-    <div className="grid gap-2 rounded-lg border border-border bg-card p-2 md:grid-cols-5">
+    <div className="grid gap-2 rounded-lg border border-border bg-card p-2 md:grid-cols-4">
       {steps.map((step) => {
         const Icon = step.icon;
         const isActive = active === step.value;
@@ -1130,13 +815,8 @@ function EntryPanel({
   setSelectedItemId,
   reportMonth,
   setReportMonth,
-  reportYear,
-  setReportYear,
-  rpciFundCluster,
-  setRpciFundCluster,
   onSaveIar,
   onSaveRis,
-  personnelOptions,
 }: {
   tab: FlowTab;
   inventoryItems: Item[];
@@ -1156,13 +836,8 @@ function EntryPanel({
   setSelectedItemId: (id: string) => void;
   reportMonth: string;
   setReportMonth: (month: string) => void;
-  reportYear: string;
-  setReportYear: (year: string) => void;
-  rpciFundCluster: string;
-  setRpciFundCluster: (value: string) => void;
   onSaveIar: () => void;
   onSaveRis: () => void;
-  personnelOptions: Partial<Record<PersonnelRole, string[]>>;
 }) {
   if (tab === "iar") {
     return (
@@ -1198,12 +873,11 @@ function EntryPanel({
               />
             </FlowField>
             <FlowField label="Accepted By">
-              <PersonnelInput
+              <input
                 className="flow-input"
                 placeholder={FORM_DEFAULTS.custodian}
                 value={iar.acceptedBy}
-                options={personnelOptions.iar_accepted_by}
-                onChange={(value) => setIar({ ...iar, acceptedBy: value })}
+                onChange={(e) => setIar({ ...iar, acceptedBy: e.target.value })}
               />
             </FlowField>
           </div>
@@ -1215,7 +889,7 @@ function EntryPanel({
           />
           <FlowActions>
             <button
-              disabled={!canWrite || saving || ris.verificationStatus === "verified"}
+              disabled={!canWrite || saving}
               onClick={onSaveIar}
               className="flow-primary"
             >
@@ -1253,12 +927,13 @@ function EntryPanel({
               />
             </FlowField>
             <FlowField label="Requested By">
-              <PersonnelInput
+              <input
                 className="flow-input"
                 placeholder={FORM_DEFAULTS.requestedBy}
                 value={ris.requestedBy}
-                options={personnelOptions.ris_requested_by}
-                onChange={(value) => setRis({ ...ris, requestedBy: value })}
+                onChange={(e) =>
+                  setRis({ ...ris, requestedBy: e.target.value })
+                }
               />
             </FlowField>
             <FlowField label="Purpose">
@@ -1270,30 +945,27 @@ function EntryPanel({
               />
             </FlowField>
             <FlowField label="Approved By">
-              <PersonnelInput
+              <input
                 className="flow-input"
                 placeholder={FORM_DEFAULTS.approvedBy}
                 value={ris.approvedBy}
-                options={personnelOptions.ris_approved_by}
-                onChange={(value) => setRis({ ...ris, approvedBy: value })}
+                onChange={(e) => setRis({ ...ris, approvedBy: e.target.value })}
               />
             </FlowField>
             <FlowField label="Issued By">
-              <PersonnelInput
+              <input
                 className="flow-input"
                 placeholder={FORM_DEFAULTS.issuedBy}
                 value={ris.issuedBy}
-                options={personnelOptions.ris_issued_by}
-                onChange={(value) => setRis({ ...ris, issuedBy: value })}
+                onChange={(e) => setRis({ ...ris, issuedBy: e.target.value })}
               />
             </FlowField>
             <FlowField label="Received By">
-              <PersonnelInput
+              <input
                 className="flow-input"
                 placeholder={FORM_DEFAULTS.receivedBy}
                 value={ris.receivedBy}
-                options={personnelOptions.ris_received_by}
-                onChange={(value) => setRis({ ...ris, receivedBy: value })}
+                onChange={(e) => setRis({ ...ris, receivedBy: e.target.value })}
               />
             </FlowField>
           </div>
@@ -1309,14 +981,7 @@ function EntryPanel({
               onClick={onSaveRis}
               className="flow-primary"
             >
-              <Send className="h-4 w-4" />{" "}
-              {saving
-                ? "Issuing..."
-                : ris.verificationStatus === "verified"
-                  ? "RIS Verified"
-                  : ris.verificationStatus === "issued"
-                    ? "Verify RIS"
-                    : "Issue RIS"}
+              <Send className="h-4 w-4" /> {saving ? "Issuing..." : "Issue RIS"}
             </button>
           </FlowActions>
         </div>
@@ -1333,20 +998,24 @@ function EntryPanel({
         />
         <div className="p-4">
           <FlowField label="Item">
-            <ItemLookup
-              items={stockCardItems}
-              value={selectedItemId}
-              onChange={setSelectedItemId}
+            <select
               className="flow-input"
-              placeholder="Type any word from the item name or description"
-            />
+              value={selectedItemId}
+              onChange={(e) => setSelectedItemId(e.target.value)}
+            >
+              {stockCardItems.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
           </FlowField>
         </div>
       </section>
     );
   }
 
-  if (tab === "rsmi") return (
+  return (
     <section className="rounded-lg border border-border bg-card">
       <FormTitle
         title="RSMI Options"
@@ -1359,35 +1028,6 @@ function EntryPanel({
             type="month"
             value={reportMonth}
             onChange={(e) => setReportMonth(e.target.value)}
-          />
-        </FlowField>
-      </div>
-    </section>
-  );
-
-  return (
-    <section className="rounded-lg border border-border bg-card">
-      <FormTitle
-        title="RPCI Options"
-        subtitle="Generate the annual Appendix 66 physical count for supplies."
-      />
-      <div className="grid gap-3 p-4 sm:grid-cols-2">
-        <FlowField label="Report Year">
-          <input
-            className="flow-input"
-            type="number"
-            min="2000"
-            max="2100"
-            value={reportYear}
-            onChange={(event) => setReportYear(event.target.value)}
-          />
-        </FlowField>
-        <FlowField label="Fund Cluster">
-          <input
-            className="flow-input"
-            value={rpciFundCluster}
-            placeholder="e.g. 06-SSP or 01-MOOE"
-            onChange={(event) => setRpciFundCluster(event.target.value)}
           />
         </FlowField>
       </div>
@@ -1418,14 +1058,6 @@ function PaperPreview({
   reportMonth,
   setReportMonth,
   rsmiRows,
-  reportYear,
-  setReportYear,
-  rpciFundCluster,
-  setRpciFundCluster,
-  rpciRows,
-  rpciEntries,
-  setRpciEntries,
-  personnelOptions,
 }: {
   tab: FlowTab;
   orientation: Orientation;
@@ -1449,14 +1081,6 @@ function PaperPreview({
   reportMonth: string;
   setReportMonth: (month: string) => void;
   rsmiRows: RsmiRow[];
-  reportYear: string;
-  setReportYear: (year: string) => void;
-  rpciFundCluster: string;
-  setRpciFundCluster: (value: string) => void;
-  rpciRows: RpciRow[];
-  rpciEntries: Record<string, RpciEntry>;
-  setRpciEntries: (entries: Record<string, RpciEntry>) => void;
-  personnelOptions: Partial<Record<PersonnelRole, string[]>>;
 }) {
   return (
     <section className="flow-preview-shell">
@@ -1474,7 +1098,6 @@ function PaperPreview({
               lines={iarLines}
               onLines={setIarLines}
               editable={editable}
-              personnelOptions={personnelOptions}
             />
           )}
           {tab === "stock-card" && (
@@ -1497,7 +1120,6 @@ function PaperPreview({
               lines={risLines}
               onLines={setRisLines}
               editable={editable}
-              personnelOptions={personnelOptions}
             />
           )}
           {tab === "rsmi" && (
@@ -1506,19 +1128,6 @@ function PaperPreview({
               reportMonth={reportMonth}
               onReportMonth={setReportMonth}
               rows={rsmiRows}
-              editable={editable}
-            />
-          )}
-          {tab === "rpci" && (
-            <RpciPaper
-              orientation={orientation}
-              reportYear={reportYear}
-              onReportYear={setReportYear}
-              fundCluster={rpciFundCluster}
-              onFundCluster={setRpciFundCluster}
-              rows={rpciRows}
-              entries={rpciEntries}
-              onEntries={setRpciEntries}
               editable={editable}
             />
           )}
@@ -1536,7 +1145,6 @@ function IarPaper({
   lines,
   onLines,
   editable,
-  personnelOptions,
 }: {
   orientation: Orientation;
   items: Item[];
@@ -1545,7 +1153,6 @@ function IarPaper({
   lines: Line[];
   onLines: (lines: Line[]) => void;
   editable: boolean;
-  personnelOptions: Partial<Record<PersonnelRole, string[]>>;
 }) {
   const validLines = getPreviewLines(items, lines);
   const displayCount = Math.max(6, lines.length);
@@ -1757,16 +1364,22 @@ function IarPaper({
                 <td>{String(index + 1).padStart(3, "0")}</td>
                 <td>
                   {editable ? (
-                    <ItemLookup
-                      items={items}
+                    <select
                       className="paper-cell-control"
                       value={sourceLine?.item_id || ""}
-                      onChange={(itemId) =>
-                        updateLineAt(index, { item_id: itemId })
+                      onChange={(e) =>
+                        updateLineAt(index, { item_id: e.target.value })
                       }
-                    />
+                    >
+                      <option value="">Select item...</option>
+                      {items.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
                   ) : (
-                    itemDescription(previewLine?.item)
+                    previewLine?.item?.name || ""
                   )}
                 </td>
                 <td>{previewLine?.item?.unit || ""}</td>
@@ -1878,13 +1491,12 @@ function IarPaper({
             </td>
             <td className="center strong">
               {editable ? (
-                <PersonnelInput
+                <input
                   className="paper-cell-control center strong"
                   placeholder={FORM_DEFAULTS.custodian}
                   value={form.acceptedBy}
-                  options={personnelOptions.iar_accepted_by}
-                  onChange={(value) =>
-                    onForm({ ...form, acceptedBy: value })
+                  onChange={(event) =>
+                    onForm({ ...form, acceptedBy: event.target.value })
                   }
                 />
               ) : (
@@ -1939,12 +1551,17 @@ function StockCardPaper({
             <td>
               <strong>Item :</strong>{" "}
               {editable ? (
-                <ItemLookup
-                  items={items}
+                <select
                   className="paper-inline-control strong"
                   value={selectedItemId}
-                  onChange={onSelectedItemId}
-                />
+                  onChange={(event) => onSelectedItemId(event.target.value)}
+                >
+                  {items.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.name}
+                    </option>
+                  ))}
+                </select>
               ) : (
                 <span className="strong">{item?.name || ""}</span>
               )}
@@ -1960,7 +1577,7 @@ function StockCardPaper({
           <tr>
             <td colSpan={2}>
               <strong>Description :</strong>{" "}
-              <span className="strong">{itemDescription(item)}</span>
+              <span className="strong">{item?.name || ""}</span>
             </td>
             <td>
               <strong>Unit of Measurement :</strong>{" "}
@@ -2018,7 +1635,6 @@ function RisPaper({
   lines,
   onLines,
   editable,
-  personnelOptions,
 }: {
   orientation: Orientation;
   items: Item[];
@@ -2027,7 +1643,6 @@ function RisPaper({
   lines: Line[];
   onLines: (lines: Line[]) => void;
   editable: boolean;
-  personnelOptions: Partial<Record<PersonnelRole, string[]>>;
 }) {
   const validLines = getPreviewLines(items, lines);
   const displayLines = editable
@@ -2157,16 +1772,22 @@ function RisPaper({
                 <td>{previewLine?.item?.unit || ""}</td>
                 <td>
                   {editable && sourceLine ? (
-                    <ItemLookup
-                      items={items}
+                    <select
                       className="paper-cell-control"
                       value={sourceLine.item_id}
-                      onChange={(itemId) =>
-                        updateLine(sourceLine.id, { item_id: itemId })
+                      onChange={(e) =>
+                        updateLine(sourceLine.id, { item_id: e.target.value })
                       }
-                    />
+                    >
+                      <option value="">Select item...</option>
+                      {items.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
                   ) : (
-                    itemDescription(previewLine?.item)
+                    previewLine?.item?.name || ""
                   )}
                 </td>
                 <td className="right">
@@ -2258,13 +1879,12 @@ function RisPaper({
             <td>Printed Name</td>
             <td>
               {editable ? (
-                <PersonnelInput
+                <input
                   className="paper-cell-control center"
                   placeholder={FORM_DEFAULTS.requestedBy}
                   value={form.requestedBy}
-                  options={personnelOptions.ris_requested_by}
-                  onChange={(value) =>
-                    onForm({ ...form, requestedBy: value })
+                  onChange={(e) =>
+                    onForm({ ...form, requestedBy: e.target.value })
                   }
                 />
               ) : (
@@ -2273,13 +1893,12 @@ function RisPaper({
             </td>
             <td>
               {editable ? (
-                <PersonnelInput
+                <input
                   className="paper-cell-control center"
                   placeholder={FORM_DEFAULTS.approvedBy}
                   value={form.approvedBy}
-                  options={personnelOptions.ris_approved_by}
-                  onChange={(value) =>
-                    onForm({ ...form, approvedBy: value })
+                  onChange={(e) =>
+                    onForm({ ...form, approvedBy: e.target.value })
                   }
                 />
               ) : (
@@ -2288,13 +1907,12 @@ function RisPaper({
             </td>
             <td>
               {editable ? (
-                <PersonnelInput
+                <input
                   className="paper-cell-control center"
                   placeholder={FORM_DEFAULTS.issuedBy}
                   value={form.issuedBy}
-                  options={personnelOptions.ris_issued_by}
-                  onChange={(value) =>
-                    onForm({ ...form, issuedBy: value })
+                  onChange={(e) =>
+                    onForm({ ...form, issuedBy: e.target.value })
                   }
                 />
               ) : (
@@ -2303,13 +1921,12 @@ function RisPaper({
             </td>
             <td>
               {editable ? (
-                <PersonnelInput
+                <input
                   className="paper-cell-control center"
                   placeholder={FORM_DEFAULTS.receivedBy}
                   value={form.receivedBy}
-                  options={personnelOptions.ris_received_by}
-                  onChange={(value) =>
-                    onForm({ ...form, receivedBy: value })
+                  onChange={(e) =>
+                    onForm({ ...form, receivedBy: e.target.value })
                   }
                 />
               ) : (
@@ -2437,53 +2054,6 @@ function RisPaper({
           </tr>
         </tbody>
       </table>
-      <RisVerificationReceipt form={form} />
-    </div>
-  );
-}
-
-function RisVerificationReceipt({ form }: { form: RisState }) {
-  const [qrDataUrl, setQrDataUrl] = useState("");
-  const url = verificationUrl(form.verificationToken);
-
-  useEffect(() => {
-    let active = true;
-    void QRCode.toDataURL(url, {
-      width: 180,
-      margin: 1,
-      errorCorrectionLevel: "M",
-    }).then((dataUrl) => {
-      if (active) setQrDataUrl(dataUrl);
-    });
-    return () => {
-      active = false;
-    };
-  }, [url]);
-
-  return (
-    <div className="ris-verification-receipt">
-      <div className="ris-verification-copy">
-        <div className="strong">
-          {form.verificationStatus === "verified"
-            ? "PUBLIC VERIFICATION ACTIVE"
-            : "VERIFICATION ACTIVATES WHEN ISSUED"}
-        </div>
-        <div>
-          Scan this QR code to confirm this RIS through the official Supplify
-          verification page. An authorized account is required.
-        </div>
-        <div className="strong">
-          Verification Code: {form.verificationCode}
-        </div>
-        <div>Document Version: 1</div>
-      </div>
-      {qrDataUrl && (
-        <img
-          className="ris-verification-qr"
-          src={qrDataUrl}
-          alt={`Verification QR for ${form.risNo}`}
-        />
-      )}
     </div>
   );
 }
@@ -2620,125 +2190,6 @@ function RsmiPaper({
   );
 }
 
-function RpciPaper({
-  orientation,
-  reportYear,
-  onReportYear,
-  fundCluster,
-  onFundCluster,
-  rows,
-  entries,
-  onEntries,
-  editable,
-}: {
-  orientation: Orientation;
-  reportYear: string;
-  onReportYear: (year: string) => void;
-  fundCluster: string;
-  onFundCluster: (value: string) => void;
-  rows: RpciRow[];
-  entries: Record<string, RpciEntry>;
-  onEntries: (entries: Record<string, RpciEntry>) => void;
-  editable: boolean;
-}) {
-  function updateEntry(id: string, patch: Partial<RpciEntry>) {
-    onEntries({
-      ...entries,
-      [id]: {
-        onHand: entries[id]?.onHand ?? "",
-        remarks: entries[id]?.remarks ?? "",
-        ...patch,
-      },
-    });
-  }
-
-  return (
-    <div className={`flow-paper ${orientation} rpci-paper official-paper`}>
-      <div className="center strong text-[15px]">REPORT ON THE PHYSICAL COUNT OF INVENTORIES</div>
-      <div className="center strong mt-1">Common-use Supplies and Equipment</div>
-      <div className="center text-[9px]">(Type of Inventory Item)</div>
-      <div className="center strong mt-1">
-        As at December 31,{" "}
-        {editable ? (
-          <input className="paper-inline-control strong center" type="number" value={reportYear} onChange={(event) => onReportYear(event.target.value)} />
-        ) : reportYear}
-      </div>
-      <div className="mt-3 text-[10px]">
-        Fund Cluster:{" "}
-        {editable ? (
-          <input className="paper-inline-control strong" value={fundCluster} onChange={(event) => onFundCluster(event.target.value)} />
-        ) : <span className="strong">{fundCluster}</span>}
-      </div>
-      <div className="mt-2 text-[9px]">
-        For which <span className="strong">{FORM_DEFAULTS.custodian}</span>, Provincial Training Center - Davao del Norte, is accountable.
-      </div>
-
-      <table className="paper-grid rpci-grid mt-3">
-        <thead>
-          <tr>
-            <th rowSpan={2}>Article</th>
-            <th rowSpan={2}>Description</th>
-            <th rowSpan={2}>Stock Number</th>
-            <th rowSpan={2}>Unit of Measure</th>
-            <th rowSpan={2}>Unit Value</th>
-            <th rowSpan={2}>Balance Per Card<br />(Quantity)</th>
-            <th rowSpan={2}>On Hand Per Count<br />(Quantity)</th>
-            <th colSpan={2}>Shortage / Overage</th>
-            <th rowSpan={2}>Remarks</th>
-          </tr>
-          <tr><th>Quantity</th><th>Value</th></tr>
-        </thead>
-        <tbody>
-          {padRows(rows, 18).map((row, index) => (
-            <tr key={row?.id || index}>
-              <td>{row?.article || ""}</td>
-              <td>{row?.description || ""}</td>
-              <td className="center">{row?.stockNo || ""}</td>
-              <td className="center">{row?.unit || ""}</td>
-              <td className="right">{row ? peso(row.unitValue) : ""}</td>
-              <td className="right">{row?.cardBalance ?? ""}</td>
-              <td className="right">
-                {row && editable ? (
-                  <input
-                    className="paper-cell-control right"
-                    type="number"
-                    min="0"
-                    value={entries[row.id]?.onHand ?? String(row.cardBalance)}
-                    onChange={(event) => updateEntry(row.id, { onHand: event.target.value })}
-                  />
-                ) : row?.onHand ?? ""}
-              </td>
-              <td className="right">{row && row.varianceQuantity !== 0 ? row.varianceQuantity : ""}</td>
-              <td className="right">{row && row.varianceValue !== 0 ? peso(row.varianceValue) : ""}</td>
-              <td>
-                {row && editable ? (
-                  <input className="paper-cell-control" value={entries[row.id]?.remarks ?? ""} onChange={(event) => updateEntry(row.id, { remarks: event.target.value })} />
-                ) : row?.remarks || ""}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <div className="rpci-signatures">
-        <RpcSignatory label="Certified Correct by:" name={FORM_DEFAULTS.custodian} detail="Inventory Committee Chair and Members" />
-        <RpcSignatory label="Approved by:" name={FORM_DEFAULTS.approvedBy} detail="Head of Agency/Authorized Representative" />
-        <RpcSignatory label="Verified by:" name="" detail="COA Representative" />
-      </div>
-    </div>
-  );
-}
-
-function RpcSignatory({ label, name, detail }: { label: string; name: string; detail: string }) {
-  return (
-    <div>
-      <div className="text-left text-[9px]">{label}</div>
-      <div className="mt-8 border-b border-black pb-1 center strong">{name}</div>
-      <div className="mt-1 center text-[8px]">{detail}</div>
-    </div>
-  );
-}
-
 function LineEditor({
   items,
   lines,
@@ -2790,15 +2241,20 @@ function LineEditor({
             return (
               <tr key={line.id}>
                 <td>
-                  <ItemLookup
-                    items={items}
+                  <select
                     className="flow-input"
                     value={line.item_id}
-                    onChange={(itemId) =>
-                      updateLine(line.id, { item_id: itemId })
+                    onChange={(e) =>
+                      updateLine(line.id, { item_id: e.target.value })
                     }
-                    placeholder="Type item name or description"
-                  />
+                  >
+                    <option value="">Select item...</option>
+                    {items.map((candidate) => (
+                      <option key={candidate.id} value={candidate.id}>
+                        {candidate.name}
+                      </option>
+                    ))}
+                  </select>
                 </td>
                 <td className="text-right tabular-nums">
                   {item ? `${item.quantity} ${item.unit}` : "-"}
@@ -3158,100 +2614,6 @@ function FlowActions({ children }: { children: React.ReactNode }) {
   );
 }
 
-function ItemLookup({
-  items,
-  value,
-  onChange,
-  className,
-  placeholder = "Type item name or description",
-}: {
-  items: Item[];
-  value: string;
-  onChange: (itemId: string) => void;
-  className: string;
-  placeholder?: string;
-}) {
-  const listId = useRef(`item-lookup-${createId()}`).current;
-  const selected = items.find((item) => item.id === value);
-  const [text, setText] = useState(() => itemLabel(selected));
-
-  useEffect(() => {
-    setText(itemLabel(items.find((item) => item.id === value)));
-  }, [items, value]);
-
-  function handleText(next: string) {
-    setText(next);
-    const normalized = next.trim().toLocaleLowerCase();
-    const exact = items.find(
-      (item) =>
-        itemLabel(item).toLocaleLowerCase() === normalized ||
-        item.name.toLocaleLowerCase() === normalized,
-    );
-    if (exact) onChange(exact.id);
-    else if (!normalized) onChange("");
-  }
-
-  const words = text
-    .toLocaleLowerCase()
-    .split(/\s+/)
-    .filter(Boolean);
-  const matches = items.filter((item) => {
-    const searchable = `${item.name} ${item.description || ""}`.toLocaleLowerCase();
-    return words.length === 0 || words.every((word) => searchable.includes(word));
-  });
-
-  return (
-    <>
-      <input
-        className={className}
-        list={listId}
-        value={text}
-        placeholder={placeholder}
-        onChange={(event) => handleText(event.target.value)}
-        autoComplete="off"
-      />
-      <datalist id={listId}>
-        {matches.map((item) => (
-          <option key={item.id} value={itemLabel(item)} />
-        ))}
-      </datalist>
-    </>
-  );
-}
-
-function PersonnelInput({
-  value,
-  onChange,
-  options = [],
-  className,
-  placeholder,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  options?: string[];
-  className: string;
-  placeholder: string;
-}) {
-  const listId = useRef(`personnel-${createId()}`).current;
-  return (
-    <>
-      <input
-        className={className}
-        list={listId}
-        value={value}
-        placeholder={placeholder}
-        autoComplete="off"
-        onChange={(event) => onChange(event.target.value)}
-      />
-      <datalist id={listId}>
-        {options.map((name) => (
-          <option key={name} value={name} />
-        ))}
-      </datalist>
-    </>
-  );
-}
-
 function normalizePrintControls(root: HTMLElement) {
   root.querySelectorAll("select").forEach((select) => {
     const selectedText = select.value
@@ -3285,7 +2647,6 @@ function blankLine(): Line {
 }
 
 function makeFormNumber(prefix: "IAR" | "RIS", date: string) {
-  if (prefix === "RIS") return `${date}-0000001`;
   const now = new Date();
   const timePart = [
     now.getHours(),
@@ -3296,76 +2657,6 @@ function makeFormNumber(prefix: "IAR" | "RIS", date: string) {
     .map((part, index) => String(part).padStart(index === 3 ? 3 : 2, "0"))
     .join("");
   return `${prefix}-${date}-${timePart}`;
-}
-
-async function reserveNextRisNumber(date: string) {
-  try {
-    return await reserveNextFormNumber({
-      data: { prefix: "RIS", date },
-    });
-  } catch (error) {
-    console.error("Unable to reserve RIS number:", errorMessage(error));
-    return "";
-  }
-}
-
-async function rememberPersonnel(role: PersonnelRole, personName: string) {
-  const person_name = personName.trim();
-  if (!person_name) return;
-  try {
-    await rememberFormPersonnel({ data: { role, person_name } });
-  } catch (error) {
-    console.error("Unable to remember form personnel:", errorMessage(error));
-  }
-}
-
-function createVerificationIdentity() {
-  const bytes = new Uint8Array(32);
-  if (typeof crypto !== "undefined") crypto.getRandomValues(bytes);
-  else
-    for (let index = 0; index < bytes.length; index += 1)
-      bytes[index] = Math.floor(Math.random() * 256);
-  const token = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-  const code = token.slice(0, 8).toUpperCase().match(/.{1,4}/g)?.join("-") || "";
-  return { token, code };
-}
-
-function verificationUrl(token: string) {
-  const origin =
-    typeof window !== "undefined"
-      ? window.location.origin
-      : "http://localhost:3000";
-  return `${origin}/verify/ris/${encodeURIComponent(token)}`;
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "Database operation failed.";
-}
-
-function dateKey(value: string | Date) {
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 7);
-}
-
-function groupPersonnelMemory(rows: PersonnelMemory[]) {
-  const grouped: Partial<Record<PersonnelRole, string[]>> = {};
-  for (const row of rows) {
-    const names = grouped[row.role] || [];
-    if (!names.includes(row.person_name)) names.push(row.person_name);
-    grouped[row.role] = names;
-  }
-  return grouped;
-}
-
-function itemDescription(item?: Item | null) {
-  return item?.description?.trim() || item?.name || "";
-}
-
-function itemLabel(item?: Item | null) {
-  if (!item) return "";
-  return item.description?.trim()
-    ? `${item.name} — ${item.description.trim()}`
-    : item.name;
 }
 
 function isUniqueViolation(error: { code?: string; message?: string }) {
@@ -3504,7 +2795,7 @@ function getFlowStats(
         (tx) =>
           tx.type === "OUT" &&
           isRisTransaction(tx) &&
-          dateKey(tx.created_at) === reportMonth,
+          tx.created_at.slice(0, 7) === reportMonth,
       )
       .reduce((sum, tx) => sum + tx.quantity, 0),
   };
@@ -3514,21 +2805,7 @@ function activeStageLabel(tab: FlowTab) {
   if (tab === "iar") return "IAR";
   if (tab === "stock-card") return "Stock Card";
   if (tab === "ris") return "RIS";
-  if (tab === "rpci") return "RPCI";
   return "RSMI";
-}
-
-function itemMatchesPropertyFlow(item: Item, flow: PropertyFlow) {
-  if (flow === "semi-expendable") {
-    return item.inventory_classification === "semi_expendable_property";
-  }
-  if (flow === "ppe") {
-    return item.inventory_classification === "ppe";
-  }
-  return (
-    !item.inventory_classification ||
-    item.inventory_classification === "expendable_supply"
-  );
 }
 
 function getRsmiRows(
@@ -3540,7 +2817,7 @@ function getRsmiRows(
       (tx) =>
         tx.type === "OUT" &&
         isRisTransaction(tx) &&
-        dateKey(tx.created_at) === reportMonth,
+        tx.created_at.slice(0, 7) === reportMonth,
     )
     .map((tx) => {
       const unitCost =
@@ -3557,72 +2834,6 @@ function getRsmiRows(
         amount: tx.quantity * unitCost,
       };
     });
-}
-
-function getRpciRows(
-  items: Item[],
-  transactions: Transaction[],
-  reportYear: string,
-  entries: Record<string, RpciEntry>,
-): RpciRow[] {
-  const year = Number(reportYear);
-  const yearEnd = new Date(`${year || new Date().getFullYear()}-12-31T23:59:59.999`);
-  return items
-    .filter(
-      (item) =>
-        item.item_type === "supply" ||
-        item.inventory_classification === "expendable_supply",
-    )
-    .map((item) => {
-      const movementsAfterYear = transactions
-        .filter(
-          (transaction) =>
-            transaction.item_id === item.id &&
-            new Date(transaction.created_at).getTime() > yearEnd.getTime(),
-        )
-        .reduce(
-          (sum, transaction) =>
-            sum +
-            (transaction.type === "IN"
-              ? Number(transaction.quantity)
-              : -Number(transaction.quantity)),
-          0,
-        );
-      const cardBalance = Number(item.quantity) - movementsAfterYear;
-      const entry = entries[item.id];
-      const onHand =
-        entry?.onHand === undefined || entry.onHand === ""
-          ? cardBalance
-          : Number(entry.onHand);
-      const varianceQuantity = onHand - cardBalance;
-      const receiptCost = [...transactions]
-        .reverse()
-        .find(
-          (transaction) =>
-            transaction.item_id === item.id &&
-            transaction.type === "IN" &&
-            new Date(transaction.created_at).getTime() <= yearEnd.getTime() &&
-            extractUnitCost(transaction.remarks) > 0,
-        );
-      const unitValue =
-        (receiptCost ? extractUnitCost(receiptCost.remarks) : 0) ||
-        Number(item.acquisition_cost || 0);
-      return {
-        id: item.id,
-        article: item.name,
-        description: item.description || "",
-        stockNo: item.id.slice(0, 8).toUpperCase(),
-        unit: item.unit.toUpperCase(),
-        unitValue,
-        cardBalance,
-        onHand,
-        varianceQuantity,
-        varianceValue: varianceQuantity * unitValue,
-        remarks: entry?.remarks || "",
-      };
-    })
-    .filter((row) => row.cardBalance !== 0 || row.onHand !== 0)
-    .sort((a, b) => a.article.localeCompare(b.article));
 }
 
 async function createAccountabilityDocuments({
@@ -3651,51 +2862,61 @@ async function createAccountabilityDocuments({
   );
 
   if (semiExpendable.length > 0) {
-    try {
-      const ics = await createIcsForm({ data: {
+    const { data: ics, error } = await supabase
+      .from("ics_forms")
+      .insert({
         ics_no: `ICS-${risNo}`,
         ris_id: risId,
         custodian_name: custodian,
         office,
         created_by: userId,
         created_by_name: userName,
-      } });
-      for (const line of semiExpendable) {
-        await createIcsItem({ data: {
-          ics_id: ics.id,
-          item_id: line.item_id,
-          quantity: Number(line.quantity),
-          unit_cost: Number(line.item?.acquisition_cost || 0),
-          remarks: line.remarks || null,
-        } });
-      }
-    } catch (error) {
-      return errorMessage(error);
-    }
+      })
+      .select("id")
+      .single();
+
+    if (error) return error.message;
+
+    const { error: itemError } = await supabase.from("ics_items").insert(
+      semiExpendable.map((line) => ({
+        ics_id: ics.id,
+        item_id: line.item_id,
+        quantity: Number(line.quantity),
+        unit_cost: Number(line.item?.acquisition_cost || 0),
+        remarks: line.remarks || null,
+      })),
+    );
+
+    if (itemError) return itemError.message;
   }
 
   if (ppe.length > 0) {
-    try {
-      const par = await createParForm({ data: {
+    const { data: par, error } = await supabase
+      .from("par_forms")
+      .insert({
         par_no: `PAR-${risNo}`,
         ris_id: risId,
         accountable_person: custodian,
         office,
         created_by: userId,
         created_by_name: userName,
-      } });
-      for (const line of ppe) {
-        await createParItem({ data: {
-          par_id: par.id,
-          item_id: line.item_id,
-          quantity: Number(line.quantity),
-          unit_cost: Number(line.item?.acquisition_cost || 0),
-          remarks: line.remarks || null,
-        } });
-      }
-    } catch (error) {
-      return errorMessage(error);
-    }
+      })
+      .select("id")
+      .single();
+
+    if (error) return error.message;
+
+    const { error: itemError } = await supabase.from("par_items").insert(
+      ppe.map((line) => ({
+        par_id: par.id,
+        item_id: line.item_id,
+        quantity: Number(line.quantity),
+        unit_cost: Number(line.item?.acquisition_cost || 0),
+        remarks: line.remarks || null,
+      })),
+    );
+
+    if (itemError) return itemError.message;
   }
 
   return null;
@@ -3891,20 +3112,6 @@ const flowStyles = `
 .signature-table{width:100%;border-collapse:collapse;font-size:10px}
 .signature-table td{border:1px solid #111;padding:5px;text-align:center;height:30px}
 .signature-table td:first-child{width:110px;text-align:left;font-weight:800}
-.ris-verification-receipt{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:12px;border:1.5px solid #111;padding:9px 12px;font-size:9px;line-height:1.45}
-.ris-verification-copy{display:grid;gap:3px}
-.ris-verification-qr{width:74px;height:74px;object-fit:contain;image-rendering:crisp-edges}
-.rpci-paper{font-size:9px}
-.rpci-grid{table-layout:fixed}
-.rpci-grid th,.rpci-grid td{padding:3px;font-size:7.5px;line-height:1.2}
-.rpci-grid th:nth-child(1){width:14%}
-.rpci-grid th:nth-child(2){width:15%}
-.rpci-grid th:nth-child(3){width:9%}
-.rpci-grid th:nth-child(4){width:8%}
-.rpci-grid th:nth-child(5){width:9%}
-.rpci-grid th:nth-child(6),.rpci-grid th:nth-child(7){width:8%}
-.rpci-grid th:nth-child(10){width:10%}
-.rpci-signatures{display:grid;grid-template-columns:repeat(3,1fr);gap:28px;margin-top:16px}
 @media (max-width: 760px){
   .flow-preview-bg{padding:8px}
   .flow-paper{padding:10px}

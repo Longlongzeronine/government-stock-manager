@@ -1,22 +1,16 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { listItems, listCategories, listSuppliers, createItem, updateItem, deleteItem } from "@/lib/data.functions";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { StatusBadge } from "@/components/common/StatusBadge";
 import { MobileCard, MobileCardRow } from "@/components/common/MobileCard";
-import { ChevronDown, Plus, ScanLine, Search, Pencil, Trash2, Download, FileText, FileSpreadsheet } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, Download, FileText, FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
 import { exportCSV, exportPDF, exportXLSX } from "@/lib/export";
 import { format } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
-
-const InventoryScanner = lazy(() =>
-  import("./scanner").then((module) => ({
-    default: module.InventoryScanner,
-  })),
-);
 
 export const Route = createFileRoute("/_app/inventory")({
   head: () => ({ meta: [{ title: "Inventory — Supplify" }] }),
@@ -38,7 +32,6 @@ function Inventory() {
   const pageSize = 15;
   const [editing, setEditing] = useState<any | null>(null);
   const [open, setOpen] = useState(false);
-  const [scannerOpen, setScannerOpen] = useState(false);
 
   useEffect(() => {
     if (!searchParams.add || !isAdmin) return;
@@ -127,46 +120,6 @@ function Inventory() {
         }
       />
       <div className="p-4 sm:p-6 lg:p-8 space-y-4">
-        <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-          <button
-            type="button"
-            onClick={() => setScannerOpen((current) => !current)}
-            className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-muted/40 sm:p-5"
-            aria-expanded={scannerOpen}
-          >
-            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
-              <ScanLine className="h-5 w-5" />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block font-semibold">Scan &amp; Inventory Labels</span>
-              <span className="mt-0.5 block text-sm text-muted-foreground">
-                Scan QR or barcodes, look up records, and print item labels.
-              </span>
-            </span>
-            <span className="hidden rounded-full border border-border bg-background px-3 py-1 text-xs font-medium text-muted-foreground sm:block">
-              {scannerOpen ? "Close workspace" : "Open scanner"}
-            </span>
-            <ChevronDown
-              className={`h-5 w-5 shrink-0 text-muted-foreground transition-transform ${
-                scannerOpen ? "rotate-180" : ""
-              }`}
-            />
-          </button>
-          {scannerOpen && (
-            <div className="border-t border-border bg-muted/15 p-3 sm:p-5">
-              <Suspense
-                fallback={
-                  <div className="grid min-h-48 place-items-center text-sm text-muted-foreground">
-                    Loading scanner workspace…
-                  </div>
-                }
-              >
-                <InventoryScanner embedded />
-              </Suspense>
-            </div>
-          )}
-        </section>
-
         {/* Filters */}
         <div className="flex flex-wrap gap-2 items-center">
           {/* Type filter chips */}

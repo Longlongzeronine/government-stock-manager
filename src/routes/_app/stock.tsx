@@ -1,11 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { listItems, listTransactions, createTransaction } from "@/lib/data.functions";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { MobileCard, MobileCardRow } from "@/components/common/MobileCard";
-import { ArrowLeftRight, PackageCheck, Plus, Search } from "lucide-react";
+import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -19,8 +19,6 @@ function Stock() {
   const { canWrite, user } = useAuth();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [view, setView] = useState<"all" | "issued">("issued");
-  const [search, setSearch] = useState("");
   const { data: txs = [] } = useQuery({
     queryKey: ["transactions"],
     queryFn: () => listTransactions({ data: { limit: 200 } }),
@@ -33,38 +31,12 @@ function Stock() {
   });
 
   const isMobileView = useIsMobile();
-  const issuedTransactions = useMemo(
-    () =>
-      txs.filter(
-        (transaction: any) =>
-          transaction.type === "OUT" &&
-          (transaction.source_form_type === "RIS" ||
-            String(transaction.remarks || "").startsWith("RIS ")),
-      ),
-    [txs],
-  );
-  const visibleTransactions = useMemo(() => {
-    const source = view === "issued" ? issuedTransactions : txs;
-    const needle = search.trim().toLowerCase();
-    if (!needle) return source;
-    return source.filter((transaction: any) =>
-      [
-        transaction.item?.name,
-        transaction.staff_name,
-        transaction.remarks,
-      ].some((value) => String(value || "").toLowerCase().includes(needle)),
-    );
-  }, [issuedTransactions, search, txs, view]);
-  const totalIssued = issuedTransactions.reduce(
-    (sum: number, transaction: any) => sum + Number(transaction.quantity),
-    0,
-  );
 
   return (
     <div>
       <PageHeader
         title="Stock Movement"
-        subtitle="Review issued RIS inventory and all stock movements"
+        subtitle="Record stock in and stock out transactions"
         actions={
           canWrite && (
             <button
@@ -76,21 +48,7 @@ function Stock() {
           )
         }
       />
-      <div className="space-y-4 p-4 sm:p-6 lg:p-8">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <SummaryCard icon={PackageCheck} label="Issued RIS lines" value={issuedTransactions.length} />
-          <SummaryCard icon={ArrowLeftRight} label="Total quantity issued" value={totalIssued} />
-        </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="inline-flex rounded-lg border border-border bg-muted/40 p-1">
-            <button onClick={() => setView("issued")} className={`rounded-md px-3 py-1.5 text-sm font-medium ${view === "issued" ? "bg-card shadow-sm" : "text-muted-foreground"}`}>Issued Transactions</button>
-            <button onClick={() => setView("all")} className={`rounded-md px-3 py-1.5 text-sm font-medium ${view === "all" ? "bg-card shadow-sm" : "text-muted-foreground"}`}>All Movements</button>
-          </div>
-          <div className="relative sm:w-80">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search RIS, item, office, or staff" className="w-full rounded-md border border-input bg-card py-2 pl-9 pr-3 text-sm" />
-          </div>
-        </div>
+      <div className="p-4 sm:p-6 lg:p-8">
         {/* Desktop Table View */}
         {!isMobileView && (
           <div className="bg-card border border-border rounded-lg overflow-hidden">
@@ -102,13 +60,11 @@ function Stock() {
                   <th className="text-left px-4 py-3">Type</th>
                   <th className="text-right px-4 py-3">Quantity</th>
                   <th className="text-left px-4 py-3">Staff</th>
-                  <th className="text-left px-4 py-3">Reference</th>
-                  <th className="text-left px-4 py-3">Office</th>
                   <th className="text-left px-4 py-3">Remarks</th>
                 </tr>
               </thead>
               <tbody>
-                {visibleTransactions.map((t: any) => (
+                {txs.map((t: any) => (
                   <tr key={t.id} className="border-t border-border hover:bg-muted/30">
                     <td className="px-4 py-2.5 tabular-nums text-xs">
                       {format(new Date(t.created_at), "MMM d, yyyy HH:mm")}
@@ -125,15 +81,13 @@ function Stock() {
                       {t.quantity} {t.item?.unit}
                     </td>
                     <td className="px-4 py-2.5">{t.staff_name ?? "—"}</td>
-                    <td className="px-4 py-2.5 font-medium">{transactionReference(t)}</td>
-                    <td className="px-4 py-2.5">{transactionOffice(t)}</td>
                     <td className="px-4 py-2.5 text-muted-foreground">{t.remarks ?? "—"}</td>
                   </tr>
                 ))}
-                {visibleTransactions.length === 0 && (
+                {txs.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="p-12 text-center text-sm text-muted-foreground">
-                      No transactions match this view.
+                    <td colSpan={6} className="p-12 text-center text-sm text-muted-foreground">
+                      No transactions recorded.
                     </td>
                   </tr>
                 )}
@@ -145,7 +99,7 @@ function Stock() {
         {/* Mobile Card View */}
         {isMobileView && (
           <div className="space-y-3">
-            {visibleTransactions.map((t: any) => (
+            {txs.map((t: any) => (
               <MobileCard key={t.id}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
@@ -166,8 +120,6 @@ function Stock() {
                     value={`${t.quantity} ${t.item?.unit ?? ""}`} 
                   />
                   <MobileCardRow label="Staff" value={t.staff_name ?? "—"} />
-                  <MobileCardRow label="Reference" value={transactionReference(t)} />
-                  <MobileCardRow label="Office" value={transactionOffice(t)} />
                   {t.remarks && (
                     <div className="pt-1">
                       <span className="text-xs uppercase tracking-wider text-muted-foreground">Remarks</span>
@@ -177,7 +129,7 @@ function Stock() {
                 </div>
               </MobileCard>
             ))}
-            {visibleTransactions.length === 0 && (
+            {txs.length === 0 && (
               <div className="p-12 text-center text-sm text-muted-foreground bg-card border border-border rounded-lg">
                 No transactions recorded.
               </div>
@@ -201,40 +153,6 @@ function Stock() {
       )}
     </div>
   );
-}
-
-function SummaryCard({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: any;
-  label: string;
-  value: number;
-}) {
-  return (
-    <div className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Icon className="h-4 w-4" /> {label}
-      </div>
-      <div className="mt-2 text-2xl font-semibold tabular-nums">{value}</div>
-    </div>
-  );
-}
-
-function transactionReference(transaction: any) {
-  const firstPart = String(transaction.remarks || "")
-    .split("|")[0]
-    ?.trim();
-  return firstPart || transaction.source_form_type || "—";
-}
-
-function transactionOffice(transaction: any) {
-  const office = String(transaction.remarks || "")
-    .split("|")
-    .map((part) => part.trim())
-    .find((part) => part.toLowerCase().startsWith("office:"));
-  return office ? office.slice(7).trim() : "—";
 }
 
 function MovementDialog({ items, userId, userName, onClose, onSaved }: any) {
