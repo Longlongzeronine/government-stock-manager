@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/AppShell";
 import {
   Clock,
@@ -9,6 +10,7 @@ import {
   Search,
   X,
 } from "lucide-react";
+import { listRisForms, updateRisFormStatus } from "@/lib/data.functions";
 
 export const Route = createFileRoute("/_app/approval")({
   head: () => ({ meta: [{ title: "Approvals — Supplify" }] }),
@@ -20,6 +22,7 @@ type Priority = "urgent" | "high" | "normal" | "low";
 
 interface Request {
   id: string;
+  ris_no: string;
   item: string;
   category: string;
   requester: string;
@@ -36,167 +39,108 @@ interface Request {
   vendor: string;
 }
 
-const INITIAL: Request[] = [
-  {
-    id: "REQ-2024-0891",
-    item: "Nitrile Examination Gloves (L)",
-    category: "PPE",
-    requester: "M. Santos",
-    department: "Warehouse Ops",
-    quantity: 2000,
-    unit: "pcs",
-    unitCost: 0.18,
-    total: 360.0,
-    submittedAt: "2026-07-25 09:14",
-    neededBy: "2026-08-02",
-    priority: "urgent",
-    status: "pending",
-    notes: "Current stock critically low — 3-day supply remaining.",
-    vendor: "SafeGuard Supply Co.",
-  },
-  {
-    id: "REQ-2024-0892",
-    item: "A4 Copy Paper 80gsm (500 sheets/ream)",
-    category: "Office Supplies",
-    requester: "J. Reyes",
-    department: "Finance",
-    quantity: 40,
-    unit: "reams",
-    unitCost: 4.25,
-    total: 170.0,
-    submittedAt: "2026-07-25 10:02",
-    neededBy: "2026-08-05",
-    priority: "normal",
-    status: "pending",
-    notes: "Monthly replenishment. Preferred brand: Navigator.",
-    vendor: "Office Pro Distributors",
-  },
-  {
-    id: "REQ-2024-0893",
-    item: "Industrial Cleaning Solvent (5L)",
-    category: "Maintenance",
-    requester: "R. Cruz",
-    department: "Facilities",
-    quantity: 12,
-    unit: "cans",
-    unitCost: 22.5,
-    total: 270.0,
-    submittedAt: "2026-07-25 11:47",
-    neededBy: "2026-07-30",
-    priority: "high",
-    status: "pending",
-    notes: "Required for scheduled equipment maintenance on July 30.",
-    vendor: "TechChem Solutions",
-  },
-  {
-    id: "REQ-2024-0894",
-    item: "HP 305A Toner Cartridge (Black)",
-    category: "Office Supplies",
-    requester: "L. Tan",
-    department: "HR",
-    quantity: 4,
-    unit: "units",
-    unitCost: 68.0,
-    total: 272.0,
-    submittedAt: "2026-07-26 08:30",
-    neededBy: "2026-08-10",
-    priority: "normal",
-    status: "pending",
-    notes: "Printers 03 and 04 showing low toner alerts.",
-    vendor: "PrintMax Philippines",
-  },
-  {
-    id: "REQ-2024-0895",
-    item: "Ergonomic Office Chair",
-    category: "Furniture",
-    requester: "A. Dela Cruz",
-    department: "IT",
-    quantity: 3,
-    unit: "units",
-    unitCost: 185.0,
-    total: 555.0,
-    submittedAt: "2026-07-26 13:15",
-    neededBy: "2026-08-15",
-    priority: "low",
-    status: "pending",
-    notes: "Replacement for 3 broken chairs in server room annex.",
-    vendor: "FurniPro Inc.",
-  },
-  {
-    id: "REQ-2024-0896",
-    item: "Fire Extinguisher ABC 10lbs",
-    category: "Safety",
-    requester: "C. Villanueva",
-    department: "Facilities",
-    quantity: 6,
-    unit: "units",
-    unitCost: 55.0,
-    total: 330.0,
-    submittedAt: "2026-07-26 14:50",
-    neededBy: "2026-07-31",
-    priority: "urgent",
-    status: "pending",
-    notes: "Compliance requirement — BFP inspection on August 1.",
-    vendor: "SafeGuard Supply Co.",
-  },
-  {
-    id: "REQ-2024-0897",
-    item: "Ethernet Cable Cat6 (305m/box)",
-    category: "IT Infrastructure",
-    requester: "B. Gomez",
-    department: "IT",
-    quantity: 2,
-    unit: "boxes",
-    unitCost: 128.0,
-    total: 256.0,
-    submittedAt: "2026-07-27 09:05",
-    neededBy: "2026-08-12",
-    priority: "normal",
-    status: "pending",
-    notes: "Network expansion to new workstations on 3rd floor.",
-    vendor: "NetLink Supplies",
-  },
-];
-
 const PRIORITY_ORDER: Priority[] = ["urgent", "high", "normal", "low"];
 
 const PRIORITY_CONFIG: Record<Priority, { label: string; textCls: string; dotCls: string }> = {
-  urgent: { label: "URGENT", textCls: "text-warning-foreground", dotCls: "bg-warning" },
+  urgent: { label: "URGENT", textCls: "text-warning", dotCls: "bg-warning" },
   high: { label: "HIGH", textCls: "text-destructive", dotCls: "bg-destructive" },
   normal: { label: "NORMAL", textCls: "text-success", dotCls: "bg-success" },
   low: { label: "LOW", textCls: "text-muted-foreground", dotCls: "bg-muted-foreground" },
 };
 
-const CATEGORY_CONFIG: Record<string, string> = {
-  PPE: "text-purple-600 bg-purple-600/10 border-purple-600/30",
-  "Office Supplies": "text-primary bg-primary/10 border-primary/30",
-  Maintenance: "text-orange-600 bg-orange-600/10 border-orange-600/30",
-  Furniture: "text-success bg-success/10 border-success/30",
-  Safety: "text-destructive bg-destructive/10 border-destructive/30",
-  "IT Infrastructure": "text-cyan-600 bg-cyan-600/10 border-cyan-600/30",
-};
+const NAVY_BADGE_CLS = "bg-navy text-navy-foreground border-navy";
 
 function fmt(n: number) {
   return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function fmtDate(dateStr: string | null | undefined) {
+  if (!dateStr) return "—";
+  const [year, month, day] = dateStr.split("-");
+  return `${month}-${day}-${year}`;
+}
+
+function fmtDateTime(dateStr: string | null | undefined) {
+  if (!dateStr) return "—";
+  const d = new Date(dateStr);
+  return d.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function isOverdue(neededBy: string | null | undefined) {
+  if (!neededBy) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const [year, month, day] = neededBy.split("-").map(Number);
+  const due = new Date(year, month - 1, day);
+  due.setHours(0, 0, 0, 0);
+  return due.getTime() < today.getTime();
+}
+
+type DueUrgency = "overdue" | "soon" | "ok";
+
+function getDueUrgency(neededBy: string | null | undefined): DueUrgency {
+  if (!neededBy) return "ok";
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const [year, month, day] = neededBy.split("-").map(Number);
+  const due = new Date(year, month - 1, day);
+  due.setHours(0, 0, 0, 0);
+  const diffDays = (due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24);
+  if (diffDays < 0) return "overdue";
+  if (diffDays <= 14) return "soon";
+  return "ok";
+}
+
+const DUE_URGENCY_CONFIG: Record<DueUrgency, { textCls: string; dotCls: string }> = {
+  overdue: { textCls: "text-destructive", dotCls: "bg-destructive" },
+  soon: { textCls: "text-warning", dotCls: "bg-warning" },
+  ok: { textCls: "text-success", dotCls: "bg-success" },
+};
+
+function getDueDateCls(req: Request) {
+  return DUE_URGENCY_CONFIG[getDueUrgency(req.neededBy)].textCls;
+}
+
 function StatusBadge({ status }: { status: Status }) {
+  if (status === "pending") {
+    return (
+      <span className={`text-[10px] tracking-wide px-2 py-1 rounded-md border ${NAVY_BADGE_CLS}`}>
+        PENDING
+      </span>
+    );
+  }
   const cls = {
-    pending: "bg-navy text-navy-foreground border-navy",
     approved: "bg-success/15 text-success border-success/30",
     rejected: "bg-destructive/15 text-destructive border-destructive/30",
   }[status];
   return (
-    <span
-      className={`font-mono text-[10px] font-semibold tracking-wider px-2 py-0.5 rounded-md border ${cls}`}
-    >
+    <span className={`text-xs font-medium px-2 py-0.5 rounded-md border ${cls}`}>
       {status.toUpperCase()}
     </span>
   );
 }
 
-function PriorityDot({ priority }: { priority: Priority }) {
-  return <span className={`inline-block h-1.5 w-1.5 rounded-full shrink-0 ${PRIORITY_CONFIG[priority].dotCls}`} />;
+function CategoryChip({ category }: { category: string }) {
+  return (
+    <span
+      className={`inline-flex items-center justify-start leading-tight text-[10px] tracking-wide px-2 py-1 rounded-md border ${NAVY_BADGE_CLS}`}
+    >
+      {category}
+    </span>
+  );
+}
+
+function DueDot({ neededBy }: { neededBy: string }) {
+  const cls = DUE_URGENCY_CONFIG[getDueUrgency(neededBy)].dotCls;
+  return (
+    <span className={`inline-block h-1.5 w-1.5 rounded-full shrink-0 ${cls}`} />
+  );
 }
 
 interface DetailModalProps {
@@ -210,7 +154,7 @@ function DetailRow({ label, value }: { label: string; value: string | number }) 
   return (
     <div className="flex items-center justify-between py-1.5 border-b border-border">
       <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="font-mono text-xs text-right max-w-[60%]">{value}</span>
+      <span className="text-xs text-right max-w-[60%]">{value}</span>
     </div>
   );
 }
@@ -229,7 +173,7 @@ function DetailModal({ req, onClose, onApprove, onReject }: DetailModalProps) {
       >
         <div className="flex items-start justify-between gap-3 p-5 border-b border-border">
           <div>
-            <div className="font-mono text-xs text-muted-foreground mb-1">{req.id}</div>
+            <div className="text-xs text-muted-foreground mb-1">{req.ris_no}</div>
             <div className="text-sm font-semibold leading-snug">{req.item}</div>
           </div>
           <div className="flex items-center gap-2">
@@ -245,10 +189,13 @@ function DetailModal({ req, onClose, onApprove, onReject }: DetailModalProps) {
 
         <div className="px-5">
           <DetailRow label="Category" value={req.category} />
-          <DetailRow label="Vendor" value={req.vendor} />
+          <DetailRow label="Vendor" value={req.vendor || "—"} />
           <DetailRow label="Requester" value={`${req.requester} · ${req.department}`} />
-          <DetailRow label="Submitted" value={req.submittedAt} />
-          <DetailRow label="Needed By" value={req.neededBy} />
+          <DetailRow label="Submitted" value={fmtDateTime(req.submittedAt)} />
+          <DetailRow
+            label="Needed By"
+            value={isOverdue(req.neededBy) ? `${fmtDate(req.neededBy)} (overdue)` : fmtDate(req.neededBy)}
+          />
           <DetailRow label="Priority" value={PRIORITY_CONFIG[req.priority].label} />
           <DetailRow label="Quantity" value={`${req.quantity.toLocaleString()} ${req.unit}`} />
           <DetailRow label="Unit Cost" value={`$${fmt(req.unitCost)}`} />
@@ -316,7 +263,7 @@ function FilterBtn({ label, value, current, onSelect }: { label: string; value: 
   return (
     <button
       onClick={() => onSelect(value)}
-      className={`font-mono text-[11px] tracking-wide px-2.5 py-1 rounded-md border ${
+      className={`text-[11px] tracking-wide px-2.5 py-1 rounded-md border ${
         active
           ? "bg-navy border-navy text-navy-foreground font-semibold"
           : "border-transparent text-muted-foreground hover:bg-accent"
@@ -329,7 +276,7 @@ function FilterBtn({ label, value, current, onSelect }: { label: string; value: 
 
 function SortIcon({ active, dir }: { active: boolean; dir: "asc" | "desc" }) {
   return (
-    <span className={`font-mono text-[9px] ml-1 ${active ? "text-navy" : "text-muted-foreground"}`}>
+    <span className={`text-[9px] ml-1 ${active ? "text-navy" : "text-muted-foreground"}`}>
       {active ? (dir === "desc" ? "▼" : "▲") : "⇅"}
     </span>
   );
@@ -338,7 +285,7 @@ function SortIcon({ active, dir }: { active: boolean; dir: "asc" | "desc" }) {
 const COLUMNS = "grid-cols-[130px_1fr_120px_90px_90px_100px_90px_110px]";
 
 export default function App() {
-  const [requests, setRequests] = useState<Request[]>(INITIAL);
+  const qc = useQueryClient();
   const [selected, setSelected] = useState<Request | null>(null);
   const [filterStatus, setFilterStatus] = useState<"all" | Status>("pending");
   const [filterPriority, setFilterPriority] = useState<"all" | Priority>("all");
@@ -347,16 +294,49 @@ export default function App() {
   const [sortField, setSortField] = useState<"total" | "submittedAt" | "neededBy" | "priority">("submittedAt");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
-  const approve = (id: string) => {
-    setRequests((r) => r.map((req) => (req.id === id ? { ...req, status: "approved" } : req)));
-    setSelected((s) => (s?.id === id ? { ...s, status: "approved" } : s));
+  const { data: risForms = [] } = useQuery({
+    queryKey: ["risForms"],
+    queryFn: listRisForms,
+  });
+
+  const requests: Request[] = risForms.map((r: any) => ({
+    id: r.id,
+    ris_no: r.ris_no,
+    item: r.item_name || "Unknown Item",
+    category: r.category_name || "Uncategorized",
+    requester: r.requested_by || "Unknown",
+    department: r.office || "—",
+    quantity: Number(r.quantity || 0),
+    unit: r.unit || "pcs",
+    unitCost: Number(r.acquisition_cost || 0),
+    total: Number(r.quantity || 0) * Number(r.acquisition_cost || 0),
+    submittedAt: r.created_at || "",
+    neededBy: r.needed_by || "",
+    priority: (r.priority as Priority) || "normal",
+    status: r.status === "issued" ? "approved" : r.status === "cancelled" ? "rejected" : "pending",
+    notes: r.remarks || "",
+    vendor: r.supplier_name || "",
+  }));
+
+  const approve = async (id: string) => {
+    await updateRisFormStatus({ data: { id, status: "approved" } });
+    qc.invalidateQueries({ queryKey: ["risForms"] });
+    setSelected(null);
   };
-  const reject = (id: string) => {
-    setRequests((r) => r.map((req) => (req.id === id ? { ...req, status: "rejected" } : req)));
-    setSelected((s) => (s?.id === id ? { ...s, status: "rejected" } : s));
+
+  const reject = async (id: string) => {
+    await updateRisFormStatus({ data: { id, status: "rejected" } });
+    qc.invalidateQueries({ queryKey: ["risForms"] });
+    setSelected(null);
   };
 
   const categories = ["all", ...Array.from(new Set(requests.map((r) => r.category)))];
+
+  // Count of requests per category, shown next to each option in the dropdown.
+  const categoryCounts: Record<string, number> = { all: requests.length };
+  for (const r of requests) {
+    categoryCounts[r.category] = (categoryCounts[r.category] ?? 0) + 1;
+  }
 
   const filtered = requests
     .filter((r) => filterStatus === "all" || r.status === filterStatus)
@@ -368,7 +348,7 @@ export default function App() {
         r.item.toLowerCase().includes(search.toLowerCase()) ||
         r.requester.toLowerCase().includes(search.toLowerCase()) ||
         r.department.toLowerCase().includes(search.toLowerCase()) ||
-        r.id.toLowerCase().includes(search.toLowerCase()),
+        r.ris_no.toLowerCase().includes(search.toLowerCase()),
     )
     .sort((a, b) => {
       let va: number, vb: number;
@@ -402,17 +382,17 @@ export default function App() {
     { label: "REQ ID", align: "left", field: null },
     { label: "ITEM / DEPT", align: "left", field: null },
     { label: "CATEGORY", align: "left", field: null },
-    { label: "QTY", align: "right", field: null },
-    { label: "UNIT COST", align: "right", field: null },
-    { label: "TOTAL", align: "right", field: "total" },
+    { label: "QTY", align: "left", field: null },
+    { label: "UNIT COST", align: "left", field: null },
+    { label: "TOTAL", align: "left", field: "total" },
     { label: "DUE", align: "left", field: "neededBy" },
-    { label: "STATUS", align: "center", field: null },
+    { label: "STATUS", align: "left", field: null },
   ];
 
   return (
     <div>
       <PageHeader title="Approvals" subtitle="Review and act on pending purchase requests" />
-      <div className="p-4 sm:p-6 lg:p-8 space-y-6">       
+      <div className="p-4 sm:p-6 lg:p-8 space-y-6">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <Stat icon={Clock} label="Awaiting Review" value={pendingCount} tone="warning" />
           <Stat icon={DollarSign} label="Pending Value" value={`$${fmt(pendingTotal)}`} tone="navy" />
@@ -428,7 +408,7 @@ export default function App() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search items, requesters, ID..."
-                className="w-56 rounded-md border border-border bg-accent/40 pl-8 pr-3 py-1.5 text-xs outline-none"
+                className="w-56 rounded-md border border-border bg-accent/40 pl-8 pr-3 py-1.5 text-sm outline-none"
               />
             </div>
             <div className="h-5 w-px bg-border" />
@@ -450,11 +430,13 @@ export default function App() {
             <select
               value={filterCategory}
               onChange={(e) => setFilterCategory(e.target.value)}
-              className="ml-auto font-mono text-[11px] rounded-md border border-border bg-accent/40 px-2.5 py-1.5 outline-none"
+              className="ml-auto text-sm rounded-md border border-border bg-accent/40 px-2.5 py-1.5 outline-none"
             >
               {categories.map((c) => (
                 <option key={c} value={c}>
-                  {c === "all" ? "All Categories" : c}
+                  {c === "all"
+                    ? `All Categories (${categoryCounts.all})`
+                    : `${c} (${categoryCounts[c] ?? 0})`}
                 </option>
               ))}
             </select>
@@ -465,7 +447,7 @@ export default function App() {
               <div
                 key={col.label}
                 onClick={() => col.field && toggleSort(col.field)}
-                className={`font-mono text-[10px] text-muted-foreground tracking-wider px-3 py-2 select-none ${
+                className={`text-[10px] text-muted-foreground tracking-wider px-3 py-2 select-none ${
                   col.align === "right" ? "text-right" : col.align === "center" ? "text-center" : "text-left"
                 } ${col.field ? "cursor-pointer" : ""}`}
               >
@@ -488,9 +470,9 @@ export default function App() {
                   className={`grid ${COLUMNS} cursor-pointer hover:bg-accent`}
                 >
                   <div className="px-3 py-3 flex items-center gap-2">
-                    <PriorityDot priority={req.priority} />
-                    <span className={`font-mono text-xs font-medium ${PRIORITY_CONFIG[req.priority].textCls}`}>
-                      {req.id}
+                    <DueDot neededBy={req.neededBy} />
+                    <span className={`text-xs font-medium ${getDueDateCls(req)}`}>
+                      {req.ris_no}
                     </span>
                   </div>
                   <div className="px-3 py-3 flex flex-col justify-center gap-0.5">
@@ -500,26 +482,20 @@ export default function App() {
                     </span>
                   </div>
                   <div className="px-3 py-3 flex items-center">
-                    <span
-                      className={`text-[10px] tracking-wide font-mono px-2 py-0.5 rounded-md border ${
-                        CATEGORY_CONFIG[req.category] ?? "text-muted-foreground bg-accent border-border"
-                      }`}
-                    >
-                      {req.category}
-                    </span>
+                    <CategoryChip category={req.category} />
                   </div>
-                  <div className="font-mono px-3 py-3 flex items-center justify-end text-xs">
+                  <div className="px-3 py-3 flex items-center justify-start text-xs tabular-nums">
                     {req.quantity.toLocaleString()}
                     <span className="text-muted-foreground ml-1">{req.unit}</span>
                   </div>
-                  <div className="font-mono px-3 py-3 flex items-center justify-end text-xs">${fmt(req.unitCost)}</div>
-                  <div className="font-mono px-3 py-3 flex items-center justify-end text-xs font-semibold">
+                  <div className="px-3 py-3 flex items-center justify-start text-xs tabular-nums">${fmt(req.unitCost)}</div>
+                  <div className="px-3 py-3 flex items-center justify-start text-xs tabular-nums font-semibold">
                     ${fmt(req.total)}
                   </div>
-                  <div className={`font-mono px-3 py-3 flex items-center text-[11px] font-medium ${PRIORITY_CONFIG[req.priority].textCls}`}>
-                    {req.neededBy}
+                  <div className={`px-3 py-3 flex items-center text-[11px] font-medium ${getDueDateCls(req)}`}>
+                    {fmtDate(req.neededBy)}
                   </div>
-                  <div className="px-3 py-3 flex items-center justify-center">
+                  <div className="px-3 py-3 flex items-center justify-start">
                     <StatusBadge status={req.status} />
                   </div>
                 </div>
@@ -529,10 +505,10 @@ export default function App() {
         </div>
 
         <div className="flex items-center justify-between">
-          <span className="font-mono text-xs text-muted-foreground">
+          <span className="text-xs text-muted-foreground">
             {filtered.length} of {requests.length} requests · ${fmt(filtered.reduce((s, r) => s + r.total, 0))} total
           </span>
-          <span className="font-mono text-xs text-muted-foreground">Click any row to review</span>
+          <span className="text-xs text-muted-foreground">Click any row to review</span>
         </div>
       </div>
 
@@ -542,11 +518,9 @@ export default function App() {
           onClose={() => setSelected(null)}
           onApprove={(id) => {
             approve(id);
-            setSelected(null);
           }}
           onReject={(id) => {
             reject(id);
-            setSelected(null);
           }}
         />
       )}

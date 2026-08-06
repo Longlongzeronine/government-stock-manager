@@ -245,7 +245,10 @@ export async function ensureSchema() {
       verification_published_at TIMESTAMPTZ DEFAULT NULL,
       created_by TEXT DEFAULT NULL,
       created_by_name TEXT DEFAULT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      status TEXT NOT NULL DEFAULT 'pending',
+      needed_by DATE DEFAULT NULL,
+      priority TEXT NOT NULL DEFAULT 'normal'
     );
 
     ALTER TABLE ris_forms
@@ -258,6 +261,11 @@ export async function ensureSchema() {
     ALTER TABLE ris_forms
       ADD COLUMN IF NOT EXISTS approved_date DATE DEFAULT NULL,
       ADD COLUMN IF NOT EXISTS issued_date DATE DEFAULT NULL;
+
+    ALTER TABLE ris_forms
+      ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending',
+      ADD COLUMN IF NOT EXISTS needed_by DATE DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal';
 
     CREATE UNIQUE INDEX IF NOT EXISTS ris_forms_verification_token_key
       ON ris_forms (verification_token) WHERE verification_token IS NOT NULL;
