@@ -122,6 +122,15 @@ export async function ensureSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- Give both existing and future inventory records stable scan values.
+    UPDATE items
+    SET barcode_value = id::text
+    WHERE barcode_value IS NULL OR btrim(barcode_value) = '';
+
+    UPDATE items
+    SET qr_code_value = 'ITEM:' || id::text
+    WHERE qr_code_value IS NULL OR btrim(qr_code_value) = '';
+
     CREATE OR REPLACE FUNCTION auto_classify_item()
     RETURNS TRIGGER AS $$
     BEGIN
@@ -136,6 +145,12 @@ export async function ensureSchema() {
           NEW.inventory_classification := 'semi_expendable_property';
           NEW.semi_expendable_tier := CASE WHEN NEW.acquisition_cost >= 15000 THEN 'high_value' ELSE 'low_value' END;
         END IF;
+      END IF;
+      IF NEW.barcode_value IS NULL OR btrim(NEW.barcode_value) = '' THEN
+        NEW.barcode_value := NEW.id::text;
+      END IF;
+      IF NEW.qr_code_value IS NULL OR btrim(NEW.qr_code_value) = '' THEN
+        NEW.qr_code_value := 'ITEM:' || NEW.id::text;
       END IF;
       RETURN NEW;
     END;
@@ -170,6 +185,11 @@ export async function ensureSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    ALTER TABLE transactions
+      ADD COLUMN IF NOT EXISTS source_form_type TEXT DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS source_form_id TEXT DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS source_line_id TEXT DEFAULT NULL;
+
     CREATE TABLE IF NOT EXISTS audit_logs (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       actor_id TEXT DEFAULT NULL,
@@ -198,10 +218,14 @@ export async function ensureSchema() {
       item_id UUID NOT NULL REFERENCES items(id),
       quantity NUMERIC(12,2) NOT NULL,
       unit_cost NUMERIC(14,2) NOT NULL DEFAULT 0,
+      amount NUMERIC(14,2) NOT NULL DEFAULT 0,
       remarks TEXT DEFAULT NULL,
       transaction_id UUID DEFAULT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    ALTER TABLE iar_items
+      ADD COLUMN IF NOT EXISTS amount NUMERIC(14,2) NOT NULL DEFAULT 0;
 
     CREATE TABLE IF NOT EXISTS ris_forms (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -212,10 +236,41 @@ export async function ensureSchema() {
       approved_by TEXT DEFAULT NULL,
       issued_by TEXT DEFAULT NULL,
       received_by TEXT DEFAULT NULL,
+      approved_date DATE DEFAULT NULL,
+      issued_date DATE DEFAULT NULL,
+      verification_token TEXT DEFAULT NULL UNIQUE,
+      verification_code TEXT DEFAULT NULL UNIQUE,
+      document_version INTEGER NOT NULL DEFAULT 1,
+      verification_status TEXT NOT NULL DEFAULT 'draft',
+      verification_published_at TIMESTAMPTZ DEFAULT NULL,
       created_by TEXT DEFAULT NULL,
       created_by_name TEXT DEFAULT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      status TEXT NOT NULL DEFAULT 'pending',
+      needed_by DATE DEFAULT NULL,
+      priority TEXT NOT NULL DEFAULT 'normal'
     );
+
+    ALTER TABLE ris_forms
+      ADD COLUMN IF NOT EXISTS verification_token TEXT DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS verification_code TEXT DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS document_version INTEGER NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS verification_status TEXT NOT NULL DEFAULT 'draft',
+      ADD COLUMN IF NOT EXISTS verification_published_at TIMESTAMPTZ DEFAULT NULL;
+
+    ALTER TABLE ris_forms
+      ADD COLUMN IF NOT EXISTS approved_date DATE DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS issued_date DATE DEFAULT NULL;
+
+    ALTER TABLE ris_forms
+      ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending',
+      ADD COLUMN IF NOT EXISTS needed_by DATE DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal';
+
+    CREATE UNIQUE INDEX IF NOT EXISTS ris_forms_verification_token_key
+      ON ris_forms (verification_token) WHERE verification_token IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS ris_forms_verification_code_key
+      ON ris_forms (verification_code) WHERE verification_code IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS ris_items (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -225,6 +280,22 @@ export async function ensureSchema() {
       remarks TEXT DEFAULT NULL,
       transaction_id UUID DEFAULT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS form_number_counters (
+      form_prefix TEXT NOT NULL,
+      series_year INTEGER NOT NULL,
+      last_number BIGINT NOT NULL DEFAULT 0,
+      PRIMARY KEY (form_prefix, series_year)
+    );
+
+    CREATE TABLE IF NOT EXISTS form_personnel_memory (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      role TEXT NOT NULL,
+      person_name TEXT NOT NULL,
+      last_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_by TEXT DEFAULT NULL,
+      UNIQUE (role, person_name)
     );
 
     CREATE TABLE IF NOT EXISTS ics_forms (
@@ -273,6 +344,8 @@ export async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_items_name ON items(name);
     CREATE INDEX IF NOT EXISTS idx_items_category_id ON items(category_id);
     CREATE INDEX IF NOT EXISTS idx_items_supplier_id ON items(supplier_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_items_barcode_value_unique ON items(barcode_value);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_items_qr_code_value_unique ON items(qr_code_value);
     CREATE INDEX IF NOT EXISTS idx_transactions_item_id ON transactions(item_id);
     CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);

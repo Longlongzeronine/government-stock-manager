@@ -1,9 +1,26 @@
 import { createServerFn } from "@tanstack/react-start";
 
+let localSchemaReady: Promise<void> | null = null;
+
 // Helper to get local DB on the server
 async function getDb() {
-  const { getSql } = await import("@/lib/local-db");
+  const { ensureSchema, getSql } = await import("@/lib/local-db");
+  localSchemaReady ??= ensureSchema().then(() => undefined);
+  await localSchemaReady;
   return getSql();
+}
+
+async function ensureItemCodes(sql: any) {
+  await sql`
+    UPDATE items
+    SET barcode_value = id::text
+    WHERE barcode_value IS NULL OR btrim(barcode_value) = ''
+  `;
+  await sql`
+    UPDATE items
+    SET qr_code_value = 'ITEM:' || id::text
+    WHERE qr_code_value IS NULL OR btrim(qr_code_value) = ''
+  `;
 }
 
 // ============================================
@@ -13,6 +30,7 @@ async function getDb() {
 export const listItems = createServerFn({ method: "GET" }).handler(async () => {
   try {
     const sql = await getDb();
+    await ensureItemCodes(sql);
     const rows = await sql`
       SELECT
         i.*,
@@ -26,8 +44,12 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
     // Transform the nested JSON into the expected format
     return rows.map((r: any) => ({
       ...r,
-      category: r.category?.id ? { id: r.category.id, name: r.category.name } : null,
-      supplier: r.supplier?.id ? { id: r.supplier.id, name: r.supplier.name } : null,
+      category: r.category?.id
+        ? { id: r.category.id, name: r.category.name }
+        : null,
+      supplier: r.supplier?.id
+        ? { id: r.supplier.id, name: r.supplier.name }
+        : null,
     }));
   } catch (e: any) {
     console.error("listItems error:", e);
@@ -39,6 +61,8 @@ export const getItem = createServerFn({ method: "GET" })
   .inputValidator((d: { id: string }) => d)
   .handler(async ({ data }) => {
     const sql = await getDb();
+    const value = data.id.trim();
+    const withoutPrefix = value.replace(/^ITEM:/i, "");
     const [row] = await sql`
       SELECT i.*,
         row_to_json(c.*) AS category,
@@ -46,13 +70,20 @@ export const getItem = createServerFn({ method: "GET" })
       FROM items i
       LEFT JOIN categories c ON c.id = i.category_id
       LEFT JOIN suppliers s ON s.id = i.supplier_id
-      WHERE i.id = ${data.id}
+      WHERE i.id::text = ${withoutPrefix}
+         OR i.barcode_value = ${withoutPrefix}
+         OR i.qr_code_value = ${value}
+      LIMIT 1
     `;
     if (!row) return null;
     return {
       ...row,
-      category: row.category?.id ? { id: row.category.id, name: row.category.name } : null,
-      supplier: row.supplier?.id ? { id: row.supplier.id, name: row.supplier.name } : null,
+      category: row.category?.id
+        ? { id: row.category.id, name: row.category.name }
+        : null,
+      supplier: row.supplier?.id
+        ? { id: row.supplier.id, name: row.supplier.name }
+        : null,
     };
   });
 
@@ -76,7 +107,14 @@ export const createItem = createServerFn({ method: "POST" })
       })}
       RETURNING *
     `;
-    return row;
+    const [codedRow] = await sql`
+      UPDATE items
+      SET barcode_value = COALESCE(NULLIF(btrim(barcode_value), ''), id::text),
+          qr_code_value = COALESCE(NULLIF(btrim(qr_code_value), ''), 'ITEM:' || id::text)
+      WHERE id = ${row.id}
+      RETURNING *
+    `;
+    return codedRow;
   });
 
 export const updateItem = createServerFn({ method: "POST" })
@@ -115,14 +153,16 @@ export const deleteItem = createServerFn({ method: "POST" })
 // CATEGORIES
 // ============================================
 
-export const listCategories = createServerFn({ method: "GET" }).handler(async () => {
-  try {
-    const sql = await getDb();
-    return await sql`SELECT * FROM categories ORDER BY name ASC`;
-  } catch {
-    return [];
-  }
-});
+export const listCategories = createServerFn({ method: "GET" }).handler(
+  async () => {
+    try {
+      const sql = await getDb();
+      return await sql`SELECT * FROM categories ORDER BY name ASC`;
+    } catch {
+      return [];
+    }
+  },
+);
 
 export const createCategory = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
@@ -159,14 +199,16 @@ export const deleteCategory = createServerFn({ method: "POST" })
 // SUPPLIERS
 // ============================================
 
-export const listSuppliers = createServerFn({ method: "GET" }).handler(async () => {
-  try {
-    const sql = await getDb();
-    return await sql`SELECT * FROM suppliers ORDER BY name ASC`;
-  } catch {
-    return [];
-  }
-});
+export const listSuppliers = createServerFn({ method: "GET" }).handler(
+  async () => {
+    try {
+      const sql = await getDb();
+      return await sql`SELECT * FROM suppliers ORDER BY name ASC`;
+    } catch {
+      return [];
+    }
+  },
+);
 
 export const createSupplier = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
@@ -230,7 +272,9 @@ export const listTransactions = createServerFn({ method: "GET" })
       `;
       return rows.map((r: any) => ({
         ...r,
-        item: r.item?.id ? { id: r.item.id, name: r.item.name, unit: r.item.unit } : null,
+        item: r.item?.id
+          ? { id: r.item.id, name: r.item.name, unit: r.item.unit }
+          : null,
       }));
     } catch {
       return [];
@@ -258,6 +302,7 @@ export const listTransactionsAsc = createServerFn({ method: "GET" })
           ? {
               id: r.item.id,
               name: r.item.name,
+              description: r.item.description,
               unit: r.item.unit,
               quantity: r.item.quantity,
               acquisition_cost: r.item.acquisition_cost,
@@ -275,49 +320,68 @@ export const createTransaction = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
     const sql = await getDb();
-    const [row] = await sql`
-      INSERT INTO transactions ${sql({
-        item_id: data.item_id,
-        type: data.type,
-        quantity: Number(data.quantity),
-        staff_id: data.staff_id || null,
-        staff_name: data.staff_name || null,
-        remarks: data.remarks || null,
-        source_form_type: data.source_form_type || null,
-        source_form_id: data.source_form_id || null,
-      })}
-      RETURNING *
-    `;
-    return row;
+    const quantity = Number(data.quantity);
+    return await sql.begin(async (tx: any) => {
+      const [item] = await tx`
+        SELECT quantity FROM items WHERE id = ${data.item_id} FOR UPDATE
+      `;
+      if (!item) throw new Error("Inventory item was not found.");
+      if (data.type === "OUT" && Number(item.quantity) < quantity) {
+        throw new Error(`Only ${item.quantity} units are available.`);
+      }
+      const [row] = await tx`
+        INSERT INTO transactions ${tx({
+          item_id: data.item_id,
+          type: data.type,
+          quantity,
+          staff_id: data.staff_id || null,
+          staff_name: data.staff_name || null,
+          remarks: data.remarks || null,
+          source_form_type: data.source_form_type || null,
+          source_form_id: data.source_form_id || null,
+        })}
+        RETURNING *
+      `;
+      await tx`
+        UPDATE items
+        SET quantity = quantity + ${data.type === "IN" ? quantity : -quantity}
+        WHERE id = ${data.item_id}
+      `;
+      return row;
+    });
   });
 
 // ============================================
 // AUDIT LOGS
 // ============================================
 
-export const listAuditLogs = createServerFn({ method: "GET" }).handler(async () => {
-  try {
-    const sql = await getDb();
-    return await sql`
+export const listAuditLogs = createServerFn({ method: "GET" }).handler(
+  async () => {
+    try {
+      const sql = await getDb();
+      return await sql`
       SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 500
     `;
-  } catch {
-    return [];
-  }
-});
+    } catch {
+      return [];
+    }
+  },
+);
 
 // ============================================
 // FORMS (IAR, RIS, ICS, PAR)
 // ============================================
 
-export const listIarForms = createServerFn({ method: "GET" }).handler(async () => {
-  try {
-    const sql = await getDb();
-    return await sql`SELECT * FROM iar_forms ORDER BY created_at DESC`;
-  } catch {
-    return [];
-  }
-});
+export const listIarForms = createServerFn({ method: "GET" }).handler(
+  async () => {
+    try {
+      const sql = await getDb();
+      return await sql`SELECT * FROM iar_forms ORDER BY created_at DESC`;
+    } catch {
+      return [];
+    }
+  },
+);
 
 export const createIarForm = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
@@ -347,6 +411,9 @@ export const createIarItem = createServerFn({ method: "POST" })
         item_id: data.item_id,
         quantity: Number(data.quantity),
         unit_cost: Number(data.unit_cost || 0),
+        amount:
+          Number(data.amount) ||
+          Number(data.quantity) * Number(data.unit_cost || 0),
         remarks: data.remarks || null,
         transaction_id: data.transaction_id || null,
       })}
@@ -368,6 +435,13 @@ export const createRisForm = createServerFn({ method: "POST" })
         approved_by: data.approved_by || null,
         issued_by: data.issued_by || null,
         received_by: data.received_by || null,
+        approved_date: data.approved_date || null,
+        issued_date: data.issued_date || null,
+        verification_token: data.verification_token || null,
+        verification_code: data.verification_code || null,
+        document_version: Number(data.document_version || 1),
+        verification_status: data.verification_status || "draft",
+        verification_published_at: data.verification_published_at || null,
         created_by: data.created_by || null,
         created_by_name: data.created_by_name || null,
       })}
@@ -391,6 +465,97 @@ export const createRisItem = createServerFn({ method: "POST" })
       RETURNING *
     `;
     return row;
+  });
+
+export const getRisVerification = createServerFn({ method: "GET" })
+  .inputValidator((d: { token: string }) => d)
+  .handler(async ({ data }) => {
+    const sql = await getDb();
+    const [form] = await sql`
+      SELECT
+        r.verification_code,
+        r.ris_no,
+        r.verification_status AS status,
+        r.office,
+        r.purpose,
+        r.approved_by,
+        r.issued_by,
+        to_char(r.approved_date, 'YYYY-MM-DD') AS approved_date,
+        to_char(r.issued_date, 'YYYY-MM-DD') AS issued_date,
+        r.document_version,
+        r.verification_published_at::text AS published_at,
+        r.created_at::text AS updated_at,
+        count(ri.id)::integer AS item_count,
+        coalesce(
+          json_agg(
+            json_build_object(
+              'description', coalesce(nullif(i.description, ''), i.name),
+              'quantity', ri.quantity,
+              'unit', i.unit
+            )
+            ORDER BY ri.created_at
+          ) FILTER (WHERE ri.id IS NOT NULL),
+          '[]'::json
+        ) AS items
+      FROM ris_forms r
+      LEFT JOIN ris_items ri ON ri.ris_id = r.id
+      LEFT JOIN items i ON i.id = ri.item_id
+      WHERE r.verification_token = ${data.token}
+      GROUP BY r.id
+      LIMIT 1
+    `;
+    return form || null;
+  });
+
+export const listFormPersonnelMemory = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const sql = await getDb();
+    return await sql`
+      SELECT role, person_name, last_used_at
+      FROM form_personnel_memory
+      ORDER BY last_used_at DESC
+    `;
+  },
+);
+
+export const rememberFormPersonnel = createServerFn({ method: "POST" })
+  .inputValidator(
+    (d: { role: string; person_name: string; created_by?: string }) => d,
+  )
+  .handler(async ({ data }) => {
+    const sql = await getDb();
+    const [row] = await sql`
+      INSERT INTO form_personnel_memory (
+        role, person_name, created_by, last_used_at
+      )
+      VALUES (
+        ${data.role}, ${data.person_name.trim()}, ${data.created_by || null}, now()
+      )
+      ON CONFLICT (role, person_name)
+      DO UPDATE SET last_used_at = now(), created_by = EXCLUDED.created_by
+      RETURNING *
+    `;
+    return row;
+  });
+
+export const reserveNextFormNumber = createServerFn({ method: "POST" })
+  .inputValidator((d: { prefix: string; date: string }) => d)
+  .handler(async ({ data }) => {
+    const sql = await getDb();
+    const date = data.date;
+    const year = Number(date.slice(0, 4));
+    const prefix = data.prefix.toUpperCase();
+    const [counter] = await sql`
+      INSERT INTO form_number_counters (form_prefix, series_year, last_number)
+      VALUES (${prefix}, ${year}, 1)
+      ON CONFLICT (form_prefix, series_year)
+      DO UPDATE SET last_number = form_number_counters.last_number + 1
+      RETURNING last_number
+    `;
+    const series = String(counter.last_number).padStart(7, "0");
+    return prefix === "RIS"
+      ? `${date}-${series}`
+      : `${prefix}-${date}-${series}`;
   });
 
 export const createIcsForm = createServerFn({ method: "POST" })
@@ -467,10 +632,11 @@ export const createParItem = createServerFn({ method: "POST" })
 // INVENTORY SNAPSHOT (for AI assistant)
 // ============================================
 
-export const getInventorySnapshot = createServerFn({ method: "GET" }).handler(async () => {
-  try {
-    const sql = await getDb();
-    const items = await sql`
+export const getInventorySnapshot = createServerFn({ method: "GET" }).handler(
+  async () => {
+    try {
+      const sql = await getDb();
+      const items = await sql`
       SELECT i.name, i.quantity, i.unit, i.reorder_level,
         c.name AS category_name,
         s.name AS supplier_name
@@ -479,7 +645,7 @@ export const getInventorySnapshot = createServerFn({ method: "GET" }).handler(as
       LEFT JOIN suppliers s ON s.id = i.supplier_id
       ORDER BY i.quantity ASC
     `;
-    const txs = await sql`
+      const txs = await sql`
       SELECT t.type, t.quantity, t.created_at,
         i.name AS item_name
       FROM transactions t
@@ -488,27 +654,107 @@ export const getInventorySnapshot = createServerFn({ method: "GET" }).handler(as
       LIMIT 100
     `;
 
-    const low = items.filter((i: any) => Number(i.quantity) <= Number(i.reorder_level)).slice(0, 25);
-    return {
-      total_items: items.length,
-      out_of_stock: items.filter((i: any) => Number(i.quantity) === 0).length,
-      low_stock_items: low.map((i: any) => ({
-        name: i.name,
-        qty: Number(i.quantity),
-        unit: i.unit,
-        reorder: Number(i.reorder_level),
-        category: i.category_name,
-        supplier: i.supplier_name,
-      })),
-      recent_transactions: txs.slice(0, 30).map((t: any) => ({
-        item: t.item_name,
-        type: t.type,
-        qty: Number(t.quantity),
-        at: t.created_at,
-      })),
-    };
-  } catch (e) {
-    console.error("getInventorySnapshot error:", e);
-    return null;
+      const low = items
+        .filter((i: any) => Number(i.quantity) <= Number(i.reorder_level))
+        .slice(0, 25);
+      return {
+        total_items: items.length,
+        out_of_stock: items.filter((i: any) => Number(i.quantity) === 0).length,
+        low_stock_items: low.map((i: any) => ({
+          name: i.name,
+          qty: Number(i.quantity),
+          unit: i.unit,
+          reorder: Number(i.reorder_level),
+          category: i.category_name,
+          supplier: i.supplier_name,
+        })),
+        recent_transactions: txs.slice(0, 30).map((t: any) => ({
+          item: t.item_name,
+          type: t.type,
+          qty: Number(t.quantity),
+          at: t.created_at,
+        })),
+      };
+    } catch (e) {
+      console.error("getInventorySnapshot error:", e);
+      return null;
+    }
+  },
+);
+
+// ============================================
+// RIS FORMS (Approval Workflow)
+// ============================================
+
+export const listRisForms = createServerFn({ method: "GET" }).handler(async () => {
+  try {
+    const sql = await getDb();
+    const rows = await sql`
+      SELECT
+        rf.id,
+        rf.ris_no,
+        rf.office,
+        rf.purpose,
+        rf.requested_by,
+        rf.approved_by,
+        rf.issued_by,
+        rf.received_by,
+        rf.status,
+        rf.needed_by,
+        rf.priority,
+        rf.created_at,
+        ri.id AS item_id,
+        ri.quantity,
+        ri.remarks,
+        i.name AS item_name,
+        i.unit,
+        i.acquisition_cost,
+        c.name AS category_name,
+        s.name AS supplier_name
+      FROM ris_forms rf
+      LEFT JOIN ris_items ri ON ri.ris_id = rf.id
+      LEFT JOIN items i ON i.id = ri.item_id
+      LEFT JOIN categories c ON c.id = i.category_id
+      LEFT JOIN suppliers s ON s.id = i.supplier_id
+      ORDER BY rf.created_at DESC
+    `;
+    return rows.map((r: any) => ({
+      id: r.id,
+      ris_no: r.ris_no,
+      office: r.office,
+      purpose: r.purpose,
+      requested_by: r.requested_by,
+      approved_by: r.approved_by,
+      issued_by: r.issued_by,
+      received_by: r.received_by,
+      status: r.status,
+      needed_by: r.needed_by,
+      priority: r.priority,
+      created_at: r.created_at,
+      item_id: r.item_id,
+      quantity: Number(r.quantity || 0),
+      remarks: r.remarks,
+      item_name: r.item_name,
+      unit: r.unit,
+      acquisition_cost: Number(r.acquisition_cost || 0),
+      category_name: r.category_name,
+      supplier_name: r.supplier_name,
+    }));
+  } catch (e: any) {
+    console.error("listRisForms error:", e);
+    return [];
   }
 });
+
+export const updateRisFormStatus = createServerFn({ method: "POST" })
+  .inputValidator((d: { id: string; status: string }) => d)
+  .handler(async ({ data }) => {
+    const sql = await getDb();
+    const [row] = await sql`
+      UPDATE ris_forms
+      SET status = ${data.status}
+      WHERE id = ${data.id}
+      RETURNING *
+    `;
+    return row;
+  });
