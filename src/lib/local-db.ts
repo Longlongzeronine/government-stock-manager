@@ -14,8 +14,6 @@ function getDbUrl(): string {
   let url = process.env.DATABASE_URL || process.env.VITE_DATABASE_URL || "";
   let port = process.env.DB_PORT || "";
 
-  // The Vite dev server does not surface non-VITE_* vars from .env onto process.env,
-  // so fall back to reading .env directly (mirrors scripts/migrate-app-cse-full.mjs).
   if (!url || !port) {
     try {
       const env = readFileSync(".env", "utf8");
@@ -26,8 +24,6 @@ function getDbUrl(): string {
 
   if (!url) url = "postgres://postgres:postgres@localhost:5433/government_stock_manager";
 
-  // The live local DB listens on DB_PORT (e.g. 5433). Honor it so the app always
-  // connects to the database that actually has data.
   if (port) url = url.replace(/:\d+\//, `:${port}/`);
   return url;
 }
@@ -42,10 +38,6 @@ export function getSql() {
   }
   return sql as any;
 }
-
-// ============================================
-// QUERY HELPERS
-// ============================================
 
 export async function query<T = any>(
   strings: TemplateStringsArray,
@@ -63,13 +55,8 @@ export async function queryRaw<T = any>(
   return s.unsafe(sqlStr, params);
 }
 
-// ============================================
-// SEED / MIGRATE
-// ============================================
-
 export async function ensureSchema() {
   const s = getSql();
-  // Run the migration SQL
   const migration = `
     CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -284,7 +271,10 @@ export async function ensureSchema() {
       verification_published_at TIMESTAMPTZ DEFAULT NULL,
       created_by TEXT DEFAULT NULL,
       created_by_name TEXT DEFAULT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      status TEXT NOT NULL DEFAULT 'pending',
+      needed_by DATE DEFAULT NULL,
+      priority TEXT NOT NULL DEFAULT 'normal'
     );
 
     ALTER TABLE ris_forms
@@ -297,6 +287,11 @@ export async function ensureSchema() {
     ALTER TABLE ris_forms
       ADD COLUMN IF NOT EXISTS approved_date DATE DEFAULT NULL,
       ADD COLUMN IF NOT EXISTS issued_date DATE DEFAULT NULL;
+
+    ALTER TABLE ris_forms
+      ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending',
+      ADD COLUMN IF NOT EXISTS needed_by DATE DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal';
 
     CREATE UNIQUE INDEX IF NOT EXISTS ris_forms_verification_token_key
       ON ris_forms (verification_token) WHERE verification_token IS NOT NULL;

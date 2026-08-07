@@ -2,7 +2,6 @@ import { createServerFn } from "@tanstack/react-start";
 
 let localSchemaReady: Promise<void> | null = null;
 
-// Helper to get local DB on the server
 async function getDb() {
   const { ensureSchema, getSql } = await import("@/lib/local-db");
   localSchemaReady ??= ensureSchema().then(() => undefined);
@@ -11,9 +10,6 @@ async function getDb() {
 }
 
 async function ensureItemCodes(sql: any) {
-  // Only QR codes are auto-derived. barcode_value IS NULL is how the app identifies
-  // Part II (other items) — auto-assigning id::text moves them into Part I and breaks
-  // the APP-CSE Part I/Part II totals, so barcode_value is intentionally left alone.
   await sql`
     UPDATE items
     SET qr_code_value = 'ITEM:' || id::text
@@ -40,10 +36,6 @@ function normalizeUnit(value: unknown, itemName = "") {
   return aliases[unit] || unit;
 }
 
-// ============================================
-// ITEMS
-// ============================================
-
 export const listItems = createServerFn({ method: "GET" }).handler(async () => {
   try {
     const sql = await getDb();
@@ -58,9 +50,6 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
       LEFT JOIN suppliers s ON s.id = i.supplier_id
       ORDER BY i.sort_order ASC NULLS LAST, i.name ASC
     `;
-    // Transform the nested JSON into the expected format.
-    // Guard: a barcode equal to the row's own id is a stale auto-assign artifact (not a real
-    // PS-DBM code) — surface it as no barcode so Part II items render under Part II.
     return rows.map((r: any) => ({
       ...r,
       barcode_value: r.barcode_value && String(r.barcode_value) === String(r.id) ? null : r.barcode_value,
@@ -112,7 +101,6 @@ export const createItem = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
     const sql = await getDb();
-    // Place new items after the highest existing sort_order so the file order stays stable.
     const [maxRow] = await sql`SELECT COALESCE(MAX(sort_order), 0) AS m FROM items`;
     const nextSort = Number(maxRow.m) + 1;
     const [row] = await sql`
@@ -144,7 +132,6 @@ export const createItem = createServerFn({ method: "POST" })
       })}
       RETURNING *
     `;
-    // Only derive the QR scan value; barcode_value IS NULL means Part II and must stay NULL.
     const [codedRow] = await sql`
       UPDATE items
       SET qr_code_value = COALESCE(NULLIF(btrim(qr_code_value), ''), 'ITEM:' || id::text)
@@ -159,9 +146,7 @@ export const importItems = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const sql = await getDb();
     const existing = await sql`SELECT id, name, barcode_value FROM items ORDER BY (barcode_value IS NOT NULL) DESC, name ASC`;
-    // Name → existing record (first wins so Part I items aren't shadowed by Part II duplicates)
     const names = new Map<string, { id: string | null; barcode: string | null; description: string | null }>();
-    // Code → existing record — the primary identity for Part I (PS-DBM catalog) items
     const codes = new Map<string, { id: string | null; name: string; description: string | null }>();
     for (const item of existing as any[]) {
       const nameKey = String(item.name).trim().toLowerCase();
@@ -174,8 +159,6 @@ export const importItems = createServerFn({ method: "POST" })
     let updated = 0;
     let nextSort = Number((await sql`SELECT COALESCE(MAX(sort_order), 0) AS m FROM items`)[0].m) + 1;
 
-    // Shared payload builder so adds and updates stay in sync (units, prices, monthly qty, etc.)
-    // The file's description (e.g. "[CODE] name" for Part II) wins; otherwise keep the existing one.
     const payload = (item: any, name: string, barcode: string | null, categoryId: string | null, existingDescription: string | null) => ({
       name,
       description: item.description ? String(item.description).trim() : existingDescription,
@@ -199,7 +182,6 @@ export const importItems = createServerFn({ method: "POST" })
       nov_quantity: Number(item.nov_quantity) || 0,
       dec_quantity: Number(item.dec_quantity) || 0,
     });
-    // A code that is a full UUID is NOT a real PS-DBM code — it was auto-assigned by an old trigger
     const isUuidCode = (c: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(c);
 
     for (const item of data.items || []) {
@@ -212,7 +194,6 @@ export const importItems = createServerFn({ method: "POST" })
         continue;
       }
 
-      // Find or create category if category_name is provided
       let categoryId: string | null = null;
       if (item.category_name) {
         const catName = String(item.category_name).trim();
@@ -225,7 +206,6 @@ export const importItems = createServerFn({ method: "POST" })
         }
       }
 
-      // ── Part I: barcode is the identity → re-import UPDATES the existing item ──
       if (codeKey) {
         const existingByCode = codes.get(codeKey);
         if (existingByCode?.id) {
@@ -233,18 +213,13 @@ export const importItems = createServerFn({ method: "POST" })
           updated += 1;
           continue;
         }
-        // Already inserted earlier in this same import batch
         if (existingByCode) {
           skipped += 1;
           continue;
         }
       } else {
-        // ── Part II: name is the identity → re-import UPDATES the matching item ──
         const existingMatch = names.get(nameKey);
         if (existingMatch) {
-          // id null = already inserted earlier in this batch → skip as duplicate.
-          // A real record is updated, unless it carries a genuine Part I barcode (only a stale
-          // UUID from the old auto-assign trigger may be cleared to move it back to Part II).
           if (existingMatch.id && (!existingMatch.barcode || isUuidCode(existingMatch.barcode))) {
             await sql`UPDATE items SET ${sql(payload(item, name, null, categoryId, existingMatch.description))} WHERE id = ${existingMatch.id}`;
             updated += 1;
@@ -267,9 +242,6 @@ export const importItems = createServerFn({ method: "POST" })
       added += 1;
     }
 
-    // Self-healing: if any stale trigger auto-assigned a UUID barcode (barcode = own row id)
-    // during this import, clear it so Part II items (barcode_value IS NULL) stay in Part II.
-    // Safe: a bare UPDATE on barcode_value does not fire the item_type/acquisition_cost triggers.
     await sql`
       UPDATE items SET barcode_value = NULL
       WHERE barcode_value = id::text
@@ -338,10 +310,6 @@ export const deleteItem = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
-// ============================================
-// CATEGORIES
-// ============================================
-
 export const listCategories = createServerFn({ method: "GET" }).handler(
   async () => {
     try {
@@ -383,10 +351,6 @@ export const deleteCategory = createServerFn({ method: "POST" })
     await sql`DELETE FROM categories WHERE id = ${data.id}`;
     return { ok: true };
   });
-
-// ============================================
-// SUPPLIERS
-// ============================================
 
 export const listSuppliers = createServerFn({ method: "GET" }).handler(
   async () => {
@@ -439,10 +403,6 @@ export const deleteSupplier = createServerFn({ method: "POST" })
     await sql`DELETE FROM suppliers WHERE id = ${data.id}`;
     return { ok: true };
   });
-
-// ============================================
-// TRANSACTIONS
-// ============================================
 
 export const listTransactions = createServerFn({ method: "GET" })
   .inputValidator((d: { limit?: number } | undefined) => d ?? {})
@@ -540,10 +500,6 @@ export const createTransaction = createServerFn({ method: "POST" })
     });
   });
 
-// ============================================
-// AUDIT LOGS
-// ============================================
-
 export const listAuditLogs = createServerFn({ method: "GET" }).handler(
   async () => {
     try {
@@ -556,10 +512,6 @@ export const listAuditLogs = createServerFn({ method: "GET" }).handler(
     }
   },
 );
-
-// ============================================
-// FORMS (IAR, RIS, ICS, PAR)
-// ============================================
 
 export const listIarForms = createServerFn({ method: "GET" }).handler(
   async () => {
@@ -817,10 +769,6 @@ export const createParItem = createServerFn({ method: "POST" })
     return row;
   });
 
-// ============================================
-// INVENTORY SNAPSHOT (for AI assistant)
-// ============================================
-
 export const getInventorySnapshot = createServerFn({ method: "GET" }).handler(
   async () => {
     try {
@@ -870,3 +818,80 @@ export const getInventorySnapshot = createServerFn({ method: "GET" }).handler(
     }
   },
 );
+
+// ============================================
+// RIS FORMS (Approval Workflow)
+// ============================================
+
+export const listRisForms = createServerFn({ method: "GET" }).handler(async () => {
+  try {
+    const sql = await getDb();
+    const rows = await sql`
+      SELECT
+        rf.id,
+        rf.ris_no,
+        rf.office,
+        rf.purpose,
+        rf.requested_by,
+        rf.approved_by,
+        rf.issued_by,
+        rf.received_by,
+        rf.status,
+        rf.needed_by,
+        rf.priority,
+        rf.created_at,
+        ri.id AS item_id,
+        ri.quantity,
+        ri.remarks,
+        i.name AS item_name,
+        i.unit,
+        i.acquisition_cost,
+        c.name AS category_name,
+        s.name AS supplier_name
+      FROM ris_forms rf
+      LEFT JOIN ris_items ri ON ri.ris_id = rf.id
+      LEFT JOIN items i ON i.id = ri.item_id
+      LEFT JOIN categories c ON c.id = i.category_id
+      LEFT JOIN suppliers s ON s.id = i.supplier_id
+      ORDER BY rf.created_at DESC
+    `;
+    return rows.map((r: any) => ({
+      id: r.id,
+      ris_no: r.ris_no,
+      office: r.office,
+      purpose: r.purpose,
+      requested_by: r.requested_by,
+      approved_by: r.approved_by,
+      issued_by: r.issued_by,
+      received_by: r.received_by,
+      status: r.status,
+      needed_by: r.needed_by,
+      priority: r.priority,
+      created_at: r.created_at,
+      item_id: r.item_id,
+      quantity: Number(r.quantity || 0),
+      remarks: r.remarks,
+      item_name: r.item_name,
+      unit: r.unit,
+      acquisition_cost: Number(r.acquisition_cost || 0),
+      category_name: r.category_name,
+      supplier_name: r.supplier_name,
+    }));
+  } catch (e: any) {
+    console.error("listRisForms error:", e);
+    return [];
+  }
+});
+
+export const updateRisFormStatus = createServerFn({ method: "POST" })
+  .inputValidator((d: { id: string; status: string }) => d)
+  .handler(async ({ data }) => {
+    const sql = await getDb();
+    const [row] = await sql`
+      UPDATE ris_forms
+      SET status = ${data.status}
+      WHERE id = ${data.id}
+      RETURNING *
+    `;
+    return row;
+  });

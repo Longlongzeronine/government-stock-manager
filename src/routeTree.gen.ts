@@ -24,6 +24,7 @@ import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
 import { Route as AppCategoriesRouteImport } from './routes/_app/categories'
 import { Route as AppAuditRouteImport } from './routes/_app/audit'
 import { Route as AppAssistantRouteImport } from './routes/_app/assistant'
+import { Route as AppApprovalRouteImport } from './routes/_app/approval'
 import { Route as AppVerifyRisTokenRouteImport } from './routes/_app/verify.ris.$token'
 
 const SignupRoute = SignupRouteImport.update({
@@ -100,6 +101,11 @@ const AppAssistantRoute = AppAssistantRouteImport.update({
   path: '/assistant',
   getParentRoute: () => AppRoute,
 } as any)
+const AppApprovalRoute = AppApprovalRouteImport.update({
+  id: '/approval',
+  path: '/approval',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppVerifyRisTokenRoute = AppVerifyRisTokenRouteImport.update({
   id: '/verify/ris/$token',
   path: '/verify/ris/$token',
@@ -110,6 +116,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
+  '/approval': typeof AppApprovalRoute
   '/assistant': typeof AppAssistantRoute
   '/audit': typeof AppAuditRoute
   '/categories': typeof AppCategoriesRoute
@@ -127,6 +134,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
+  '/approval': typeof AppApprovalRoute
   '/assistant': typeof AppAssistantRoute
   '/audit': typeof AppAuditRoute
   '/categories': typeof AppCategoriesRoute
@@ -146,6 +154,7 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
+  '/_app/approval': typeof AppApprovalRoute
   '/_app/assistant': typeof AppAssistantRoute
   '/_app/audit': typeof AppAuditRoute
   '/_app/categories': typeof AppCategoriesRoute
@@ -165,6 +174,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/signup'
+    | '/approval'
     | '/assistant'
     | '/audit'
     | '/categories'
@@ -182,6 +192,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/signup'
+    | '/approval'
     | '/assistant'
     | '/audit'
     | '/categories'
@@ -200,6 +211,7 @@ export interface FileRouteTypes {
     | '/_app'
     | '/login'
     | '/signup'
+    | '/_app/approval'
     | '/_app/assistant'
     | '/_app/audit'
     | '/_app/categories'
@@ -328,6 +340,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAssistantRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/approval': {
+      id: '/_app/approval'
+      path: '/approval'
+      fullPath: '/approval'
+      preLoaderRoute: typeof AppApprovalRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/verify/ris/$token': {
       id: '/_app/verify/ris/$token'
       path: '/verify/ris/$token'
@@ -339,6 +358,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppRouteChildren {
+  AppApprovalRoute: typeof AppApprovalRoute
   AppAssistantRoute: typeof AppAssistantRoute
   AppAuditRoute: typeof AppAuditRoute
   AppCategoriesRoute: typeof AppCategoriesRoute
@@ -354,6 +374,7 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppApprovalRoute: AppApprovalRoute,
   AppAssistantRoute: AppAssistantRoute,
   AppAuditRoute: AppAuditRoute,
   AppCategoriesRoute: AppCategoriesRoute,
