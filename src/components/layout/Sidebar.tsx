@@ -28,6 +28,7 @@ export const nav: { to: string; label: string; icon: any; roles: R[] }[] = [
   { to: "/inventory", label: "Inventory", icon: Package, roles: ["admin", "staff", "accounting", "viewer"] },
   { to: "/requisitions", label: "Requisitions", icon: ClipboardList, roles: ["admin", "staff"] },
   { to: "/forms", label: "Forms Flow", icon: FileStack, roles: ["admin", "staff", "accounting"] },
+  { to: "/approval", label: "Approval", icon: Shield, roles: ["admin", "staff"] },
   { to: "/stock", label: "Stock In / Out", icon: ArrowLeftRight, roles: ["admin", "staff", "accounting"] },
   { to: "/categories", label: "Categories", icon: Tags, roles: ["admin"] },
   { to: "/suppliers", label: "Suppliers", icon: Building2, roles: ["admin", "staff", "accounting", "viewer"] },
