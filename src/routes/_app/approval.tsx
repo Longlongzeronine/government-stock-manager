@@ -20,23 +20,34 @@ export const Route = createFileRoute("/_app/approval")({
 type Status = "pending" | "approved" | "rejected";
 type Priority = "urgent" | "high" | "normal" | "low";
 
-interface Request {
+interface RequestItem {
   id: string;
-  ris_no: string;
   item: string;
   category: string;
-  requester: string;
-  department: string;
   quantity: number;
   unit: string;
   unitCost: number;
   total: number;
+  notes: string;
+}
+
+interface Request {
+  id: string;
+  ris_no: string;
+  requester: string;
+  department: string;
   submittedAt: string;
   neededBy: string;
   priority: Priority;
   status: Status;
-  notes: string;
   vendor: string;
+  purpose: string;
+  items: RequestItem[];
+  categories: string[];
+  quantity: number;
+  unit: string | null;
+  unitCost: number;
+  total: number;
 }
 
 const PRIORITY_ORDER: Priority[] = ["urgent", "high", "normal", "low"];
@@ -174,7 +185,11 @@ function DetailModal({ req, onClose, onApprove, onReject }: DetailModalProps) {
         <div className="flex items-start justify-between gap-3 p-5 border-b border-border">
           <div>
             <div className="text-xs text-muted-foreground mb-1">{req.ris_no}</div>
-            <div className="text-sm font-semibold leading-snug">{req.item}</div>
+            <div className="text-sm font-semibold leading-snug">
+              {req.items.length === 1
+                ? req.items[0].item
+                : `${req.items.length} items requested`}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <StatusBadge status={req.status} />
@@ -187,9 +202,7 @@ function DetailModal({ req, onClose, onApprove, onReject }: DetailModalProps) {
           </div>
         </div>
 
-        <div className="px-5">
-          <DetailRow label="Category" value={req.category} />
-          <DetailRow label="Vendor" value={req.vendor || "—"} />
+        <div className="px-5 pt-4">
           <DetailRow label="Requester" value={`${req.requester} · ${req.department}`} />
           <DetailRow label="Submitted" value={fmtDateTime(req.submittedAt)} />
           <DetailRow
@@ -197,17 +210,56 @@ function DetailModal({ req, onClose, onApprove, onReject }: DetailModalProps) {
             value={isOverdue(req.neededBy) ? `${fmtDate(req.neededBy)} (overdue)` : fmtDate(req.neededBy)}
           />
           <DetailRow label="Priority" value={PRIORITY_CONFIG[req.priority].label} />
-          <DetailRow label="Quantity" value={`${req.quantity.toLocaleString()} ${req.unit}`} />
-          <DetailRow label="Unit Cost" value={`$${fmt(req.unitCost)}`} />
-          <DetailRow label="Total Amount" value={`$${fmt(req.total)}`} />
+          <DetailRow label="Vendor" value={req.vendor || "—"} />
+          {req.purpose && <DetailRow label="Purpose" value={req.purpose} />}
         </div>
 
-        {req.notes && (
-          <div className="m-5 p-3 bg-navy/5 border-l-2 border-navy rounded-md">
-            <div className="text-[11px] text-muted-foreground mb-1">REQUESTER NOTES</div>
-            <div className="text-xs leading-relaxed">{req.notes}</div>
+        <div className="px-5 pt-4">
+          <div className="text-[11px] text-muted-foreground tracking-wider mb-2">
+            ITEMS ({req.items.length})
           </div>
-        )}
+          <div className="rounded-md border border-border overflow-hidden">
+            <div className="grid grid-cols-[1fr_64px_84px_84px] bg-accent/30 text-[10px] text-muted-foreground tracking-wider">
+              <div className="px-3 py-2">ITEM</div>
+              <div className="px-3 py-2 text-right">QTY</div>
+              <div className="px-3 py-2 text-right">UNIT COST</div>
+              <div className="px-3 py-2 text-right">TOTAL</div>
+            </div>
+            {req.items.map((it) => (
+              <div
+                key={it.id}
+                className="grid grid-cols-[1fr_64px_84px_84px] border-t border-border"
+              >
+                <div className="px-3 py-2 min-w-0">
+                  <div className="text-xs font-medium leading-snug truncate">{it.item}</div>
+                  <div className="text-[10px] text-muted-foreground truncate">{it.category}</div>
+                  {it.notes && (
+                    <div className="text-[10px] text-muted-foreground italic truncate">
+                      {it.notes}
+                    </div>
+                  )}
+                </div>
+                <div className="px-3 py-2 text-xs tabular-nums text-right flex items-center justify-end">
+                  {it.quantity.toLocaleString()} {it.unit}
+                </div>
+                <div className="px-3 py-2 text-xs tabular-nums text-right">${fmt(it.unitCost)}</div>
+                <div className="px-3 py-2 text-xs tabular-nums font-semibold text-right">
+                  ${fmt(it.total)}
+                </div>
+              </div>
+            ))}
+            <div className="grid grid-cols-[1fr_64px_84px_84px] border-t border-border bg-accent/20">
+              <div className="px-3 py-2 text-xs font-semibold">TOTAL</div>
+              <div className="px-3 py-2 text-xs text-muted-foreground text-right">
+                {req.quantity.toLocaleString()} {req.unit ?? "units"}
+              </div>
+              <div />
+              <div className="px-3 py-2 text-xs font-semibold tabular-nums text-right">
+                ${fmt(req.total)}
+              </div>
+            </div>
+          </div>
+        </div>
 
         {req.status === "pending" && (
           <div className="px-5 pb-5">
@@ -299,24 +351,47 @@ export default function App() {
     queryFn: listRisForms,
   });
 
-  const requests: Request[] = risForms.map((r: any) => ({
-    id: r.id,
-    ris_no: r.ris_no,
-    item: r.item_name || "Unknown Item",
-    category: r.category_name || "Uncategorized",
-    requester: r.requested_by || "Unknown",
-    department: r.office || "—",
-    quantity: Number(r.quantity || 0),
-    unit: r.unit || "pcs",
-    unitCost: Number(r.acquisition_cost || 0),
-    total: Number(r.quantity || 0) * Number(r.acquisition_cost || 0),
-    submittedAt: r.created_at || "",
-    neededBy: r.needed_by || "",
-    priority: (r.priority as Priority) || "normal",
-    status: r.status === "issued" || r.status === "approved" ? "approved" : r.status === "cancelled" || r.status === "rejected" ? "rejected" : "pending",
-    notes: r.remarks || "",
-    vendor: r.supplier_name || "",
-  }));
+  // Group ris_items rows by their ris_form so one request shows as a single row.
+  const requestGroups = new Map<string, any[]>();
+  for (const r of risForms) {
+    if (!requestGroups.has(r.id)) requestGroups.set(r.id, []);
+    requestGroups.get(r.id)!.push(r);
+  }
+
+  const requests: Request[] = Array.from(requestGroups.values()).map((rows) => {
+    const first = rows[0];
+    const items: RequestItem[] = rows.map((r: any) => ({
+      id: r.item_id || r.id,
+      item: r.item_name || "Unknown Item",
+      category: r.category_name || "Uncategorized",
+      quantity: Number(r.quantity || 0),
+      unit: r.unit || "pcs",
+      unitCost: Number(r.acquisition_cost || 0),
+      total: Number(r.quantity || 0) * Number(r.acquisition_cost || 0),
+      notes: r.remarks || "",
+    }));
+    const quantity = items.reduce((s, it) => s + it.quantity, 0);
+    const total = items.reduce((s, it) => s + it.total, 0);
+    const unit = items.every((it) => it.unit === items[0].unit) ? items[0].unit : null;
+    return {
+      id: first.id,
+      ris_no: first.ris_no,
+      requester: first.requested_by || "Unknown",
+      department: first.office || "—",
+      submittedAt: first.created_at || "",
+      neededBy: first.needed_by || "",
+      priority: (first.priority as Priority) || "normal",
+      status: first.status === "issued" || first.status === "approved" ? "approved" : first.status === "cancelled" || first.status === "rejected" ? "rejected" : "pending",
+      vendor: first.supplier_name || "",
+      purpose: first.purpose || "",
+      items,
+      categories: Array.from(new Set(items.map((it) => it.category))),
+      quantity,
+      unit,
+      unitCost: quantity > 0 ? total / quantity : 0,
+      total,
+    };
+  });
 
   const approve = async (id: string) => {
     await updateRisFormStatus({ data: { id, status: "issued" } });
@@ -330,22 +405,24 @@ export default function App() {
     setSelected(null);
   };
 
-  const categories = ["all", ...Array.from(new Set(requests.map((r) => r.category)))];
+  const categories = ["all", ...Array.from(new Set(requests.flatMap((r) => r.categories)))];
 
   // Count of requests per category, shown next to each option in the dropdown.
   const categoryCounts: Record<string, number> = { all: requests.length };
   for (const r of requests) {
-    categoryCounts[r.category] = (categoryCounts[r.category] ?? 0) + 1;
+    for (const c of r.categories) {
+      categoryCounts[c] = (categoryCounts[c] ?? 0) + 1;
+    }
   }
 
   const filtered = requests
     .filter((r) => filterStatus === "all" || r.status === filterStatus)
     .filter((r) => filterPriority === "all" || r.priority === filterPriority)
-    .filter((r) => filterCategory === "all" || r.category === filterCategory)
+    .filter((r) => filterCategory === "all" || r.categories.includes(filterCategory))
     .filter(
       (r) =>
         search === "" ||
-        r.item.toLowerCase().includes(search.toLowerCase()) ||
+        r.items.some((it) => it.item.toLowerCase().includes(search.toLowerCase())) ||
         r.requester.toLowerCase().includes(search.toLowerCase()) ||
         r.department.toLowerCase().includes(search.toLowerCase()) ||
         r.ris_no.toLowerCase().includes(search.toLowerCase()),
@@ -475,20 +552,34 @@ export default function App() {
                       {req.ris_no}
                     </span>
                   </div>
-                  <div className="px-3 py-3 flex flex-col justify-center gap-0.5">
-                    <span className="text-xs font-medium leading-snug">{req.item}</span>
+                  <div className="px-3 py-3 flex flex-col justify-center gap-0.5 min-w-0">
+                    {req.items.map((it) => (
+                      <span key={it.id} className="text-xs font-medium leading-snug truncate">
+                        {it.item}
+                        <span className="text-muted-foreground font-normal">
+                          {" "}×{it.quantity.toLocaleString()}
+                        </span>
+                      </span>
+                    ))}
                     <span className="text-[11px] text-muted-foreground">
                       {req.requester} · {req.department}
                     </span>
                   </div>
-                  <div className="px-3 py-3 flex items-center">
-                    <CategoryChip category={req.category} />
+                  <div className="px-3 py-3 flex items-center gap-1 flex-wrap">
+                    <CategoryChip category={req.categories[0]} />
+                    {req.categories.length > 1 && (
+                      <span className="text-[10px] text-muted-foreground">
+                        +{req.categories.length - 1}
+                      </span>
+                    )}
                   </div>
                   <div className="px-3 py-3 flex items-center justify-start text-xs tabular-nums">
                     {req.quantity.toLocaleString()}
-                    <span className="text-muted-foreground ml-1">{req.unit}</span>
+                    {req.unit && <span className="text-muted-foreground ml-1">{req.unit}</span>}
                   </div>
-                  <div className="px-3 py-3 flex items-center justify-start text-xs tabular-nums">${fmt(req.unitCost)}</div>
+                  <div className="px-3 py-3 flex items-center justify-start text-xs tabular-nums">
+                    {req.unit ? `$${fmt(req.unitCost)}` : "—"}
+                  </div>
                   <div className="px-3 py-3 flex items-center justify-start text-xs tabular-nums font-semibold">
                     ${fmt(req.total)}
                   </div>
