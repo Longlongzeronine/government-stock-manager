@@ -6,15 +6,26 @@
 
 // @ts-ignore - postgres is ESM, but this works in TanStack Start server functions
 import postgres from "postgres";
+import { readFileSync } from "fs";
 
 let sql: ReturnType<typeof postgres> | null = null;
 
 function getDbUrl(): string {
-  return (
-    process.env.DATABASE_URL ||
-    process.env.VITE_DATABASE_URL ||
-    "postgres://postgres:postgres@localhost:5432/government_stock_manager"
-  );
+  let url = process.env.DATABASE_URL || process.env.VITE_DATABASE_URL || "";
+  let port = process.env.DB_PORT || "";
+
+  if (!url || !port) {
+    try {
+      const env = readFileSync(".env", "utf8");
+      if (!url) url = env.match(/^DATABASE_URL=(.+)$/m)?.[1]?.trim() || "";
+      if (!port) port = env.match(/^DB_PORT=(.+)$/m)?.[1]?.trim() || "";
+    } catch { /* no .env (edge runtime) — rely on process.env only */ }
+  }
+
+  if (!url) url = "postgres://postgres:postgres@localhost:5433/government_stock_manager";
+
+  if (port) url = url.replace(/:\d+\//, `:${port}/`);
+  return url;
 }
 
 export function getSql() {
@@ -27,10 +38,6 @@ export function getSql() {
   }
   return sql as any;
 }
-
-// ============================================
-// QUERY HELPERS
-// ============================================
 
 export async function query<T = any>(
   strings: TemplateStringsArray,
@@ -48,13 +55,8 @@ export async function queryRaw<T = any>(
   return s.unsafe(sqlStr, params);
 }
 
-// ============================================
-// SEED / MIGRATE
-// ============================================
-
 export async function ensureSchema() {
   const s = getSql();
-  // Run the migration SQL
   const migration = `
     CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -113,20 +115,46 @@ export async function ensureSchema() {
       semi_expendable_tier semi_expendable_tier_enum DEFAULT NULL,
       accountability_status accountability_status_enum NOT NULL DEFAULT 'available',
       quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      jan_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      feb_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      mar_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      apr_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      may_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      jun_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      jul_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      aug_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      sep_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      oct_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      nov_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+      dec_quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
       unit TEXT NOT NULL DEFAULT 'pcs',
       reorder_level NUMERIC(12,2) NOT NULL DEFAULT 10,
       acquisition_cost NUMERIC(14,2) NOT NULL DEFAULT 0,
       barcode_value TEXT DEFAULT NULL,
       qr_code_value TEXT DEFAULT NULL,
+      sort_order INTEGER DEFAULT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
-    -- Give both existing and future inventory records stable scan values.
-    UPDATE items
-    SET barcode_value = id::text
-    WHERE barcode_value IS NULL OR btrim(barcode_value) = '';
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS jan_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS feb_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS mar_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS apr_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS may_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS jun_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS jul_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS aug_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS sep_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS oct_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS nov_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS dec_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT NULL;
 
+    -- QR codes give existing and future inventory records stable scan values.
+    -- NOTE: barcode_value is intentionally left alone — the app treats barcode_value
+    -- IS NULL as "Part II (other items)". Auto-assigning id::text pushed Part II items
+    -- into Part I and broke the APP-CSE Part I/Part II totals.
     UPDATE items
     SET qr_code_value = 'ITEM:' || id::text
     WHERE qr_code_value IS NULL OR btrim(qr_code_value) = '';
@@ -146,9 +174,7 @@ export async function ensureSchema() {
           NEW.semi_expendable_tier := CASE WHEN NEW.acquisition_cost >= 15000 THEN 'high_value' ELSE 'low_value' END;
         END IF;
       END IF;
-      IF NEW.barcode_value IS NULL OR btrim(NEW.barcode_value) = '' THEN
-        NEW.barcode_value := NEW.id::text;
-      END IF;
+      -- NOTE: barcode_value intentionally left untouched (barcode_value IS NULL = Part II).
       IF NEW.qr_code_value IS NULL OR btrim(NEW.qr_code_value) = '' THEN
         NEW.qr_code_value := 'ITEM:' || NEW.id::text;
       END IF;
@@ -342,10 +368,17 @@ export async function ensureSchema() {
 
     -- Indexes
     CREATE INDEX IF NOT EXISTS idx_items_name ON items(name);
+    CREATE INDEX IF NOT EXISTS idx_items_sort_order ON items(sort_order);
     CREATE INDEX IF NOT EXISTS idx_items_category_id ON items(category_id);
     CREATE INDEX IF NOT EXISTS idx_items_supplier_id ON items(supplier_id);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_items_barcode_value_unique ON items(barcode_value);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_items_qr_code_value_unique ON items(qr_code_value);
+    -- Unique scan indexes (guarded so a pre-existing duplicate can never take down every
+    -- server function — getDb() caches ensureSchema and a single failure would 500 the app).
+    DO $$ BEGIN
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_items_barcode_value_unique ON items(barcode_value);
+    EXCEPTION WHEN unique_violation THEN NULL; END $$;
+    DO $$ BEGIN
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_items_qr_code_value_unique ON items(qr_code_value);
+    EXCEPTION WHEN unique_violation THEN NULL; END $$;
     CREATE INDEX IF NOT EXISTS idx_transactions_item_id ON transactions(item_id);
     CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
