@@ -110,6 +110,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
+  '/approval': typeof AppApprovalRoute
   '/assistant': typeof AppAssistantRoute
   '/audit': typeof AppAuditRoute
   '/categories': typeof AppCategoriesRoute
@@ -127,6 +128,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
+  '/approval': typeof AppApprovalRoute
   '/assistant': typeof AppAssistantRoute
   '/audit': typeof AppAuditRoute
   '/categories': typeof AppCategoriesRoute
@@ -146,6 +148,7 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
+  '/_app/approval': typeof AppApprovalRoute
   '/_app/assistant': typeof AppAssistantRoute
   '/_app/audit': typeof AppAuditRoute
   '/_app/categories': typeof AppCategoriesRoute
@@ -165,6 +168,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/signup'
+    | '/approval'
     | '/assistant'
     | '/audit'
     | '/categories'
@@ -182,6 +186,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/signup'
+    | '/approval'
     | '/assistant'
     | '/audit'
     | '/categories'
@@ -200,6 +205,7 @@ export interface FileRouteTypes {
     | '/_app'
     | '/login'
     | '/signup'
+    | '/_app/approval'
     | '/_app/assistant'
     | '/_app/audit'
     | '/_app/categories'
@@ -339,6 +345,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppRouteChildren {
+  AppApprovalRoute: typeof AppApprovalRoute
   AppAssistantRoute: typeof AppAssistantRoute
   AppAuditRoute: typeof AppAuditRoute
   AppCategoriesRoute: typeof AppCategoriesRoute
@@ -354,6 +361,7 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppApprovalRoute: AppApprovalRoute,
   AppAssistantRoute: AppAssistantRoute,
   AppAuditRoute: AppAuditRoute,
   AppCategoriesRoute: AppCategoriesRoute,
