@@ -24,7 +24,6 @@ import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
 import { Route as AppCategoriesRouteImport } from './routes/_app/categories'
 import { Route as AppAuditRouteImport } from './routes/_app/audit'
 import { Route as AppAssistantRouteImport } from './routes/_app/assistant'
-import { Route as AppApprovalRouteImport } from './routes/_app/approval'
 import { Route as AppVerifyRisTokenRouteImport } from './routes/_app/verify.ris.$token'
 
 const SignupRoute = SignupRouteImport.update({
@@ -99,11 +98,6 @@ const AppAuditRoute = AppAuditRouteImport.update({
 const AppAssistantRoute = AppAssistantRouteImport.update({
   id: '/assistant',
   path: '/assistant',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppApprovalRoute = AppApprovalRouteImport.update({
-  id: '/approval',
-  path: '/approval',
   getParentRoute: () => AppRoute,
 } as any)
 const AppVerifyRisTokenRoute = AppVerifyRisTokenRouteImport.update({
@@ -338,13 +332,6 @@ declare module '@tanstack/react-router' {
       path: '/assistant'
       fullPath: '/assistant'
       preLoaderRoute: typeof AppAssistantRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/approval': {
-      id: '/_app/approval'
-      path: '/approval'
-      fullPath: '/approval'
-      preLoaderRoute: typeof AppApprovalRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/verify/ris/$token': {
