@@ -245,10 +245,7 @@ export async function ensureSchema() {
       verification_published_at TIMESTAMPTZ DEFAULT NULL,
       created_by TEXT DEFAULT NULL,
       created_by_name TEXT DEFAULT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      status TEXT NOT NULL DEFAULT 'pending',
-      needed_by DATE DEFAULT NULL,
-      priority TEXT NOT NULL DEFAULT 'normal'
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     ALTER TABLE ris_forms
