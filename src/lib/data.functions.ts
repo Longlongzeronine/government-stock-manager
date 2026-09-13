@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 
 let localSchemaReady: Promise<void> | null = null;
 
+// Helper to get local DB on the server
 async function getDb() {
   const { ensureSchema, getSql } = await import("@/lib/local-db");
   localSchemaReady ??= ensureSchema().then(() => undefined);
@@ -16,6 +17,10 @@ async function ensureItemCodes(sql: any) {
     WHERE qr_code_value IS NULL OR btrim(qr_code_value) = ''
   `;
 }
+
+// ============================================
+// ITEMS
+// ============================================
 
 function normalizeUnit(value: unknown, itemName = "") {
   const unit = String(value ?? "").trim().toLowerCase();
@@ -310,6 +315,10 @@ export const deleteItem = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+// ============================================
+// CATEGORIES
+// ============================================
+
 export const listCategories = createServerFn({ method: "GET" }).handler(
   async () => {
     try {
@@ -351,6 +360,10 @@ export const deleteCategory = createServerFn({ method: "POST" })
     await sql`DELETE FROM categories WHERE id = ${data.id}`;
     return { ok: true };
   });
+
+// ============================================
+// SUPPLIERS
+// ============================================
 
 export const listSuppliers = createServerFn({ method: "GET" }).handler(
   async () => {
@@ -500,6 +513,10 @@ export const createTransaction = createServerFn({ method: "POST" })
     });
   });
 
+// ============================================
+// AUDIT LOGS
+// ============================================
+
 export const listAuditLogs = createServerFn({ method: "GET" }).handler(
   async () => {
     try {
@@ -512,6 +529,10 @@ export const listAuditLogs = createServerFn({ method: "GET" }).handler(
     }
   },
 );
+
+// ============================================
+// FORMS (IAR, RIS, ICS, PAR)
+// ============================================
 
 export const listIarForms = createServerFn({ method: "GET" }).handler(
   async () => {
@@ -768,6 +789,10 @@ export const createParItem = createServerFn({ method: "POST" })
     `;
     return row;
   });
+
+// ============================================
+// INVENTORY SNAPSHOT (for AI assistant)
+// ============================================
 
 export const getInventorySnapshot = createServerFn({ method: "GET" }).handler(
   async () => {
