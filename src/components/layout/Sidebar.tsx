@@ -13,6 +13,7 @@ import {
   Sparkles,
   LogOut,
   Shield,
+  History,
   X,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -26,14 +27,55 @@ export const nav: { to: string; label: string; icon: any; roles: R[] }[] = [
     icon: LayoutDashboard,
     roles: ["admin", "staff", "accounting", "viewer"],
   },
-  { to: "/inventory", label: "Inventory", icon: Package, roles: ["admin", "staff", "accounting", "viewer"] },
-  { to: "/scanner", label: "Scanner", icon: ScanLine, roles: ["admin", "staff", "accounting", "viewer"] },
-  { to: "/requisitions", label: "Requisitions", icon: ClipboardList, roles: ["admin", "staff"] },
-  { to: "/forms", label: "Forms Flow", icon: FileStack, roles: ["admin", "staff", "accounting"] },
-  { to: "/approval", label: "Approval", icon: Shield, roles: ["admin", "staff"] },
-  { to: "/stock", label: "Stock In / Out", icon: ArrowLeftRight, roles: ["admin", "staff", "accounting"] },
+  {
+    to: "/inventory",
+    label: "Inventory",
+    icon: Package,
+    roles: ["admin", "staff", "accounting", "viewer"],
+  },
+  {
+    to: "/requisitions",
+    label: "Requisitions",
+    icon: ClipboardList,
+    roles: ["admin", "staff"],
+  },
+  {
+    to: "/scanner",
+    label: "Scanner",
+    icon: ScanLine,
+    roles: ["admin", "staff", "accounting", "viewer"],
+  },
+  {
+    to: "/approval",
+    label: "Approval",
+    icon: Shield,
+    roles: ["admin", "staff"],
+  },
+  {
+    to: "/ris-history",
+    label: "RIS History",
+    icon: History,
+    roles: ["admin", "staff", "accounting", "viewer"],
+  },
+  {
+    to: "/forms",
+    label: "Forms Flow",
+    icon: FileStack,
+    roles: ["admin", "staff", "accounting"],
+  },
+  {
+    to: "/stock",
+    label: "Stock In / Out",
+    icon: ArrowLeftRight,
+    roles: ["admin", "staff", "accounting"],
+  },
   { to: "/categories", label: "Categories", icon: Tags, roles: ["admin"] },
-  { to: "/suppliers", label: "Suppliers", icon: Building2, roles: ["admin", "staff", "accounting", "viewer"] },
+  {
+    to: "/suppliers",
+    label: "Suppliers",
+    icon: Building2,
+    roles: ["admin", "staff", "accounting", "viewer"],
+  },
   { to: "/users", label: "Users", icon: Users, roles: ["admin"] },
   { to: "/audit", label: "Audit Log", icon: ScrollText, roles: ["admin"] },
 ];
@@ -63,12 +105,18 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps = {}) {
         <div className="fixed inset-y-0 left-0 w-64 bg-sidebar text-sidebar-foreground flex flex-col z-50">
           <div className="flex items-center justify-between px-4 py-3 border-b border-sidebar-border">
             <div className="flex items-center gap-2.5">
-              <img src="/favicon.svg" alt="Supplify" className="h-8 w-8 rounded-md" />
+              <img
+                src="/favicon.svg"
+                alt="Supplify"
+                className="h-8 w-8 rounded-md"
+              />
               <div>
-              <div className="font-display text-sm leading-tight">Supplify</div>
-              <div className="text-[9px] uppercase tracking-wider text-sidebar-foreground/60 leading-tight">
-                Supplies & Materials Management
-              </div>
+                <div className="font-display text-sm leading-tight">
+                  Supplify
+                </div>
+                <div className="text-[9px] uppercase tracking-wider text-sidebar-foreground/60 leading-tight">
+                  Supplies & Materials Management
+                </div>
               </div>
             </div>
             <button
@@ -105,7 +153,9 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps = {}) {
 
           <div className="border-t border-sidebar-border p-4 text-xs">
             <div className="truncate font-medium">{user?.email}</div>
-            <div className="text-sidebar-foreground/60 uppercase tracking-wider">{role}</div>
+            <div className="text-sidebar-foreground/60 uppercase tracking-wider">
+              {role}
+            </div>
             <button
               onClick={async () => {
                 await signOut();
@@ -126,7 +176,11 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps = {}) {
     <aside className="hidden md:flex w-64 shrink-0 h-screen sticky top-0 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
       <div className="px-5 py-5 border-b border-sidebar-border">
         <div className="flex items-center gap-2.5">
-          <img src="/favicon.svg" alt="Supplify" className="h-9 w-9 rounded-md" />
+          <img
+            src="/favicon.svg"
+            alt="Supplify"
+            className="h-9 w-9 rounded-md"
+          />
           <div>
             <div className="font-display text-base leading-tight">Supplify</div>
             <div className="text-[10px] uppercase tracking-wider text-sidebar-foreground/60 leading-tight">
@@ -160,7 +214,9 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps = {}) {
       </nav>
       <div className="border-t border-sidebar-border p-4 text-xs">
         <div className="truncate font-medium">{user?.email}</div>
-        <div className="text-sidebar-foreground/60 uppercase tracking-wider">{role}</div>
+        <div className="text-sidebar-foreground/60 uppercase tracking-wider">
+          {role}
+        </div>
         <button
           onClick={async () => {
             await signOut();

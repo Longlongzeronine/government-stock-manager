@@ -17,6 +17,7 @@ import { Route as AppUsersRouteImport } from './routes/_app/users'
 import { Route as AppSuppliersRouteImport } from './routes/_app/suppliers'
 import { Route as AppStockRouteImport } from './routes/_app/stock'
 import { Route as AppScannerRouteImport } from './routes/_app/scanner'
+import { Route as AppRisHistoryRouteImport } from './routes/_app/ris-history'
 import { Route as AppRequisitionsRouteImport } from './routes/_app/requisitions'
 import { Route as AppInventoryRouteImport } from './routes/_app/inventory'
 import { Route as AppFormsRouteImport } from './routes/_app/forms'
@@ -64,6 +65,11 @@ const AppStockRoute = AppStockRouteImport.update({
 const AppScannerRoute = AppScannerRouteImport.update({
   id: '/scanner',
   path: '/scanner',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppRisHistoryRoute = AppRisHistoryRouteImport.update({
+  id: '/ris-history',
+  path: '/ris-history',
   getParentRoute: () => AppRoute,
 } as any)
 const AppRequisitionsRoute = AppRequisitionsRouteImport.update({
@@ -124,6 +130,7 @@ export interface FileRoutesByFullPath {
   '/forms': typeof AppFormsRoute
   '/inventory': typeof AppInventoryRoute
   '/requisitions': typeof AppRequisitionsRoute
+  '/ris-history': typeof AppRisHistoryRoute
   '/scanner': typeof AppScannerRoute
   '/stock': typeof AppStockRoute
   '/suppliers': typeof AppSuppliersRoute
@@ -142,6 +149,7 @@ export interface FileRoutesByTo {
   '/forms': typeof AppFormsRoute
   '/inventory': typeof AppInventoryRoute
   '/requisitions': typeof AppRequisitionsRoute
+  '/ris-history': typeof AppRisHistoryRoute
   '/scanner': typeof AppScannerRoute
   '/stock': typeof AppStockRoute
   '/suppliers': typeof AppSuppliersRoute
@@ -162,6 +170,7 @@ export interface FileRoutesById {
   '/_app/forms': typeof AppFormsRoute
   '/_app/inventory': typeof AppInventoryRoute
   '/_app/requisitions': typeof AppRequisitionsRoute
+  '/_app/ris-history': typeof AppRisHistoryRoute
   '/_app/scanner': typeof AppScannerRoute
   '/_app/stock': typeof AppStockRoute
   '/_app/suppliers': typeof AppSuppliersRoute
@@ -182,6 +191,7 @@ export interface FileRouteTypes {
     | '/forms'
     | '/inventory'
     | '/requisitions'
+    | '/ris-history'
     | '/scanner'
     | '/stock'
     | '/suppliers'
@@ -200,6 +210,7 @@ export interface FileRouteTypes {
     | '/forms'
     | '/inventory'
     | '/requisitions'
+    | '/ris-history'
     | '/scanner'
     | '/stock'
     | '/suppliers'
@@ -219,6 +230,7 @@ export interface FileRouteTypes {
     | '/_app/forms'
     | '/_app/inventory'
     | '/_app/requisitions'
+    | '/_app/ris-history'
     | '/_app/scanner'
     | '/_app/stock'
     | '/_app/suppliers'
@@ -289,6 +301,13 @@ declare module '@tanstack/react-router' {
       path: '/scanner'
       fullPath: '/scanner'
       preLoaderRoute: typeof AppScannerRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/ris-history': {
+      id: '/_app/ris-history'
+      path: '/ris-history'
+      fullPath: '/ris-history'
+      preLoaderRoute: typeof AppRisHistoryRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/requisitions': {
@@ -366,6 +385,7 @@ interface AppRouteChildren {
   AppFormsRoute: typeof AppFormsRoute
   AppInventoryRoute: typeof AppInventoryRoute
   AppRequisitionsRoute: typeof AppRequisitionsRoute
+  AppRisHistoryRoute: typeof AppRisHistoryRoute
   AppScannerRoute: typeof AppScannerRoute
   AppStockRoute: typeof AppStockRoute
   AppSuppliersRoute: typeof AppSuppliersRoute
@@ -382,6 +402,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppFormsRoute: AppFormsRoute,
   AppInventoryRoute: AppInventoryRoute,
   AppRequisitionsRoute: AppRequisitionsRoute,
+  AppRisHistoryRoute: AppRisHistoryRoute,
   AppScannerRoute: AppScannerRoute,
   AppStockRoute: AppStockRoute,
   AppSuppliersRoute: AppSuppliersRoute,
