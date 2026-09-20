@@ -22,6 +22,8 @@ import {
 import { toast } from "sonner";
 import QRCode from "qrcode";
 import { PageHeader } from "@/components/layout/AppShell";
+import { SummaryActions } from "@/components/common/SummaryActions";
+import { exportCSV } from "@/lib/export";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   createIarForm,
@@ -33,6 +35,7 @@ import {
   createRisForm,
   createRisItem,
   createTransaction,
+  getRisFormStatus,
   listFormPersonnelMemory,
   listItems,
   listTransactionsAsc,
@@ -125,6 +128,7 @@ type RisState = {
   verificationToken: string;
   verificationCode: string;
   verificationStatus: "draft" | "issued" | "verified";
+  approvalStatus: "pending" | "approved" | "rejected";
   issuedAt: string;
 };
 
@@ -231,6 +235,7 @@ function FormsFlow() {
     verificationToken: initialVerification.current.token,
     verificationCode: initialVerification.current.code,
     verificationStatus: "draft",
+    approvalStatus: "pending",
     issuedAt: "",
   });
   const [risLines, setRisLines] = useState<Line[]>([blankLine()]);
@@ -297,7 +302,7 @@ function FormsFlow() {
     [flowItems, transactions],
   );
   const selectedItem = stockCardItems.find(
-    (item: Item) => item.id === (selectedItemId || stockCardItems[0]?.id),
+    (item: Item) => item.id === selectedItemId,
   );
   const stockRows = useMemo(
     () => getStockRows(selectedItem, transactions),
@@ -443,6 +448,7 @@ function FormsFlow() {
         verification_code: ris.verificationCode,
         document_version: 1,
         verification_status: "issued",
+        status: "pending",
         verification_published_at: new Date().toISOString(),
         created_by: user?.id,
         created_by_name: userName,
@@ -530,6 +536,7 @@ function FormsFlow() {
     setRis({
       ...ris,
       verificationStatus: "verified",
+      approvalStatus: "pending",
       issuedAt: new Date().toISOString(),
     });
     setTab("ris");
@@ -579,6 +586,7 @@ function FormsFlow() {
         verificationToken: verification.token,
         verificationCode: verification.code,
         verificationStatus: "draft",
+        approvalStatus: "pending",
         issuedAt: "",
       });
       setRisLines([blankLine()]);
@@ -797,7 +805,7 @@ function FormsFlow() {
                   setRis={setRis}
                   risLines={risLines}
                   setRisLines={setRisLines}
-                  selectedItemId={selectedItem?.id || ""}
+                  selectedItemId={selectedItemId}
                   setSelectedItemId={setSelectedItemId}
                   reportMonth={reportMonth}
                   setReportMonth={setReportMonth}
@@ -828,7 +836,7 @@ function FormsFlow() {
                 risLines={risLines}
                 setRisLines={setRisLines}
                 selectedItem={selectedItem}
-                selectedItemId={selectedItem?.id || ""}
+                selectedItemId={selectedItemId}
                 setSelectedItemId={setSelectedItemId}
                 stockRows={stockRows}
                 reportMonth={reportMonth}
@@ -1338,7 +1346,11 @@ function EntryPanel({
               value={selectedItemId}
               onChange={setSelectedItemId}
               className="flow-input"
-              placeholder="Type any word from the item name or description"
+              placeholder={
+                stockCardItems.length > 0
+                  ? "Type any word from the item name or description"
+                  : "No stock card items available"
+              }
             />
           </FlowField>
         </div>
@@ -1944,6 +1956,11 @@ function StockCardPaper({
                   className="paper-inline-control strong"
                   value={selectedItemId}
                   onChange={onSelectedItemId}
+                  placeholder={
+                    items.length > 0
+                      ? "Type any word from the item name or description"
+                      : "No stock card items available"
+                  }
                 />
               ) : (
                 <span className="strong">{item?.name || ""}</span>
@@ -2445,6 +2462,32 @@ function RisPaper({
 function RisVerificationReceipt({ form }: { form: RisState }) {
   const [qrDataUrl, setQrDataUrl] = useState("");
   const url = verificationUrl(form.verificationToken);
+  const { data: persistedStatus } = useQuery({
+    queryKey: ["risFormStatus", form.risNo],
+    queryFn: () => getRisFormStatus({ data: { ris_no: form.risNo } }),
+    enabled: Boolean(form.risNo),
+    refetchInterval: 5000,
+  });
+  const status =
+    persistedStatus === "approved" || persistedStatus === "issued"
+      ? "approved"
+      : persistedStatus === "rejected" || persistedStatus === "cancelled"
+        ? "rejected"
+        : "pending";
+  const statusConfig = {
+    approved: {
+      label: "APPROVED",
+      className: "ris-status-approved",
+    },
+    rejected: {
+      label: "REJECTED",
+      className: "ris-status-rejected",
+    },
+    pending: {
+      label: "PENDING APPROVAL",
+      className: "ris-status-pending",
+    },
+  }[status];
 
   useEffect(() => {
     let active = true;
@@ -2462,28 +2505,35 @@ function RisVerificationReceipt({ form }: { form: RisState }) {
 
   return (
     <div className="ris-verification-receipt">
-      <div className="ris-verification-copy">
-        <div className="strong">
-          {form.verificationStatus === "verified"
-            ? "PUBLIC VERIFICATION ACTIVE"
-            : "VERIFICATION ACTIVATES WHEN ISSUED"}
-        </div>
-        <div>
-          Scan this QR code to confirm this RIS through the official Supplify
-          verification page. An authorized account is required.
-        </div>
-        <div className="strong">
-          Verification Code: {form.verificationCode}
-        </div>
-        <div>Document Version: 1</div>
+      <div className={`ris-verification-status ${statusConfig.className}`}>
+        {statusConfig.label}
       </div>
-      {qrDataUrl && (
-        <img
-          className="ris-verification-qr"
-          src={qrDataUrl}
-          alt={`Verification QR for ${form.risNo}`}
-        />
-      )}
+      <div className="ris-verification-body">
+        <div className="ris-verification-copy">
+          <div className="strong">
+            {status === "approved" && form.verificationStatus === "verified"
+              ? "PUBLIC VERIFICATION ACTIVE"
+              : status === "rejected"
+                ? "REQUEST REJECTED"
+                : "VERIFICATION ACTIVATES AFTER APPROVAL"}
+          </div>
+          <div>
+            Scan this QR code to confirm this RIS through the official Supplify
+            verification page. An authorized account is required.
+          </div>
+          <div className="strong">
+            Verification Code: {form.verificationCode}
+          </div>
+          <div>Document Version: 1</div>
+        </div>
+        {qrDataUrl && (
+          <img
+            className="ris-verification-qr"
+            src={qrDataUrl}
+            alt={`Verification QR for ${form.risNo}`}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -2894,8 +2944,27 @@ function FlowSupportPanel({
     .slice(-8)
     .reverse();
 
+  function exportSummary() {
+    exportCSV(
+      [
+        { metric: "Active Stage", value: stats.activeStage },
+        { metric: "IAR Receipts", value: stats.iarReceipts },
+        { metric: "RIS Issues", value: stats.risIssues },
+        { metric: "Issued This Month", value: stats.issuedThisMonth },
+      ],
+      `forms-summary-${reportMonth}`,
+    );
+  }
+
   return (
     <aside className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold">Flow Summary</div>
+          <div className="text-xs text-muted-foreground">Quick actions for this form dashboard</div>
+        </div>
+        <SummaryActions onExport={exportSummary} onPrint={() => window.print()} />
+      </div>
       <div
         className={`grid grid-cols-2 gap-3 ${isBottom ? "xl:grid-cols-4" : ""}`}
       >
@@ -3891,7 +3960,12 @@ const flowStyles = `
 .signature-table{width:100%;border-collapse:collapse;font-size:10px}
 .signature-table td{border:1px solid #111;padding:5px;text-align:center;height:30px}
 .signature-table td:first-child{width:110px;text-align:left;font-weight:800}
-.ris-verification-receipt{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:12px;border:1.5px solid #111;padding:9px 12px;font-size:9px;line-height:1.45}
+.ris-verification-receipt{margin-top:12px;border:1.5px solid #111;font-size:9px;line-height:1.45}
+.ris-verification-status{padding:4px 10px;color:#fff;font-size:10px;font-weight:800;letter-spacing:.06em;text-align:center}
+.ris-verification-body{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:9px 12px}
+.ris-status-approved{background:#15803d}
+.ris-status-pending{background:#b45309}
+.ris-status-rejected{background:#b91c1c}
 .ris-verification-copy{display:grid;gap:3px}
 .ris-verification-qr{width:74px;height:74px;object-fit:contain;image-rendering:crisp-edges}
 .rpci-paper{font-size:9px}
