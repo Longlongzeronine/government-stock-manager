@@ -9,6 +9,8 @@ import { ArrowLeftRight, PackageCheck, Plus, Search } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { SummaryActions } from "@/components/common/SummaryActions";
+import { exportCSV } from "@/lib/export";
 
 export const Route = createFileRoute("/_app/stock")({
   head: () => ({ meta: [{ title: "Stock In / Out — Supplify" }] }),
@@ -60,6 +62,20 @@ function Stock() {
     0,
   );
 
+  function exportSummary() {
+    exportCSV(
+      issuedTransactions.map((transaction: any) => ({
+        date: transaction.created_at,
+        item: transaction.item?.name || "",
+        quantity: transaction.quantity,
+        staff: transaction.staff_name || "",
+        reference: transactionReference(transaction),
+        office: transactionOffice(transaction),
+      })),
+      "stock-movement-summary",
+    );
+  }
+
   return (
     <div>
       <PageHeader
@@ -77,9 +93,12 @@ function Stock() {
         }
       />
       <div className="space-y-4 p-4 sm:p-6 lg:p-8">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <SummaryCard icon={PackageCheck} label="Issued RIS lines" value={issuedTransactions.length} />
-          <SummaryCard icon={ArrowLeftRight} label="Total quantity issued" value={totalIssued} />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="grid flex-1 gap-3 sm:grid-cols-2">
+            <SummaryCard icon={PackageCheck} label="Issued RIS lines" value={issuedTransactions.length} />
+            <SummaryCard icon={ArrowLeftRight} label="Total quantity issued" value={totalIssued} />
+          </div>
+          <SummaryActions onExport={exportSummary} onPrint={() => window.print()} />
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="inline-flex rounded-lg border border-border bg-muted/40 p-1">

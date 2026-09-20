@@ -13,11 +13,6 @@ async function getDb() {
 async function ensureItemCodes(sql: any) {
   await sql`
     UPDATE items
-    SET barcode_value = id::text
-    WHERE barcode_value IS NULL OR btrim(barcode_value) = ''
-  `;
-  await sql`
-    UPDATE items
     SET qr_code_value = 'ITEM:' || id::text
     WHERE qr_code_value IS NULL OR btrim(qr_code_value) = ''
   `;
@@ -26,6 +21,25 @@ async function ensureItemCodes(sql: any) {
 // ============================================
 // ITEMS
 // ============================================
+
+function normalizeUnit(value: unknown, itemName = "") {
+  const unit = String(value ?? "").trim().toLowerCase();
+  const name = itemName.toLowerCase();
+  if (!unit || /^\d+(\.\d+)?$/.test(unit)) {
+    if (/air conditioning|air cooler/.test(name)) return "unit";
+    if (/ticket/.test(name)) return "ticket";
+    return "pieces";
+  }
+  const aliases: Record<string, string> = {
+    pc: "pieces", pcs: "pieces", piece: "pieces", pieces: "pieces", each: "pieces", ea: "pieces",
+    gal: "gallon", gallon: "gallon", gallons: "gallon",
+    btl: "bottle", bottle: "bottle", bottles: "bottle",
+    pkt: "pack", packs: "pack", box: "box", boxes: "box", set: "set", sets: "set",
+    roll: "roll", rolls: "roll", ream: "ream", reams: "ream", unit: "unit", units: "unit",
+    ticket: "ticket", tickets: "ticket",
+  };
+  return aliases[unit] || unit;
+}
 
 export const listItems = createServerFn({ method: "GET" }).handler(async () => {
   try {
@@ -39,11 +53,11 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
       FROM items i
       LEFT JOIN categories c ON c.id = i.category_id
       LEFT JOIN suppliers s ON s.id = i.supplier_id
-      ORDER BY i.name ASC
+      ORDER BY i.sort_order ASC NULLS LAST, i.name ASC
     `;
-    // Transform the nested JSON into the expected format
     return rows.map((r: any) => ({
       ...r,
+      barcode_value: r.barcode_value && String(r.barcode_value) === String(r.id) ? null : r.barcode_value,
       category: r.category?.id
         ? { id: r.category.id, name: r.category.name }
         : null,
@@ -78,6 +92,7 @@ export const getItem = createServerFn({ method: "GET" })
     if (!row) return null;
     return {
       ...row,
+      barcode_value: row.barcode_value && String(row.barcode_value) === String(row.id) ? null : row.barcode_value,
       category: row.category?.id
         ? { id: row.category.id, name: row.category.name }
         : null,
@@ -91,6 +106,8 @@ export const createItem = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
     const sql = await getDb();
+    const [maxRow] = await sql`SELECT COALESCE(MAX(sort_order), 0) AS m FROM items`;
+    const nextSort = Number(maxRow.m) + 1;
     const [row] = await sql`
       INSERT INTO items ${sql({
         name: data.name,
@@ -99,22 +116,143 @@ export const createItem = createServerFn({ method: "POST" })
         supplier_id: data.supplier_id || null,
         item_type: data.item_type || "supply",
         quantity: Number(data.quantity) || 0,
-        unit: data.unit || "pcs",
+        unit: normalizeUnit(data.unit, data.name),
         reorder_level: Number(data.reorder_level) || 10,
         acquisition_cost: Number(data.acquisition_cost) || 0,
         barcode_value: data.barcode_value || null,
         qr_code_value: data.qr_code_value || null,
+        jan_quantity: Number(data.jan_quantity) || 0,
+        feb_quantity: Number(data.feb_quantity) || 0,
+        mar_quantity: Number(data.mar_quantity) || 0,
+        apr_quantity: Number(data.apr_quantity) || 0,
+        may_quantity: Number(data.may_quantity) || 0,
+        jun_quantity: Number(data.jun_quantity) || 0,
+        jul_quantity: Number(data.jul_quantity) || 0,
+        aug_quantity: Number(data.aug_quantity) || 0,
+        sep_quantity: Number(data.sep_quantity) || 0,
+        oct_quantity: Number(data.oct_quantity) || 0,
+        nov_quantity: Number(data.nov_quantity) || 0,
+        dec_quantity: Number(data.dec_quantity) || 0,
+        sort_order: nextSort,
       })}
       RETURNING *
     `;
     const [codedRow] = await sql`
       UPDATE items
-      SET barcode_value = COALESCE(NULLIF(btrim(barcode_value), ''), id::text),
-          qr_code_value = COALESCE(NULLIF(btrim(qr_code_value), ''), 'ITEM:' || id::text)
+      SET qr_code_value = COALESCE(NULLIF(btrim(qr_code_value), ''), 'ITEM:' || id::text)
       WHERE id = ${row.id}
       RETURNING *
     `;
     return codedRow;
+  });
+
+export const importItems = createServerFn({ method: "POST" })
+  .inputValidator((d: { items: any[] }) => d)
+  .handler(async ({ data }) => {
+    const sql = await getDb();
+    const existing = await sql`SELECT id, name, barcode_value FROM items ORDER BY (barcode_value IS NOT NULL) DESC, name ASC`;
+    const names = new Map<string, { id: string | null; barcode: string | null; description: string | null }>();
+    const codes = new Map<string, { id: string | null; name: string; description: string | null }>();
+    for (const item of existing as any[]) {
+      const nameKey = String(item.name).trim().toLowerCase();
+      const barcode = String(item.barcode_value || "").trim();
+      if (!names.has(nameKey)) names.set(nameKey, { id: item.id, barcode: barcode || null, description: item.description || null });
+      if (barcode && !codes.has(barcode.toLowerCase())) codes.set(barcode.toLowerCase(), { id: item.id, name: String(item.name).trim(), description: item.description || null });
+    }
+    let added = 0;
+    let skipped = 0;
+    let updated = 0;
+    let nextSort = Number((await sql`SELECT COALESCE(MAX(sort_order), 0) AS m FROM items`)[0].m) + 1;
+
+    const payload = (item: any, name: string, barcode: string | null, categoryId: string | null, existingDescription: string | null) => ({
+      name,
+      description: item.description ? String(item.description).trim() : existingDescription,
+      category_id: categoryId,
+      item_type: item.item_type || "supply",
+      quantity: Number(item.quantity) || 0,
+      unit: normalizeUnit(item.unit, name),
+      reorder_level: Number(item.reorder_level) || 10,
+      acquisition_cost: Number(item.acquisition_cost) || 0,
+      barcode_value: barcode,
+      jan_quantity: Number(item.jan_quantity) || 0,
+      feb_quantity: Number(item.feb_quantity) || 0,
+      mar_quantity: Number(item.mar_quantity) || 0,
+      apr_quantity: Number(item.apr_quantity) || 0,
+      may_quantity: Number(item.may_quantity) || 0,
+      jun_quantity: Number(item.jun_quantity) || 0,
+      jul_quantity: Number(item.jul_quantity) || 0,
+      aug_quantity: Number(item.aug_quantity) || 0,
+      sep_quantity: Number(item.sep_quantity) || 0,
+      oct_quantity: Number(item.oct_quantity) || 0,
+      nov_quantity: Number(item.nov_quantity) || 0,
+      dec_quantity: Number(item.dec_quantity) || 0,
+    });
+    const isUuidCode = (c: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(c);
+
+    for (const item of data.items || []) {
+      const name = String(item.name || "").trim();
+      const barcode = String(item.barcode_value || "").trim();
+      const nameKey = name.toLowerCase();
+      const codeKey = barcode.toLowerCase();
+      if (!name) {
+        skipped += 1;
+        continue;
+      }
+
+      let categoryId: string | null = null;
+      if (item.category_name) {
+        const catName = String(item.category_name).trim();
+        if (catName) {
+          let [cat] = await sql`SELECT id FROM categories WHERE LOWER(name) = ${catName.toLowerCase()}`;
+          if (!cat) {
+            [cat] = await sql`INSERT INTO categories (name) VALUES (${catName}) RETURNING id`;
+          }
+          categoryId = cat?.id || null;
+        }
+      }
+
+      if (codeKey) {
+        const existingByCode = codes.get(codeKey);
+        if (existingByCode?.id) {
+          await sql`UPDATE items SET ${sql(payload(item, name, barcode, categoryId, existingByCode.description))} WHERE id = ${existingByCode.id}`;
+          updated += 1;
+          continue;
+        }
+        if (existingByCode) {
+          skipped += 1;
+          continue;
+        }
+      } else {
+        const existingMatch = names.get(nameKey);
+        if (existingMatch) {
+          if (existingMatch.id && (!existingMatch.barcode || isUuidCode(existingMatch.barcode))) {
+            await sql`UPDATE items SET ${sql(payload(item, name, null, categoryId, existingMatch.description))} WHERE id = ${existingMatch.id}`;
+            updated += 1;
+          } else {
+            skipped += 1;
+          }
+          continue;
+        }
+      }
+
+      await sql`
+        INSERT INTO items ${sql({
+          ...payload(item, name, barcode || null, categoryId, null),
+          sort_order: nextSort,
+        })}
+      `;
+      nextSort += 1;
+      if (!names.has(nameKey)) names.set(nameKey, { id: null, barcode: barcode || null, description: item.description || null });
+      if (codeKey) codes.set(codeKey, { id: null, name, description: item.description || null });
+      added += 1;
+    }
+
+    await sql`
+      UPDATE items SET barcode_value = NULL
+      WHERE barcode_value = id::text
+        AND barcode_value ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    `;
+    return { added, skipped, updated };
   });
 
 export const updateItem = createServerFn({ method: "POST" })
@@ -134,7 +272,35 @@ export const updateItem = createServerFn({ method: "POST" })
         acquisition_cost: Number(data.acquisition_cost) || 0,
         barcode_value: data.barcode_value || null,
         qr_code_value: data.qr_code_value || null,
+        jan_quantity: Number(data.jan_quantity) || 0,
+        feb_quantity: Number(data.feb_quantity) || 0,
+        mar_quantity: Number(data.mar_quantity) || 0,
+        apr_quantity: Number(data.apr_quantity) || 0,
+        may_quantity: Number(data.may_quantity) || 0,
+        jun_quantity: Number(data.jun_quantity) || 0,
+        jul_quantity: Number(data.jul_quantity) || 0,
+        aug_quantity: Number(data.aug_quantity) || 0,
+        sep_quantity: Number(data.sep_quantity) || 0,
+        oct_quantity: Number(data.oct_quantity) || 0,
+        nov_quantity: Number(data.nov_quantity) || 0,
+        dec_quantity: Number(data.dec_quantity) || 0,
       })}
+      WHERE id = ${data.id}
+      RETURNING *
+    `;
+    return row;
+  });
+
+const monthColumns = ["jan_quantity", "feb_quantity", "mar_quantity", "apr_quantity", "may_quantity", "jun_quantity", "jul_quantity", "aug_quantity", "sep_quantity", "oct_quantity", "nov_quantity", "dec_quantity"] as const;
+
+export const updateItemMonthlyQuantity = createServerFn({ method: "POST" })
+  .inputValidator((d: { id: string; month: number; quantity: number }) => d)
+  .handler(async ({ data }) => {
+    const column = monthColumns[data.month];
+    if (!column) throw new Error("Invalid month");
+    const sql = await getDb();
+    const [row] = await sql`
+      UPDATE items SET ${sql({ [column]: Math.max(0, Number(data.quantity) || 0) })}
       WHERE id = ${data.id}
       RETURNING *
     `;
@@ -250,10 +416,6 @@ export const deleteSupplier = createServerFn({ method: "POST" })
     await sql`DELETE FROM suppliers WHERE id = ${data.id}`;
     return { ok: true };
   });
-
-// ============================================
-// TRANSACTIONS
-// ============================================
 
 export const listTransactions = createServerFn({ method: "GET" })
   .inputValidator((d: { limit?: number } | undefined) => d ?? {})
@@ -444,9 +606,95 @@ export const createRisForm = createServerFn({ method: "POST" })
         verification_published_at: data.verification_published_at || null,
         created_by: data.created_by || null,
         created_by_name: data.created_by_name || null,
+        status: data.status || "pending",
+        priority: data.priority || "normal",
       })}
       RETURNING *
     `;
+    return row;
+  });
+
+export const listRisForms = createServerFn({ method: "GET" })
+  .inputValidator((d: { created_by?: string } | undefined) => d ?? {})
+  .handler(async ({ data }) => {
+    try {
+      const sql = await getDb();
+      const createdBy = data.created_by?.trim() || null;
+      return await sql`
+        SELECT
+          r.id,
+          r.ris_no,
+          r.office,
+          r.purpose,
+          r.requested_by,
+          r.status,
+          r.priority,
+          r.review_notes,
+          r.created_at::text AS created_at,
+          coalesce(string_agg(DISTINCT i.name, ', ' ORDER BY i.name), 'No item listed') AS item_name,
+          coalesce(string_agg(DISTINCT c.name, ', ' ORDER BY c.name), 'Uncategorized') AS category_name,
+          coalesce(sum(ri.quantity), 0) AS quantity,
+          coalesce(string_agg(DISTINCT i.unit, ', ' ORDER BY i.unit), 'pcs') AS unit,
+          coalesce(max(i.acquisition_cost), 0) AS acquisition_cost,
+          coalesce(sum(ri.quantity * i.acquisition_cost), 0) AS total_amount,
+          coalesce(string_agg(DISTINCT nullif(ri.remarks, ''), ' | '), r.purpose, '') AS remarks,
+          coalesce(string_agg(DISTINCT s.name, ', ' ORDER BY s.name), '') AS supplier_name
+        FROM ris_forms r
+        LEFT JOIN ris_items ri ON ri.ris_id = r.id
+        LEFT JOIN items i ON i.id = ri.item_id
+        LEFT JOIN categories c ON c.id = i.category_id
+        LEFT JOIN suppliers s ON s.id = i.supplier_id
+        WHERE (${createdBy}::text IS NULL OR r.created_by = ${createdBy}::text)
+        GROUP BY r.id
+        ORDER BY
+          CASE WHEN r.status IN ('pending', 'draft') THEN 0 ELSE 1 END,
+          r.created_at DESC
+      `;
+    } catch (e) {
+      console.error("listRisForms error:", e);
+      return [];
+    }
+  });
+
+export const getRisFormStatus = createServerFn({ method: "GET" })
+  .inputValidator((d: { ris_no: string }) => d)
+  .handler(async ({ data }) => {
+    const sql = await getDb();
+    const [row] = await sql`
+      SELECT status
+      FROM ris_forms
+      WHERE ris_no = ${data.ris_no}
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    return (row?.status as string | null | undefined) ?? null;
+  });
+
+export const updateRisFormStatus = createServerFn({ method: "POST" })
+  .inputValidator(
+    (d: {
+      id: string;
+      status: "pending" | "approved" | "rejected" | "issued" | "cancelled";
+      review_note?: string;
+    }) => d,
+  )
+  .handler(async ({ data }) => {
+    const sql = await getDb();
+    const status = data.status;
+    const [row] = await sql`
+      UPDATE ris_forms
+      SET
+        status = ${status},
+        review_notes = coalesce(nullif(btrim(${data.review_note || ""}), ''), review_notes),
+        approved_date = CASE
+          WHEN ${status} IN ('approved', 'issued') THEN coalesce(approved_date, current_date)
+          ELSE approved_date
+        END
+      WHERE id = ${data.id}
+        AND status IN ('pending', 'draft', 'approved', 'issued', 'rejected', 'cancelled')
+      RETURNING *
+    `;
+    if (!row) throw new Error("RIS request was not found or could not be updated.");
     return row;
   });
 
@@ -681,3 +929,4 @@ export const getInventorySnapshot = createServerFn({ method: "GET" }).handler(
     }
   },
 );
+
