@@ -3,6 +3,7 @@ import {
   LayoutDashboard,
   Package,
   ArrowLeftRight,
+  ScanLine,
   ClipboardList,
   FileStack,
   Tags,
@@ -37,6 +38,12 @@ export const nav: { to: string; label: string; icon: any; roles: R[] }[] = [
     label: "Requisitions",
     icon: ClipboardList,
     roles: ["admin", "staff"],
+  },
+  {
+    to: "/scanner",
+    label: "Scanner",
+    icon: ScanLine,
+    roles: ["admin", "staff", "accounting", "viewer"],
   },
   {
     to: "/approval",
