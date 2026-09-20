@@ -16,6 +16,8 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/AppShell";
 import { listItems, deleteItem as deleteInventoryItemFn } from "@/lib/data.functions";
 import { useAuth } from "@/contexts/AuthContext";
+import { SummaryActions } from "@/components/common/SummaryActions";
+import { exportCSV } from "@/lib/export";
 
 export const Route = createFileRoute("/_app/requisitions")({
   head: () => ({ meta: [{ title: "Requisitions - Supplify" }] }),
@@ -1003,6 +1005,24 @@ function RightPanel({
 
   return (
     <aside className="space-y-4">
+      <div className="flex justify-end">
+        <SummaryActions
+          onExport={() =>
+            exportCSV(
+              savedRecords.map((record) => ({
+                requisition_no: record.requisitionNo,
+                requested_by: record.requestedBy,
+                date: record.date,
+                status: record.status,
+                item_count: getValidItems(record.items).length,
+                total: record.grandTotal,
+              })),
+              "requisition-summary",
+            )
+          }
+          onPrint={() => window.print()}
+        />
+      </div>
       <div className={`grid grid-cols-2 gap-3 ${isBottom ? "xl:grid-cols-4" : ""}`}>
         <SummaryCard label="Active Items" value={activeItems} />
         <SummaryCard label="Request Forms" value={savedRecords.length} />

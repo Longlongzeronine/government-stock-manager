@@ -444,9 +444,95 @@ export const createRisForm = createServerFn({ method: "POST" })
         verification_published_at: data.verification_published_at || null,
         created_by: data.created_by || null,
         created_by_name: data.created_by_name || null,
+        status: data.status || "pending",
+        priority: data.priority || "normal",
       })}
       RETURNING *
     `;
+    return row;
+  });
+
+export const listRisForms = createServerFn({ method: "GET" })
+  .inputValidator((d: { created_by?: string } | undefined) => d ?? {})
+  .handler(async ({ data }) => {
+    try {
+      const sql = await getDb();
+      const createdBy = data.created_by?.trim() || null;
+      return await sql`
+        SELECT
+          r.id,
+          r.ris_no,
+          r.office,
+          r.purpose,
+          r.requested_by,
+          r.status,
+          r.priority,
+          r.review_notes,
+          r.created_at::text AS created_at,
+          coalesce(string_agg(DISTINCT i.name, ', ' ORDER BY i.name), 'No item listed') AS item_name,
+          coalesce(string_agg(DISTINCT c.name, ', ' ORDER BY c.name), 'Uncategorized') AS category_name,
+          coalesce(sum(ri.quantity), 0) AS quantity,
+          coalesce(string_agg(DISTINCT i.unit, ', ' ORDER BY i.unit), 'pcs') AS unit,
+          coalesce(max(i.acquisition_cost), 0) AS acquisition_cost,
+          coalesce(sum(ri.quantity * i.acquisition_cost), 0) AS total_amount,
+          coalesce(string_agg(DISTINCT nullif(ri.remarks, ''), ' | '), r.purpose, '') AS remarks,
+          coalesce(string_agg(DISTINCT s.name, ', ' ORDER BY s.name), '') AS supplier_name
+        FROM ris_forms r
+        LEFT JOIN ris_items ri ON ri.ris_id = r.id
+        LEFT JOIN items i ON i.id = ri.item_id
+        LEFT JOIN categories c ON c.id = i.category_id
+        LEFT JOIN suppliers s ON s.id = i.supplier_id
+        WHERE (${createdBy}::text IS NULL OR r.created_by = ${createdBy}::text)
+        GROUP BY r.id
+        ORDER BY
+          CASE WHEN r.status IN ('pending', 'draft') THEN 0 ELSE 1 END,
+          r.created_at DESC
+      `;
+    } catch (e) {
+      console.error("listRisForms error:", e);
+      return [];
+    }
+  });
+
+export const getRisFormStatus = createServerFn({ method: "GET" })
+  .inputValidator((d: { ris_no: string }) => d)
+  .handler(async ({ data }) => {
+    const sql = await getDb();
+    const [row] = await sql`
+      SELECT status
+      FROM ris_forms
+      WHERE ris_no = ${data.ris_no}
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    return (row?.status as string | null | undefined) ?? null;
+  });
+
+export const updateRisFormStatus = createServerFn({ method: "POST" })
+  .inputValidator(
+    (d: {
+      id: string;
+      status: "pending" | "approved" | "rejected" | "issued" | "cancelled";
+      review_note?: string;
+    }) => d,
+  )
+  .handler(async ({ data }) => {
+    const sql = await getDb();
+    const status = data.status;
+    const [row] = await sql`
+      UPDATE ris_forms
+      SET
+        status = ${status},
+        review_notes = coalesce(nullif(btrim(${data.review_note || ""}), ''), review_notes),
+        approved_date = CASE
+          WHEN ${status} IN ('approved', 'issued') THEN coalesce(approved_date, current_date)
+          ELSE approved_date
+        END
+      WHERE id = ${data.id}
+        AND status IN ('pending', 'draft', 'approved', 'issued', 'rejected', 'cancelled')
+      RETURNING *
+    `;
+    if (!row) throw new Error("RIS request was not found or could not be updated.");
     return row;
   });
 
@@ -681,80 +767,3 @@ export const getInventorySnapshot = createServerFn({ method: "GET" }).handler(
     }
   },
 );
-
-// ============================================
-// RIS FORMS (Approval Workflow)
-// ============================================
-
-export const listRisForms = createServerFn({ method: "GET" }).handler(async () => {
-  try {
-    const sql = await getDb();
-    const rows = await sql`
-      SELECT
-        rf.id,
-        rf.ris_no,
-        rf.office,
-        rf.purpose,
-        rf.requested_by,
-        rf.approved_by,
-        rf.issued_by,
-        rf.received_by,
-        rf.status,
-        rf.needed_by,
-        rf.priority,
-        rf.created_at,
-        ri.id AS item_id,
-        ri.quantity,
-        ri.remarks,
-        i.name AS item_name,
-        i.unit,
-        i.acquisition_cost,
-        c.name AS category_name,
-        s.name AS supplier_name
-      FROM ris_forms rf
-      LEFT JOIN ris_items ri ON ri.ris_id = rf.id
-      LEFT JOIN items i ON i.id = ri.item_id
-      LEFT JOIN categories c ON c.id = i.category_id
-      LEFT JOIN suppliers s ON s.id = i.supplier_id
-      ORDER BY rf.created_at DESC
-    `;
-    return rows.map((r: any) => ({
-      id: r.id,
-      ris_no: r.ris_no,
-      office: r.office,
-      purpose: r.purpose,
-      requested_by: r.requested_by,
-      approved_by: r.approved_by,
-      issued_by: r.issued_by,
-      received_by: r.received_by,
-      status: r.status,
-      needed_by: r.needed_by,
-      priority: r.priority,
-      created_at: r.created_at,
-      item_id: r.item_id,
-      quantity: Number(r.quantity || 0),
-      remarks: r.remarks,
-      item_name: r.item_name,
-      unit: r.unit,
-      acquisition_cost: Number(r.acquisition_cost || 0),
-      category_name: r.category_name,
-      supplier_name: r.supplier_name,
-    }));
-  } catch (e: any) {
-    console.error("listRisForms error:", e);
-    return [];
-  }
-});
-
-export const updateRisFormStatus = createServerFn({ method: "POST" })
-  .inputValidator((d: { id: string; status: string }) => d)
-  .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [row] = await sql`
-      UPDATE ris_forms
-      SET status = ${data.status}
-      WHERE id = ${data.id}
-      RETURNING *
-    `;
-    return row;
-  });

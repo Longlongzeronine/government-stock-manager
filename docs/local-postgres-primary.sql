@@ -139,8 +139,14 @@ CREATE TABLE IF NOT EXISTS transactions (
   remarks TEXT DEFAULT NULL,
   source_form_type TEXT DEFAULT NULL,
   source_form_id TEXT DEFAULT NULL,
+  source_line_id TEXT DEFAULT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE transactions
+  ADD COLUMN IF NOT EXISTS source_form_type TEXT DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS source_form_id TEXT DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS source_line_id TEXT DEFAULT NULL;
 
 -- ============================================
 -- AUDIT LOGS
@@ -176,6 +182,7 @@ CREATE TABLE IF NOT EXISTS iar_items (
   item_id UUID NOT NULL REFERENCES items(id),
   quantity NUMERIC(12,2) NOT NULL,
   unit_cost NUMERIC(14,2) NOT NULL DEFAULT 0,
+  amount NUMERIC(14,2) NOT NULL DEFAULT 0,
   remarks TEXT DEFAULT NULL,
   transaction_id UUID DEFAULT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -190,6 +197,13 @@ CREATE TABLE IF NOT EXISTS ris_forms (
   approved_by TEXT DEFAULT NULL,
   issued_by TEXT DEFAULT NULL,
   received_by TEXT DEFAULT NULL,
+  approved_date DATE DEFAULT NULL,
+  issued_date DATE DEFAULT NULL,
+  verification_token TEXT DEFAULT NULL UNIQUE,
+  verification_code TEXT DEFAULT NULL UNIQUE,
+  document_version INTEGER NOT NULL DEFAULT 1,
+  verification_status TEXT NOT NULL DEFAULT 'draft',
+  verification_published_at TIMESTAMPTZ DEFAULT NULL,
   created_by TEXT DEFAULT NULL,
   created_by_name TEXT DEFAULT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -203,6 +217,22 @@ CREATE TABLE IF NOT EXISTS ris_items (
   remarks TEXT DEFAULT NULL,
   transaction_id UUID DEFAULT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS form_number_counters (
+  form_prefix TEXT NOT NULL,
+  series_year INTEGER NOT NULL,
+  last_number BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (form_prefix, series_year)
+);
+
+CREATE TABLE IF NOT EXISTS form_personnel_memory (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  role TEXT NOT NULL,
+  person_name TEXT NOT NULL,
+  last_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_by TEXT DEFAULT NULL,
+  UNIQUE (role, person_name)
 );
 
 CREATE TABLE IF NOT EXISTS ics_forms (

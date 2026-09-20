@@ -209,7 +209,10 @@ export async function ensureSchema() {
       accepted_by TEXT DEFAULT NULL,
       created_by TEXT DEFAULT NULL,
       created_by_name TEXT DEFAULT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      status TEXT NOT NULL DEFAULT 'pending',
+      priority TEXT NOT NULL DEFAULT 'normal',
+      review_notes TEXT DEFAULT NULL
     );
 
     CREATE TABLE IF NOT EXISTS iar_items (
@@ -245,10 +248,7 @@ export async function ensureSchema() {
       verification_published_at TIMESTAMPTZ DEFAULT NULL,
       created_by TEXT DEFAULT NULL,
       created_by_name TEXT DEFAULT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      status TEXT NOT NULL DEFAULT 'pending',
-      needed_by DATE DEFAULT NULL,
-      priority TEXT NOT NULL DEFAULT 'normal'
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     ALTER TABLE ris_forms
@@ -264,8 +264,18 @@ export async function ensureSchema() {
 
     ALTER TABLE ris_forms
       ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending',
-      ADD COLUMN IF NOT EXISTS needed_by DATE DEFAULT NULL,
-      ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal';
+      ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal',
+      ADD COLUMN IF NOT EXISTS review_notes TEXT DEFAULT NULL;
+
+    ALTER TABLE ris_forms
+      DROP COLUMN IF EXISTS needed_by;
+
+    ALTER TABLE ris_forms
+      DROP CONSTRAINT IF EXISTS ris_forms_status_check;
+
+    ALTER TABLE ris_forms
+      ADD CONSTRAINT ris_forms_status_check
+      CHECK (status IN ('pending', 'approved', 'rejected', 'draft', 'issued', 'cancelled'));
 
     CREATE UNIQUE INDEX IF NOT EXISTS ris_forms_verification_token_key
       ON ris_forms (verification_token) WHERE verification_token IS NOT NULL;
