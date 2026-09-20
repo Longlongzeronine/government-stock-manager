@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { askAssistant } from "@/lib/ai.functions";
 
 export const Route = createFileRoute("/_app/assistant")({
-  head: () => ({ meta: [{ title: "AI Assistant — GovInventory" }] }),
+  head: () => ({ meta: [{ title: "AI Assistant — Supplify" }] }),
   component: Assistant,
 });
 
