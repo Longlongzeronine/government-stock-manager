@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import QRCode from "qrcode";
 import { PageHeader } from "@/components/layout/AppShell";
 import { SummaryActions } from "@/components/common/SummaryActions";
+import { FundClusterControl } from "@/components/common/FundClusterControl";
 import { exportCSV } from "@/lib/export";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -56,6 +57,7 @@ type Orientation = "portrait" | "landscape";
 type Item = {
   id: string;
   name: string;
+  stock_number?: string | null;
   description?: string | null;
   item_type?: "supply" | "material";
   quantity: number;
@@ -194,7 +196,11 @@ function FormsFlow() {
   const [zoom, setZoom] = useState(1);
   const [selectedItemId, setSelectedItemId] = useState("");
   const [reportMonth, setReportMonth] = useState(today.slice(0, 7));
-  const [reportYear, setReportYear] = useState(today.slice(0, 4));
+  const [rpciStartDate, setRpciStartDate] = useState(`${today.slice(0, 4)}-01-01`);
+  const [rpciEndDate, setRpciEndDate] = useState(today);
+  const [stockCardFundCluster, setStockCardFundCluster] = useState(FORM_DEFAULTS.fundCluster);
+  const [risFundCluster, setRisFundCluster] = useState(FORM_DEFAULTS.fundCluster);
+  const [rsmiFundCluster, setRsmiFundCluster] = useState(FORM_DEFAULTS.fundCluster);
   const [rpciFundCluster, setRpciFundCluster] = useState(FORM_DEFAULTS.fundCluster);
   const [rpciEntries, setRpciEntries] = useState<Record<string, RpciEntry>>({});
   const [iar, setIar] = useState<IarState>({
@@ -313,8 +319,8 @@ function FormsFlow() {
     [transactions, reportMonth],
   );
   const rpciRows = useMemo(
-    () => getRpciRows(items, transactions, reportYear, rpciEntries),
-    [items, transactions, reportYear, rpciEntries],
+    () => getRpciRows(items, transactions, rpciStartDate, rpciEndDate, rpciEntries),
+    [items, transactions, rpciStartDate, rpciEndDate, rpciEntries],
   );
   const flowStats = useMemo(
     () => getFlowStats(transactions, reportMonth, tab),
@@ -809,10 +815,12 @@ function FormsFlow() {
                   setSelectedItemId={setSelectedItemId}
                   reportMonth={reportMonth}
                   setReportMonth={setReportMonth}
-                  reportYear={reportYear}
-                  setReportYear={setReportYear}
-                  rpciFundCluster={rpciFundCluster}
-                  setRpciFundCluster={setRpciFundCluster}
+                  rpciStartDate={rpciStartDate}
+                  setRpciStartDate={setRpciStartDate}
+                  rpciEndDate={rpciEndDate}
+                  setRpciEndDate={setRpciEndDate}
+                  rsmiFundCluster={rsmiFundCluster}
+                  setRsmiFundCluster={setRsmiFundCluster}
                   onSaveIar={saveIar}
                   onSaveRis={saveRis}
                   personnelOptions={personnelOptions}
@@ -836,14 +844,22 @@ function FormsFlow() {
                 risLines={risLines}
                 setRisLines={setRisLines}
                 selectedItem={selectedItem}
+                stockCardFundCluster={stockCardFundCluster}
+                setStockCardFundCluster={setStockCardFundCluster}
+                risFundCluster={risFundCluster}
+                setRisFundCluster={setRisFundCluster}
                 selectedItemId={selectedItemId}
                 setSelectedItemId={setSelectedItemId}
                 stockRows={stockRows}
                 reportMonth={reportMonth}
                 setReportMonth={setReportMonth}
                 rsmiRows={rsmiRows}
-                reportYear={reportYear}
-                setReportYear={setReportYear}
+                rpciStartDate={rpciStartDate}
+                setRpciStartDate={setRpciStartDate}
+                rpciEndDate={rpciEndDate}
+                setRpciEndDate={setRpciEndDate}
+                rsmiFundCluster={rsmiFundCluster}
+                setRsmiFundCluster={setRsmiFundCluster}
                 rpciFundCluster={rpciFundCluster}
                 setRpciFundCluster={setRpciFundCluster}
                 rpciRows={rpciRows}
@@ -1138,10 +1154,12 @@ function EntryPanel({
   setSelectedItemId,
   reportMonth,
   setReportMonth,
-  reportYear,
-  setReportYear,
-  rpciFundCluster,
-  setRpciFundCluster,
+  rpciStartDate,
+  setRpciStartDate,
+  rpciEndDate,
+  setRpciEndDate,
+  rsmiFundCluster,
+  setRsmiFundCluster,
   onSaveIar,
   onSaveRis,
   personnelOptions,
@@ -1164,10 +1182,12 @@ function EntryPanel({
   setSelectedItemId: (id: string) => void;
   reportMonth: string;
   setReportMonth: (month: string) => void;
-  reportYear: string;
-  setReportYear: (year: string) => void;
-  rpciFundCluster: string;
-  setRpciFundCluster: (value: string) => void;
+  rpciStartDate: string;
+  setRpciStartDate: (date: string) => void;
+  rpciEndDate: string;
+  setRpciEndDate: (date: string) => void;
+  rsmiFundCluster: string;
+  setRsmiFundCluster: (value: string) => void;
   onSaveIar: () => void;
   onSaveRis: () => void;
   personnelOptions: Partial<Record<PersonnelRole, string[]>>;
@@ -1373,6 +1393,9 @@ function EntryPanel({
             onChange={(e) => setReportMonth(e.target.value)}
           />
         </FlowField>
+        <FlowField label="Fund Cluster">
+          <FundClusterControl value={rsmiFundCluster} onChange={setRsmiFundCluster} className="flow-input" />
+        </FlowField>
       </div>
     </section>
   );
@@ -1384,22 +1407,22 @@ function EntryPanel({
         subtitle="Generate the annual Appendix 66 physical count for supplies."
       />
       <div className="grid gap-3 p-4 sm:grid-cols-2">
-        <FlowField label="Report Year">
+        <FlowField label="Start Date">
           <input
             className="flow-input"
-            type="number"
-            min="2000"
-            max="2100"
-            value={reportYear}
-            onChange={(event) => setReportYear(event.target.value)}
+            type="date"
+            value={rpciStartDate}
+            max={rpciEndDate}
+            onChange={(event) => setRpciStartDate(event.target.value)}
           />
         </FlowField>
-        <FlowField label="Fund Cluster">
+        <FlowField label="End Date">
           <input
             className="flow-input"
-            value={rpciFundCluster}
-            placeholder="e.g. 06-SSP or 01-MOOE"
-            onChange={(event) => setRpciFundCluster(event.target.value)}
+            type="date"
+            value={rpciEndDate}
+            min={rpciStartDate}
+            onChange={(event) => setRpciEndDate(event.target.value)}
           />
         </FlowField>
       </div>
@@ -1430,8 +1453,16 @@ function PaperPreview({
   reportMonth,
   setReportMonth,
   rsmiRows,
-  reportYear,
-  setReportYear,
+  rsmiFundCluster,
+  setRsmiFundCluster,
+  stockCardFundCluster,
+  setStockCardFundCluster,
+  risFundCluster,
+  setRisFundCluster,
+  rpciStartDate,
+  setRpciStartDate,
+  rpciEndDate,
+  setRpciEndDate,
   rpciFundCluster,
   setRpciFundCluster,
   rpciRows,
@@ -1461,8 +1492,16 @@ function PaperPreview({
   reportMonth: string;
   setReportMonth: (month: string) => void;
   rsmiRows: RsmiRow[];
-  reportYear: string;
-  setReportYear: (year: string) => void;
+  rsmiFundCluster: string;
+  setRsmiFundCluster: (value: string) => void;
+  stockCardFundCluster: string;
+  setStockCardFundCluster: (value: string) => void;
+  risFundCluster: string;
+  setRisFundCluster: (value: string) => void;
+  rpciStartDate: string;
+  setRpciStartDate: (date: string) => void;
+  rpciEndDate: string;
+  setRpciEndDate: (date: string) => void;
   rpciFundCluster: string;
   setRpciFundCluster: (value: string) => void;
   rpciRows: RpciRow[];
@@ -1494,6 +1533,8 @@ function PaperPreview({
               orientation={orientation}
               items={stockCardItems}
               item={selectedItem}
+              fundCluster={stockCardFundCluster}
+              onFundCluster={setStockCardFundCluster}
               selectedItemId={selectedItemId}
               onSelectedItemId={setSelectedItemId}
               rows={stockRows}
@@ -1505,6 +1546,8 @@ function PaperPreview({
               orientation={orientation}
               items={risItems}
               form={ris}
+              fundCluster={risFundCluster}
+              onFundCluster={setRisFundCluster}
               onForm={setRis}
               lines={risLines}
               onLines={setRisLines}
@@ -1517,6 +1560,8 @@ function PaperPreview({
               orientation={orientation}
               reportMonth={reportMonth}
               onReportMonth={setReportMonth}
+              fundCluster={rsmiFundCluster}
+              onFundCluster={setRsmiFundCluster}
               rows={rsmiRows}
               editable={editable}
             />
@@ -1524,8 +1569,10 @@ function PaperPreview({
           {tab === "rpci" && (
             <RpciPaper
               orientation={orientation}
-              reportYear={reportYear}
-              onReportYear={setReportYear}
+              startDate={rpciStartDate}
+              onStartDate={setRpciStartDate}
+              endDate={rpciEndDate}
+              onEndDate={setRpciEndDate}
               fundCluster={rpciFundCluster}
               onFundCluster={setRpciFundCluster}
               rows={rpciRows}
@@ -1603,18 +1650,7 @@ function IarPaper({
             </td>
             <td>
               <strong>Fund Cluster :</strong>{" "}
-              {editable ? (
-                <input
-                  className="paper-inline-control strong"
-                  placeholder={FORM_DEFAULTS.fundCluster}
-                  value={form.fundCluster}
-                  onChange={(event) =>
-                    onForm({ ...form, fundCluster: event.target.value })
-                  }
-                />
-              ) : (
-                form.fundCluster
-              )}
+              <FundClusterControl value={form.fundCluster} onChange={(value) => onForm({ ...form, fundCluster: value })} editable={editable} className="paper-inline-control strong" />
             </td>
           </tr>
           <tr>
@@ -1766,7 +1802,7 @@ function IarPaper({
               : (line as PreviewLine | null);
             return (
               <tr key={sourceLine?.id || previewLine?.id || index}>
-                <td>{String(index + 1).padStart(3, "0")}</td>
+                <td>{previewLine?.item?.stock_number || ""}</td>
                 <td>
                   {editable ? (
                     <ItemLookup
@@ -1917,6 +1953,8 @@ function StockCardPaper({
   orientation,
   items,
   item,
+  fundCluster,
+  onFundCluster,
   selectedItemId,
   onSelectedItemId,
   rows,
@@ -1925,6 +1963,8 @@ function StockCardPaper({
   orientation: Orientation;
   items: Item[];
   item?: Item;
+  fundCluster: string;
+  onFundCluster: (value: string) => void;
   selectedItemId: string;
   onSelectedItemId: (id: string) => void;
   rows: StockRow[];
@@ -1944,7 +1984,7 @@ function StockCardPaper({
             </td>
             <td>
               <strong>Fund Cluster :</strong>{" "}
-              <span className="strong">06-SSP</span>
+              <FundClusterControl value={fundCluster} onChange={onFundCluster} editable={editable} className="paper-inline-control strong" />
             </td>
           </tr>
           <tr>
@@ -1968,7 +2008,7 @@ function StockCardPaper({
             </td>
             <td>
               <strong>Stock No. :</strong>{" "}
-              <span className="strong">{item ? item.id.slice(0, 8) : ""}</span>
+              <span className="strong">{item?.stock_number || ""}</span>
             </td>
             <td>
               <strong>Re-order Point :</strong>
@@ -2031,6 +2071,8 @@ function RisPaper({
   orientation,
   items,
   form,
+  fundCluster,
+  onFundCluster,
   onForm,
   lines,
   onLines,
@@ -2040,6 +2082,8 @@ function RisPaper({
   orientation: Orientation;
   items: Item[];
   form: RisState;
+  fundCluster: string;
+  onFundCluster: (value: string) => void;
   onForm: (form: RisState) => void;
   lines: Line[];
   onLines: (lines: Line[]) => void;
@@ -2079,7 +2123,7 @@ function RisPaper({
             </td>
             <td>
               <strong>Fund Cluster :</strong>{" "}
-              <span className="strong">06-SSP</span>
+              <FundClusterControl value={fundCluster} onChange={onFundCluster} editable={editable} className="paper-inline-control strong" />
             </td>
           </tr>
           <tr>
@@ -2170,7 +2214,7 @@ function RisPaper({
               : false;
             return (
               <tr key={sourceLine?.id || previewLine?.id || index}>
-                <td>{String(index + 1).padStart(3, "0")}</td>
+                <td>{previewLine?.item?.stock_number || ""}</td>
                 <td>{previewLine?.item?.unit || ""}</td>
                 <td>
                   {editable && sourceLine ? (
@@ -2542,12 +2586,16 @@ function RsmiPaper({
   orientation,
   reportMonth,
   onReportMonth,
+  fundCluster,
+  onFundCluster,
   rows,
   editable,
 }: {
   orientation: Orientation;
   reportMonth: string;
   onReportMonth: (month: string) => void;
+  fundCluster: string;
+  onFundCluster: (value: string) => void;
   rows: RsmiRow[];
   editable: boolean;
 }) {
@@ -2568,7 +2616,7 @@ function RsmiPaper({
             </td>
             <td>
               <strong>Fund Cluster :</strong>{" "}
-              <span className="strong">06-SSP</span>
+              <FundClusterControl value={fundCluster} onChange={onFundCluster} editable={editable} className="paper-inline-control strong" />
             </td>
           </tr>
           <tr>
@@ -2672,8 +2720,10 @@ function RsmiPaper({
 
 function RpciPaper({
   orientation,
-  reportYear,
-  onReportYear,
+  startDate,
+  onStartDate,
+  endDate,
+  onEndDate,
   fundCluster,
   onFundCluster,
   rows,
@@ -2682,8 +2732,10 @@ function RpciPaper({
   editable,
 }: {
   orientation: Orientation;
-  reportYear: string;
-  onReportYear: (year: string) => void;
+  startDate: string;
+  onStartDate: (date: string) => void;
+  endDate: string;
+  onEndDate: (date: string) => void;
   fundCluster: string;
   onFundCluster: (value: string) => void;
   rows: RpciRow[];
@@ -2708,16 +2760,34 @@ function RpciPaper({
       <div className="center strong mt-1">Common-use Supplies and Equipment</div>
       <div className="center text-[9px]">(Type of Inventory Item)</div>
       <div className="center strong mt-1">
-        As at December 31,{" "}
+        As at{" "}
         {editable ? (
-          <input className="paper-inline-control strong center" type="number" value={reportYear} onChange={(event) => onReportYear(event.target.value)} />
-        ) : reportYear}
+          <input
+            className="paper-inline-control strong center"
+            type="date"
+            value={endDate}
+            min={startDate}
+            onChange={(event) => onEndDate(event.target.value)}
+          />
+        ) : shortDate(endDate)}
+      </div>
+      <div className="center text-[9px]">
+        Coverage period: {editable ? (
+          <>
+            <input
+              className="paper-inline-control center"
+              type="date"
+              value={startDate}
+              max={endDate}
+              onChange={(event) => onStartDate(event.target.value)}
+            />{" "}-{" "}
+            <span>{shortDate(endDate)}</span>
+          </>
+        ) : `${shortDate(startDate)} - ${shortDate(endDate)}`}
       </div>
       <div className="mt-3 text-[10px]">
         Fund Cluster:{" "}
-        {editable ? (
-          <input className="paper-inline-control strong" value={fundCluster} onChange={(event) => onFundCluster(event.target.value)} />
-        ) : <span className="strong">{fundCluster}</span>}
+        <FundClusterControl value={fundCluster} onChange={onFundCluster} editable={editable} className="paper-inline-control strong" />
       </div>
       <div className="mt-2 text-[9px]">
         For which <span className="strong">{FORM_DEFAULTS.custodian}</span>, Provincial Training Center - Davao del Norte, is accountable.
@@ -3618,7 +3688,7 @@ function getRsmiRows(
         id: tx.id,
         risNo: extractReference(tx.remarks),
         responsibilityCenterCode: extractResponsibilityCenter(tx.remarks),
-        stockNo: tx.item_id.slice(0, 8),
+        stockNo: tx.item?.stock_number || "",
         item: tx.item?.name || "Unknown item",
         unit: tx.item?.unit || "",
         quantity: tx.quantity,
@@ -3631,11 +3701,17 @@ function getRsmiRows(
 function getRpciRows(
   items: Item[],
   transactions: Transaction[],
-  reportYear: string,
+  startDate: string,
+  endDate: string,
   entries: Record<string, RpciEntry>,
 ): RpciRow[] {
-  const year = Number(reportYear);
-  const yearEnd = new Date(`${year || new Date().getFullYear()}-12-31T23:59:59.999`);
+  const periodStart = new Date(`${startDate}T00:00:00`);
+  const periodEnd = new Date(`${endDate}T23:59:59.999`);
+  const rangeIsValid = !Number.isNaN(periodStart.getTime()) &&
+    !Number.isNaN(periodEnd.getTime()) &&
+    periodStart.getTime() <= periodEnd.getTime();
+  if (!rangeIsValid) return [];
+
   return items
     .filter(
       (item) =>
@@ -3647,7 +3723,7 @@ function getRpciRows(
         .filter(
           (transaction) =>
             transaction.item_id === item.id &&
-            new Date(transaction.created_at).getTime() > yearEnd.getTime(),
+            new Date(transaction.created_at).getTime() > periodEnd.getTime(),
         )
         .reduce(
           (sum, transaction) =>
@@ -3670,7 +3746,7 @@ function getRpciRows(
           (transaction) =>
             transaction.item_id === item.id &&
             transaction.type === "IN" &&
-            new Date(transaction.created_at).getTime() <= yearEnd.getTime() &&
+            new Date(transaction.created_at).getTime() <= periodEnd.getTime() &&
             extractUnitCost(transaction.remarks) > 0,
         );
       const unitValue =
@@ -3680,7 +3756,7 @@ function getRpciRows(
         id: item.id,
         article: item.name,
         description: item.description || "",
-        stockNo: item.id.slice(0, 8).toUpperCase(),
+        stockNo: item.stock_number || "",
         unit: item.unit.toUpperCase(),
         unitValue,
         cardBalance,

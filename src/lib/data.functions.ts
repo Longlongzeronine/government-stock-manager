@@ -18,6 +18,15 @@ async function ensureItemCodes(sql: any) {
   `;
 }
 
+async function nextStockNumber(sql: any) {
+  const [row] = await sql`
+    SELECT COALESCE(MAX(NULLIF(stock_number, '')::INTEGER), 0) + 1 AS next_number
+    FROM items
+    WHERE stock_number ~ '^[0-9]+$'
+  `;
+  return String(Number(row?.next_number || 1)).padStart(3, "0");
+}
+
 // ============================================
 // ITEMS
 // ============================================
@@ -121,6 +130,7 @@ export const createItem = createServerFn({ method: "POST" })
         acquisition_cost: Number(data.acquisition_cost) || 0,
         barcode_value: data.barcode_value || null,
         qr_code_value: data.qr_code_value || null,
+        stock_number: await nextStockNumber(sql),
         jan_quantity: Number(data.jan_quantity) || 0,
         feb_quantity: Number(data.feb_quantity) || 0,
         mar_quantity: Number(data.mar_quantity) || 0,
@@ -238,6 +248,7 @@ export const importItems = createServerFn({ method: "POST" })
       await sql`
         INSERT INTO items ${sql({
           ...payload(item, name, barcode || null, categoryId, null),
+          stock_number: await nextStockNumber(sql),
           sort_order: nextSort,
         })}
       `;

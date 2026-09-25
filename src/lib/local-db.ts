@@ -132,6 +132,7 @@ export async function ensureSchema() {
       acquisition_cost NUMERIC(14,2) NOT NULL DEFAULT 0,
       barcode_value TEXT DEFAULT NULL,
       qr_code_value TEXT DEFAULT NULL,
+      stock_number TEXT DEFAULT NULL,
       sort_order INTEGER DEFAULT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -150,6 +151,28 @@ export async function ensureSchema() {
     ALTER TABLE items ADD COLUMN IF NOT EXISTS nov_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
     ALTER TABLE items ADD COLUMN IF NOT EXISTS dec_quantity NUMERIC(12,2) NOT NULL DEFAULT 0;
     ALTER TABLE items ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT NULL;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS stock_number TEXT DEFAULT NULL;
+
+    -- Stable, human-readable stock codes for inventory and generated forms.
+    WITH missing_stock_numbers AS (
+      SELECT
+        id,
+        LPAD((
+          COALESCE((
+            SELECT MAX(NULLIF(stock_number, '')::INTEGER)
+            FROM items
+            WHERE stock_number ~ '^[0-9]+$'
+          ), 0) + ROW_NUMBER() OVER (
+            ORDER BY sort_order ASC NULLS LAST, created_at ASC, id
+          )
+        )::TEXT, 3, '0') AS next_stock_number
+      FROM items
+      WHERE stock_number IS NULL OR BTRIM(stock_number) = ''
+    )
+    UPDATE items AS item
+    SET stock_number = missing_stock_numbers.next_stock_number
+    FROM missing_stock_numbers
+    WHERE item.id = missing_stock_numbers.id;
 
     -- QR codes give existing and future inventory records stable scan values.
     -- NOTE: barcode_value is intentionally left alone — the app treats barcode_value
@@ -379,6 +402,8 @@ export async function ensureSchema() {
     -- Indexes
     CREATE INDEX IF NOT EXISTS idx_items_name ON items(name);
     CREATE INDEX IF NOT EXISTS idx_items_sort_order ON items(sort_order);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_items_stock_number_unique
+      ON items(stock_number) WHERE stock_number IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_items_category_id ON items(category_id);
     CREATE INDEX IF NOT EXISTS idx_items_supplier_id ON items(supplier_id);
     -- Unique scan indexes (guarded so a pre-existing duplicate can never take down every

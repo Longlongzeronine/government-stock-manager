@@ -89,6 +89,7 @@ function Inventory() {
 
   function exportRows() {
     return filtered.map((i: any) => ({
+      StockNo: i.stock_number ?? "",
       Name: i.name,
       Description: i.description ?? "",
       Category: i.category?.name ?? "",
@@ -900,7 +901,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
       <summary>{category} <em>{categoryItems.length} item{categoryItems.length === 1 ? "" : "s"}</em></summary>
       <div className="app-cse-compact-table-wrap">
         <table className="app-cse-compact-table">
-          <thead><tr><th>#</th><th>Code</th><th>Item &amp; Specifications</th><th>Unit</th><th>Monthly Quantity (Jan–Dec)</th><th>Total Qty</th><th>Unit Price</th><th>Total Amount</th>{canEdit && <th>Actions</th>}</tr></thead>
+          <thead><tr><th>#</th><th>Stock No.</th><th>Code</th><th>Item &amp; Specifications</th><th>Unit</th><th>Monthly Quantity (Jan–Dec)</th><th>Total Qty</th><th>Unit Price</th><th>Total Amount</th>{canEdit && <th>Actions</th>}</tr></thead>
           <tbody>
             {categoryItems.map((item: any, catIndex: number) => {
               const months = monthsFor(item);
@@ -911,6 +912,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
               return (
                 <tr key={item.id || code} className={`${selected.has(item.id) ? "is-selected" : ""}`} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}>
                   <td>{canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td>
+                  <td className="font-mono text-xs font-semibold">{item.stock_number || "—"}</td>
                   <td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => saveItem(item, { barcode_value: event.target.value })} /></td>
                   <td>
                     <span className="app-cse-product">
@@ -958,7 +960,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
       <article key={item.id || code} className={`app-cse-easy-card ${selected.has(item.id) ? "is-selected" : ""}`} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}>
         <div className="app-cse-easy-card-top">
           {canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : <span className="app-cse-easy-card-count">{rowIndex + 1}</span>}
-          <span className="app-cse-easy-card-code">{code || item.category?.name || "—"}</span>
+          <span className="app-cse-easy-card-code">Stock No. {item.stock_number || "—"} · {code || item.category?.name || "—"}</span>
           {isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}
           <button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={`https://api.qrserver.com/v1/create-qr-code/?size=96x96&format=svg&data=${encodeURIComponent(qrValue)}`} alt="" title={qrValue} loading="lazy" /></button>
         </div>
