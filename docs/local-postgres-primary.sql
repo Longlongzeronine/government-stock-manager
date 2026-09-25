@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS items (
   acquisition_cost NUMERIC(14,2) NOT NULL DEFAULT 0,
   barcode_value TEXT DEFAULT NULL,
   qr_code_value TEXT DEFAULT NULL,
+  stock_number TEXT DEFAULT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -284,6 +285,8 @@ CREATE INDEX IF NOT EXISTS idx_items_name ON items(name);
 CREATE INDEX IF NOT EXISTS idx_items_category_id ON items(category_id);
 CREATE INDEX IF NOT EXISTS idx_items_supplier_id ON items(supplier_id);
 CREATE INDEX IF NOT EXISTS idx_items_item_type ON items(item_type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_items_stock_number_unique
+  ON items(stock_number) WHERE stock_number IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_transactions_item_id ON transactions(item_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at);
 CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type);
