@@ -17,6 +17,7 @@ import { PageHeader } from "@/components/layout/AppShell";
 import { listItems, deleteItem as deleteInventoryItemFn } from "@/lib/data.functions";
 import { useAuth } from "@/contexts/AuthContext";
 import { SummaryActions } from "@/components/common/SummaryActions";
+import { FundClusterControl } from "@/components/common/FundClusterControl";
 import { exportCSV } from "@/lib/export";
 
 export const Route = createFileRoute("/_app/requisitions")({
@@ -80,7 +81,7 @@ const initialForm = (requestedBy = ""): RequisitionState => ({
   paperOrientation: "portrait",
   date: new Date().toISOString().slice(0, 10),
   requisitionNo: "",
-  fundCluster: "",
+  fundCluster: "06-SSP",
   responsibilityCenterCode: "",
   risNo: "",
   requestedBy,
@@ -442,7 +443,7 @@ function QuickEntry({
           {form.formLayout === "ris" && (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <AdminField label="Fund Cluster">
-                <input className="admin-input" placeholder="01" value={form.fundCluster} onChange={(e) => onField("fundCluster", e.target.value)} />
+                <FundClusterControl className="admin-input" value={form.fundCluster} onChange={(value) => onField("fundCluster", value)} />
               </AdminField>
               <AdminField label="RIS No.">
                 <input className="admin-input" placeholder="2026-06-013" value={form.risNo} onChange={(e) => onField("risNo", e.target.value)} />
@@ -788,7 +789,7 @@ function RisPaper({
           <span className="font-bold">Government Stock Manager</span>
         </RisMeta>
         <RisMeta label="Fund Cluster">
-          {editable ? <PaperInput placeholder="01" value={form.fundCluster} onChange={(value) => onField("fundCluster", value)} /> : form.fundCluster || "-"}
+          <FundClusterControl className="paper-inline-control strong" value={form.fundCluster} onChange={(value) => onField("fundCluster", value)} editable={editable} />
         </RisMeta>
         <RisMeta label="Division">
           {editable ? <PaperInput placeholder="Administrative Services" value={form.department} onChange={(value) => onField("department", value)} /> : form.department || "-"}

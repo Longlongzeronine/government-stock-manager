@@ -25,6 +25,7 @@ export interface Item {
   accountability_status: "available" | "issued" | "returned" | "lost" | "damaged" | "disposed" | "transferred";
   barcode_value: string | null;
   qr_code_value: string | null;
+  stock_number: string | null;
   created_at: string;
   updated_at: string;
   category?: { id: string; name: string } | null;
