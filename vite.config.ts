@@ -12,4 +12,16 @@ export default defineConfig({
   tanstackStart: {
     server: { entry: "server" },
   },
+  vite: {
+    define: {
+      // Server-only Supabase service-role key, baked at build time from .env.
+      // Never prefixed with VITE_ so it is NOT exposed to the browser bundle
+      // as import.meta.env — only bundled into the server output. The Worker
+      // still cannot reach localhost Postgres, so the server functions fall
+      // back to Supabase REST with this key.
+      "process.env.SUPABASE_SERVICE_ROLE_KEY": JSON.stringify(
+        process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+      ),
+    },
+  },
 });

@@ -9,7 +9,11 @@
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "sync": "node scripts/sync-to-supabase.mjs",
+    "sync:report": "node scripts/sync-to-supabase.mjs --report",
+    "sync:watch": "node scripts/sync-watch.mjs",
+    "sync:once": "node scripts/sync-watch.mjs --once"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.25.5",

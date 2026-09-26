@@ -69,6 +69,16 @@ async function normalizeCatastrophicSsrResponse(response: Response): Promise<Res
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
+      // Make Worker bindings visible to server functions (process.env does
+      // not exist in Workers; import.meta.env only holds VITE_* at build).
+      const g = globalThis as any;
+      const bindings = (env ?? {}) as Record<string, unknown>;
+      g.__WORKER_ENV__ = bindings;
+      const proc = g.process ?? (g.process = { env: {} as Record<string, string> });
+      proc.env = proc.env ?? {};
+      for (const [k, v] of Object.entries(bindings)) {
+        if (typeof v === "string" && !(k in proc.env)) proc.env[k] = v;
+      }
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       return await normalizeCatastrophicSsrResponse(response);
