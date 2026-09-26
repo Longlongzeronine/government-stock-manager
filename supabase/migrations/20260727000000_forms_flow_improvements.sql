@@ -30,7 +30,8 @@ as $$
 declare
   next_number bigint;
 begin
-  if auth.uid() is null or not public.can_write_inventory(auth.uid()) then
+  if auth.role() <> 'service_role'
+     and (auth.uid() is null or not public.can_write_inventory(auth.uid())) then
     raise exception 'Not authorized to reserve a form number';
   end if;
 

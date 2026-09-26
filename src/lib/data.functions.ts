@@ -6,6 +6,7 @@ import {
   isWorkersRuntime,
   sbDelete,
   sbInsert,
+  sbRpc,
   sbSelect,
   sbUpdate,
 } from "@/lib/supabase-rest";
@@ -265,6 +266,36 @@ function itemWritePayload(data: any, extra: Record<string, unknown> = {}) {
   };
 }
 
+const itemMonthlyQuantityFields = [
+  "jan_quantity", "feb_quantity", "mar_quantity", "apr_quantity",
+  "may_quantity", "jun_quantity", "jul_quantity", "aug_quantity",
+  "sep_quantity", "oct_quantity", "nov_quantity", "dec_quantity",
+];
+
+function omitItemMonthlyQuantities(payload: Record<string, unknown>) {
+  const result = { ...payload };
+  for (const field of itemMonthlyQuantityFields) delete result[field];
+  return result;
+}
+
+function missingItemColumn(error: unknown) {
+  const match = String((error as Error)?.message || error).match(
+    /Could not find the '([^']+)' column/i,
+  );
+  return match?.[1] || null;
+}
+
+function omitUnsupportedItemColumn(
+  payload: Record<string, unknown>,
+  column: string,
+) {
+  if (itemMonthlyQuantityFields.includes(column))
+    return omitItemMonthlyQuantities(payload);
+  const result = { ...payload };
+  delete result[column];
+  return result;
+}
+
 export const createItem = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
@@ -286,14 +317,44 @@ export const createItem = createServerFn({ method: "POST" })
       },
       async () => {
         const writeCfg = getRestWriteConfig();
-        const created = await sbInsert("items", itemWritePayload(data), writeCfg);
-        const qr = (created as any).qr_code_value?.trim()
-          ? (created as any).qr_code_value
-          : `ITEM:${(created as any).id}`;
-        const [updated] = await sbUpdate("items", `id=eq.${(created as any).id}`, {
-          qr_code_value: qr,
-        }, writeCfg);
-        return updated ?? created;
+        let payload: Record<string, unknown> = itemWritePayload(data);
+        let monthlyQuantitiesSaved = true;
+        let legacySchemaUsed = false;
+        let created: any;
+        const optionalHostedColumns = new Set([
+          ...itemMonthlyQuantityFields,
+          "stock_number",
+          "qr_code_value",
+        ]);
+        // Keep Add new item usable while a hosted project catches up with app
+        // migrations. Each retry removes only a known optional app field.
+        for (;;) {
+          try {
+            created = await sbInsert("items", payload, writeCfg);
+            break;
+          } catch (error) {
+            const column = missingItemColumn(error);
+            if (!column || !optionalHostedColumns.has(column)) throw error;
+            if (itemMonthlyQuantityFields.includes(column))
+              monthlyQuantitiesSaved = false;
+            legacySchemaUsed = true;
+            payload = omitUnsupportedItemColumn(payload, column);
+          }
+        }
+        let updated: any[] = [];
+        if (!("qr_code_value" in payload)) {
+          const qr = (created as any).qr_code_value?.trim()
+            ? (created as any).qr_code_value
+            : `ITEM:${(created as any).id}`;
+          updated = await sbUpdate("items", `id=eq.${(created as any).id}`, {
+            qr_code_value: qr,
+          }, writeCfg);
+        }
+        return {
+          ...(updated[0] ?? created),
+          monthlyQuantitiesSaved,
+          legacySchemaUsed,
+        };
       },
     );
   });
@@ -999,21 +1060,31 @@ export const rememberFormPersonnel = createServerFn({ method: "POST" })
 export const reserveNextFormNumber = createServerFn({ method: "POST" })
   .inputValidator((d: { prefix: string; date: string }) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
     const date = data.date;
     const year = Number(date.slice(0, 4));
     const prefix = data.prefix.toUpperCase();
-    const [counter] = await sql`
-      INSERT INTO form_number_counters (form_prefix, series_year, last_number)
-      VALUES (${prefix}, ${year}, 1)
-      ON CONFLICT (form_prefix, series_year)
-      DO UPDATE SET last_number = form_number_counters.last_number + 1
-      RETURNING last_number
-    `;
-    const series = String(counter.last_number).padStart(7, "0");
-    return prefix === "RIS"
-      ? `${date}-${series}`
-      : `${prefix}-${date}-${series}`;
+    return withDbFallback(
+      async (sql) => {
+        const [counter] = await sql`
+          INSERT INTO form_number_counters (form_prefix, series_year, last_number)
+          VALUES (${prefix}, ${year}, 1)
+          ON CONFLICT (form_prefix, series_year)
+          DO UPDATE SET last_number = form_number_counters.last_number + 1
+          RETURNING last_number
+        `;
+        const series = String(counter.last_number).padStart(7, "0");
+        return prefix === "RIS"
+          ? `${date}-${series}`
+          : `${prefix}-${date}-${series}`;
+      },
+      // Hosted Worker cannot open a TCP connection to local PostgreSQL.
+      // Supabase RPC performs the same atomic upsert in the hosted database.
+      async () =>
+        await sbRpc<string>("next_form_number", {
+          p_form_prefix: prefix,
+          p_form_date: date,
+        }),
+    );
   });
 
 export const createIcsForm = createServerFn({ method: "POST" })

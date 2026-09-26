@@ -1,5 +1,29 @@
 # Local PostgreSQL -> Supabase automatic sync
 
+## Use pgAdmin with hosted Supabase (no command line)
+
+`pgAdmin` is a database client, not another database. When it is connected to
+the hosted Supabase project, every change you make there is already online;
+there is no separate sync step.
+
+1. In Supabase Dashboard, click **Connect** and select **Session pooler**.
+   Copy its host, port, database, and user values. Use this mode for pgAdmin;
+   it works on ordinary IPv4 home/office networks.
+2. In pgAdmin: **Servers** -> **Register** -> **Server**. Give it a name such
+   as `Government Stock Manager (Supabase)`.
+3. On **Connection**, paste those copied values and enter the Supabase database
+   password. Do not use local `localhost:5433` values.
+4. On **Parameters**, set `sslmode` to `verify-full` and choose Supabase's root
+   certificate downloaded from Dashboard -> **Database Settings**. Save.
+5. Expand `Databases` -> `postgres` -> `Schemas` -> `public` -> `Tables` ->
+   `items`. Right-click `items` -> **Query Tool**, paste and run
+   `supabase/migrations/20260921000000_inventory_monthly_columns.sql`.
+
+That migration creates `apr_quantity` and the other monthly fields, then reloads
+the Supabase REST schema cache. Retry **Inventory** -> **Add Item** afterwards.
+Use the app for normal item entry; it writes online immediately. Use pgAdmin for
+administration, imports, or repairs.
+
 ## Why https://supplify.stockmanagerph.workers.dev/login shows no data
 
 Two different databases are in play:
