@@ -58,6 +58,9 @@ type Item = {
   id: string;
   name: string;
   stock_number?: string | null;
+  barcode_value?: string | null;
+  qr_code_value?: string | null;
+  category?: { id: string; name: string } | null;
   description?: string | null;
   item_type?: "supply" | "material";
   quantity: number;
@@ -249,14 +252,17 @@ function FormsFlow() {
   const initializedPersonnel = useRef(false);
   const initializedRisNumber = useRef(false);
 
+  // Poll like the Inventory page so on-hand quantities stay in sync with it.
   const { data: items = [] } = useQuery({
     queryKey: ["items"],
     queryFn: () => listItems() as Promise<Item[]>,
+    refetchInterval: 3000,
   });
 
   const { data: transactions = [] } = useQuery({
     queryKey: ["transactions", "forms-flow"],
     queryFn: () => listTransactionsAsc() as Promise<Transaction[]>,
+    refetchInterval: 3000,
   });
 
   const { data: personnelMemory = [] } = useQuery({
@@ -299,13 +305,20 @@ function FormsFlow() {
     () => items.filter((item) => itemMatchesPropertyFlow(item, propertyFlow)),
     [items, propertyFlow],
   );
+  // Forms Flow item pickers search the WHOLE Inventory page data so every
+  // inventory record is selectable (not only the current property flow), while
+  // the current flow's items are kept first in the list.
+  const pickerItems = useMemo(() => {
+    const flowIds = new Set(flowItems.map((item) => item.id));
+    return [...flowItems, ...items.filter((item) => !flowIds.has(item.id))];
+  }, [items, flowItems]);
   const acceptedStockItems = useMemo(
-    () => getAcceptedStockItems(flowItems, transactions),
-    [flowItems, transactions],
+    () => getAcceptedStockItems(pickerItems, transactions),
+    [pickerItems, transactions],
   );
   const stockCardItems = useMemo(
-    () => getStockCardItems(flowItems, transactions),
-    [flowItems, transactions],
+    () => getStockCardItems(pickerItems, transactions),
+    [pickerItems, transactions],
   );
   const selectedItem = stockCardItems.find(
     (item: Item) => item.id === selectedItemId,
@@ -430,9 +443,12 @@ function FormsFlow() {
       if (!item) {
         return toast.error("RIS can only issue items that were accepted through IAR and still have stock.");
       }
+      if (item && Number(item.quantity) <= 0) {
+        return toast.error(`${item.name} is out of stock.`);
+      }
       if (item && Number(line.quantity) > item.quantity) {
         return toast.error(
-          `${item.name} has only ${item.quantity} ${item.unit} available.`,
+          `${item.name} has only ${item.quantity} ${item.unit} available. Enter ${item.quantity} or less.`,
         );
       }
     }
@@ -798,7 +814,7 @@ function FormsFlow() {
               {viewMode === "split" && (
                 <EntryPanel
                   tab={tab}
-                  inventoryItems={flowItems}
+                  inventoryItems={pickerItems}
                   risItems={acceptedStockItems}
                   stockCardItems={stockCardItems}
                   canWrite={canWrite}
@@ -832,7 +848,7 @@ function FormsFlow() {
                 orientation={orientation}
                 zoom={zoom}
                 editable
-                inventoryItems={flowItems}
+                inventoryItems={pickerItems}
                 risItems={acceptedStockItems}
                 stockCardItems={stockCardItems}
                 iar={iar}
@@ -1329,6 +1345,7 @@ function EntryPanel({
             items={risItems}
             lines={risLines}
             onLines={setRisLines}
+            checkStock
             emptyMessage="Post an IAR receipt first before issuing items through RIS."
           />
           <FlowActions>
@@ -2864,12 +2881,16 @@ function LineEditor({
   lines,
   onLines,
   showCost = false,
+  checkStock = false,
   emptyMessage = "No items available.",
 }: {
   items: Item[];
   lines: Line[];
   onLines: (lines: Line[]) => void;
   showCost?: boolean;
+  // true where the form consumes stock (RIS issuance) so the entered quantity is
+  // capped and flagged against the live on-hand quantity from Inventory.
+  checkStock?: boolean;
   emptyMessage?: string;
 }) {
   function updateLine(id: string, patch: Partial<Line>) {
@@ -2907,6 +2928,15 @@ function LineEditor({
             const item = items.find(
               (candidate) => candidate.id === line.item_id,
             );
+            // Live on-hand quantity coming straight from Inventory.
+            const availableQty = item ? Number(item.quantity) || 0 : null;
+            const lineQty = Number(line.quantity) || 0;
+            const outOfStock = availableQty !== null && availableQty <= 0;
+            const exceedsStock =
+              checkStock &&
+              availableQty !== null &&
+              lineQty > 0 &&
+              lineQty > availableQty;
             return (
               <tr key={line.id}>
                 <td>
@@ -2921,19 +2951,44 @@ function LineEditor({
                   />
                 </td>
                 <td className="text-right tabular-nums">
-                  {item ? `${item.quantity} ${item.unit}` : "-"}
+                  {item
+                    ? outOfStock
+                      ? (
+                        <span className="font-semibold text-destructive">
+                          Out of stock
+                        </span>
+                      )
+                      : `${availableQty} ${item.unit}`
+                    : "-"}
                 </td>
                 <td>
                   <input
-                    className="flow-input text-right"
+                    className={`flow-input text-right${
+                      exceedsStock
+                        ? " border-destructive ring-1 ring-destructive"
+                        : ""
+                    }`}
                     type="number"
                     min={1}
+                    max={
+                      checkStock && availableQty !== null && availableQty > 0
+                        ? availableQty
+                        : undefined
+                    }
                     placeholder="Qty."
+                    aria-invalid={exceedsStock || undefined}
                     value={line.quantity}
                     onChange={(e) =>
                       updateLine(line.id, { quantity: e.target.value })
                     }
                   />
+                  {exceedsStock && (
+                    <p className="mt-1 text-[11px] font-medium text-destructive">
+                      {outOfStock
+                        ? "Out of stock"
+                        : `Only ${availableQty} ${item?.unit} available`}
+                    </p>
+                  )}
                 </td>
                 {showCost && (
                   <td>
@@ -3324,7 +3379,9 @@ function ItemLookup({
     const exact = items.find(
       (item) =>
         itemLabel(item).toLocaleLowerCase() === normalized ||
-        item.name.toLocaleLowerCase() === normalized,
+        item.name.toLocaleLowerCase() === normalized ||
+        (item.stock_number || "").toLocaleLowerCase() === normalized ||
+        (item.barcode_value || "").toLocaleLowerCase() === normalized,
     );
     if (exact) onChange(exact.id);
     else if (!normalized) onChange("");
@@ -3335,7 +3392,7 @@ function ItemLookup({
     .split(/\s+/)
     .filter(Boolean);
   const matches = items.filter((item) => {
-    const searchable = `${item.name} ${item.description || ""}`.toLocaleLowerCase();
+    const searchable = itemSearchText(item);
     return words.length === 0 || words.every((word) => searchable.includes(word));
   });
 
@@ -3500,6 +3557,19 @@ function itemDescription(item?: Item | null) {
   return item?.description?.trim() || item?.name || "";
 }
 
+function itemSearchText(item: Item): string {
+  return [
+    item.name,
+    item.description || "",
+    item.stock_number || "",
+    item.barcode_value || "",
+    item.qr_code_value || "",
+    item.category?.name || "",
+  ]
+    .join(" ")
+    .toLocaleLowerCase();
+}
+
 function itemLabel(item?: Item | null) {
   if (!item) return "";
   return item.description?.trim()
@@ -3573,9 +3643,9 @@ function getAcceptedStockItems(items: Item[], transactions: Transaction[]) {
       .map((tx) => tx.item_id),
   );
 
-  return items.filter(
-    (item) => acceptedItemIds.has(item.id) && Number(item.quantity) > 0,
-  );
+  // Keep accepted items that have run down to zero so the RIS picker shows them
+  // as "Out of stock" instead of silently hiding them.
+  return items.filter((item) => acceptedItemIds.has(item.id));
 }
 
 function getStockCardItems(items: Item[], transactions: Transaction[]) {

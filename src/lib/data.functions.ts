@@ -10,6 +10,7 @@ import {
   sbSelect,
   sbUpdate,
 } from "@/lib/supabase-rest";
+import { classifyInventoryItem } from "@/lib/item-classification";
 
 let localSchemaReady: Promise<void> | null = null;
 
@@ -237,12 +238,23 @@ export const getItem = createServerFn({ method: "GET" })
   });
 
 function itemWritePayload(data: any, extra: Record<string, unknown> = {}) {
+  // Inventory is the base record: derive the classification from type + cost so
+  // the Forms Flow tabs (Supplies / Semi-Expendable / PPE) stay in sync, even on
+  // hosted Supabase where the auto-classify trigger may be absent.
+  const classification = classifyInventoryItem(
+    data.item_type,
+    data.acquisition_cost,
+  );
   return {
     name: data.name,
     description: data.description ?? null,
     category_id: data.category_id || null,
     supplier_id: data.supplier_id || null,
     item_type: data.item_type || "supply",
+    inventory_classification:
+      data.inventory_classification ?? classification.inventory_classification,
+    semi_expendable_tier:
+      data.semi_expendable_tier ?? classification.semi_expendable_tier,
     quantity: Number(data.quantity) || 0,
     unit: normalizeUnit(data.unit, data.name),
     reorder_level: Number(data.reorder_level) || 10,
@@ -325,6 +337,8 @@ export const createItem = createServerFn({ method: "POST" })
           ...itemMonthlyQuantityFields,
           "stock_number",
           "qr_code_value",
+          "inventory_classification",
+          "semi_expendable_tier",
         ]);
         // Keep Add new item usable while a hosted project catches up with app
         // migrations. Each retry removes only a known optional app field.
@@ -474,6 +488,10 @@ export const updateItem = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     return withDbFallback(
       async (sql) => {
+        const classification = classifyInventoryItem(
+          data.item_type,
+          data.acquisition_cost,
+        );
         const [row] = await sql`
           UPDATE items SET ${sql({
             name: data.name,
@@ -481,6 +499,10 @@ export const updateItem = createServerFn({ method: "POST" })
             category_id: data.category_id || null,
             supplier_id: data.supplier_id || null,
             item_type: data.item_type || "supply",
+            inventory_classification:
+              data.inventory_classification ?? classification.inventory_classification,
+            semi_expendable_tier:
+              data.semi_expendable_tier ?? classification.semi_expendable_tier,
             quantity: Number(data.quantity) || 0,
             unit: data.unit || "pcs",
             reorder_level: Number(data.reorder_level) || 10,
@@ -506,20 +528,48 @@ export const updateItem = createServerFn({ method: "POST" })
         return row;
       },
       async () => {
-        const [row] = await sbUpdate("items", `id=eq.${data.id}`, {
+        const writeCfg = getRestWriteConfig();
+        const classification = classifyInventoryItem(
+          data.item_type,
+          data.acquisition_cost,
+        );
+        const payload: Record<string, unknown> = {
           name: data.name,
           description: data.description ?? null,
           category_id: data.category_id || null,
           supplier_id: data.supplier_id || null,
           item_type: data.item_type || "supply",
+          inventory_classification:
+            data.inventory_classification ?? classification.inventory_classification,
+          semi_expendable_tier:
+            data.semi_expendable_tier ?? classification.semi_expendable_tier,
           quantity: Number(data.quantity) || 0,
           unit: data.unit || "pcs",
           reorder_level: Number(data.reorder_level) || 10,
           acquisition_cost: Number(data.acquisition_cost) || 0,
           barcode_value: data.barcode_value || null,
           qr_code_value: data.qr_code_value || null,
-        }, getRestWriteConfig());
-        return row;
+        };
+        const optionalHostedColumns = new Set([
+          "inventory_classification",
+          "semi_expendable_tier",
+        ]);
+        for (;;) {
+          try {
+            const [row] = await sbUpdate(
+              "items",
+              `id=eq.${data.id}`,
+              payload,
+              writeCfg,
+            );
+            return row;
+          } catch (error) {
+            const column = missingItemColumn(error);
+            if (!column || !optionalHostedColumns.has(column)) throw error;
+            optionalHostedColumns.delete(column);
+            delete payload[column];
+          }
+        }
       },
     );
   });

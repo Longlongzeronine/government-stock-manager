@@ -10,6 +10,7 @@ import { ChevronDown, Plus, ScanLine, Search, Pencil, Trash2, Download, FileText
 import { toast } from "sonner";
 import { exportCSV, exportPDF, exportXLSX, exportAppCseXlsx, exportAppCsePdf } from "@/lib/export";
 import { detectAppCseLayout, parseAppCseRows, validateAppCseLayout, MONTH_LABELS, MONTH_QUANTITY_COLUMNS } from "@/lib/appcse-sheet";
+import { classifyInventoryItem } from "@/lib/item-classification";
 import { format } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
 import QRCode from "qrcode";
@@ -1222,6 +1223,7 @@ function ItemDialog({ editing, cats, onClose, onSaved, onCategoryCreated }: any)
   const [creatingCategory, setCreatingCategory] = useState(false);
 
   const monthTotal = ITEM_MONTH_KEYS.reduce((sum, key) => sum + (Number(form[key]) || 0), 0);
+  const dialogClassification = classifyInventoryItem(form.item_type, form.acquisition_cost);
 
   async function createCategoryInline() {
     const name = newCategory.trim();
@@ -1295,6 +1297,18 @@ function ItemDialog({ editing, cats, onClose, onSaved, onCategoryCreated }: any)
           </Field>
           <Field label="Unit Price">
             <input type="number" min={0} step="0.01" className="dlg-input" value={form.acquisition_cost} onChange={(e) => setForm({ ...form, acquisition_cost: e.target.value as any })} />
+          </Field>
+          <Field label="Item Type">
+            <select className="dlg-input" value={form.item_type} onChange={(e) => setForm({ ...form, item_type: e.target.value })}>
+              <option value="supply">Supply (Expendable)</option>
+              <option value="material">Material (Semi-Expendable / PPE)</option>
+            </select>
+          </Field>
+          <Field label="Classification">
+            <div className="dlg-input flex items-center justify-between gap-2">
+              <span className="font-medium">{classificationLabel({ inventory_classification: dialogClassification.inventory_classification, semi_expendable_tier: dialogClassification.semi_expendable_tier })}</span>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Auto from type &amp; cost</span>
+            </div>
           </Field>
           <Field label="Category">
             {addingCategory ? (
