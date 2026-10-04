@@ -25,7 +25,7 @@ export const Route = createFileRoute("/_app/users")({
 });
 
 function UsersPage() {
-  const { isAdmin, session } = useAuth();
+  const { isAdmin, developerMode, session } = useAuth();
   const accessToken = session?.access_token ?? "";
   const [creating, setCreating] = useState(false);
   const [resetTarget, setResetTarget] = useState<{ id: string; email: string } | null>(null);
@@ -38,14 +38,14 @@ function UsersPage() {
     role: "viewer" as AssignableRole,
   });
 
-  const { data: profiles = [], refetch } = useQuery({
+  const { data: profiles = [], refetch, isLoading, error } = useQuery({
     queryKey: ["profiles", "admin"],
     enabled: Boolean(isAdmin && accessToken),
     queryFn: async () => listAdminUsers({ data: { accessToken } }),
   });
 
-  if (!isAdmin) {
-    return <div className="p-8 text-sm text-muted-foreground">Admin access required.</div>;
+  if (!isAdmin || !accessToken) {
+    return <div className="p-8 text-sm text-muted-foreground">{developerMode ? "User management requires a signed-in Supabase admin account." : "Admin access required."}</div>;
   }
 
   async function setRole(uid: string, role: AssignableRole) {
@@ -173,6 +173,11 @@ function UsersPage() {
                 </tr>
               </thead>
               <tbody>
+                {isLoading ? (
+                  <tr><td colSpan={5} className="p-12 text-center text-sm text-muted-foreground">Loading users...</td></tr>
+                ) : error ? (
+                  <tr><td colSpan={5} className="p-8 text-center text-sm text-destructive">Could not load users: {error.message}</td></tr>
+                ) : null}
                 {profiles.map((u: any) => (
                   <tr key={u.id} className="border-t border-border">
                     <td className="px-4 py-3 font-medium">{u.full_name ?? "-"}</td>
@@ -257,7 +262,7 @@ function UsersPage() {
                     </td>
                   </tr>
                 ))}
-                {profiles.length === 0 && (
+                {!isLoading && !error && profiles.length === 0 && (
                   <tr>
                     <td colSpan={5} className="p-12 text-center text-sm text-muted-foreground">
                       No users found.
@@ -272,6 +277,8 @@ function UsersPage() {
         {/* Mobile Card View */}
         {isMobileView && (
           <div className="space-y-3">
+            {isLoading && <div className="p-12 text-center text-sm text-muted-foreground bg-card border border-border rounded-lg">Loading users...</div>}
+            {error && <div className="p-8 text-center text-sm text-destructive bg-card border border-border rounded-lg">Could not load users: {error.message}</div>}
             {profiles.map((u: any) => (
               <MobileCard key={u.id}>
                 <div className="flex items-start justify-between gap-2">
@@ -361,7 +368,7 @@ function UsersPage() {
                 </div>
               </MobileCard>
             ))}
-            {profiles.length === 0 && (
+            {!isLoading && !error && profiles.length === 0 && (
               <div className="p-12 text-center text-sm text-muted-foreground bg-card border border-border rounded-lg">
                 No users found.
               </div>

@@ -15,7 +15,7 @@ export const Route = createFileRoute("/_app/categories")({
 });
 
 function Categories() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, developerMode } = useAuth();
   const qc = useQueryClient();
   const { data: cats = [] } = useQuery({
     queryKey: ["categories"],
@@ -44,7 +44,7 @@ function Categories() {
         title="Categories"
         subtitle={`${cats.length} categories`}
         actions={
-          isAdmin && (
+          (isAdmin || developerMode) && (
             <button
               onClick={() => {
                 setEditing(null);
@@ -75,7 +75,7 @@ function Categories() {
                     <td className="px-4 py-3 font-medium">{c.name}</td>
                     <td className="px-4 py-3 text-muted-foreground">{c.description ?? "—"}</td>
                     <td className="px-4 py-3 text-right">
-                      {isAdmin && (
+                      {(isAdmin || developerMode) && (
                         <div className="inline-flex gap-1">
                           <button
                             onClick={() => {
@@ -116,7 +116,7 @@ function Categories() {
               <MobileCard key={c.id}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="font-medium text-base">{c.name}</div>
-                  {isAdmin && (
+                  {(isAdmin || developerMode) && (
                     <div className="flex gap-1 shrink-0">
                       <button
                         onClick={() => {

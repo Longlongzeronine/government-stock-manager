@@ -1,6 +1,11 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase, type AppRole } from "@/integrations/supabase/client";
+import {
+  getDeveloperSession,
+  signInDeveloper,
+  signOutDeveloper,
+} from "@/lib/developer-auth.functions";
 
 interface AuthCtx {
   user: User | null;
@@ -13,6 +18,9 @@ interface AuthCtx {
   isAdmin: boolean;
   isStaff: boolean;
   canWrite: boolean;
+  developerMode: boolean;
+  developerUsername: string | null;
+  signInAsDeveloper: (username: string, password: string) => Promise<{ error: string | null }>;
 }
 
 const Ctx = createContext<AuthCtx | undefined>(undefined);
@@ -73,21 +81,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
   const [loading, setLoading] = useState(true);
+  const [developerUsername, setDeveloperUsername] = useState<string | null>(null);
 
   useEffect(() => {
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
       setSession(s);
       if (s?.user) {
+        setDeveloperUsername(null);
+        void signOutDeveloper();
         setTimeout(() => loadRole(s.user.id), 0);
       } else {
         setRole(null);
       }
     });
-    supabase.auth.getSession().then(({ data }) => {
+    Promise.all([supabase.auth.getSession(), getDeveloperSession()]).then(([{ data }, developerSession]) => {
       setSession(data.session);
       if (data.session?.user) loadRole(data.session.user.id);
+      setDeveloperUsername(data.session ? null : developerSession?.username ?? null);
+      if (data.session && developerSession) void signOutDeveloper();
       setLoading(false);
-    });
+    }).catch(() => setLoading(false));
     return () => sub.subscription.unsubscribe();
   }, []);
 
@@ -102,14 +115,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setRole((top as any).role as AppRole);
   }
 
+  const developerMode = developerUsername !== null && session === null;
   const value: AuthCtx = {
     user: session?.user ?? null,
     session,
     role,
     loading,
-    isAdmin: role === "admin",
+    isAdmin: role === "admin" || developerMode,
     isStaff: role === "staff",
-    canWrite: role === "admin" || role === "staff",
+    canWrite: developerMode || role === "admin" || role === "staff",
+    developerMode,
+    developerUsername,
+    signInAsDeveloper: async (username, password) => {
+      try {
+        const result = await signInDeveloper({ data: { username, password } });
+        if (result.error) return { error: result.error };
+        await supabase.auth.signOut();
+        setRole(null);
+        setDeveloperUsername(result.username ?? username);
+        return { error: null };
+      } catch (error: any) {
+        return { error: error?.message ?? "Developer sign in failed." };
+      }
+    },
     signIn: async (email, password) => {
       const key = `signin:${normalizeEmail(email)}`;
       const rateLimit = checkRateLimit(key);
@@ -149,6 +177,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               return { error: "Your account request has been declined. Contact an administrator." };
             }
           }
+
+          await signOutDeveloper();
+          setDeveloperUsername(null);
 
           return { error: null };
         } catch (err: any) {
@@ -206,7 +237,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
     },
     signOut: async () => {
-      await supabase.auth.signOut();
+      await Promise.all([supabase.auth.signOut(), signOutDeveloper()]);
+      setDeveloperUsername(null);
     },
   };
 

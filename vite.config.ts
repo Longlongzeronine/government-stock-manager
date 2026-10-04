@@ -13,6 +13,9 @@ export default defineConfig({
     server: { entry: "server" },
   },
   vite: {
+    resolve: {
+      dedupe: ["react", "react-dom"],
+    },
     define: {
       // Server-only Supabase service-role key, baked at build time from .env.
       // Never prefixed with VITE_ so it is NOT exposed to the browser bundle

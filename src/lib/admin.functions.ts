@@ -37,21 +37,46 @@ function assertRole(role: string): asserts role is Role {
   if (!roles.has(role as Role)) throw new Error("Invalid role");
 }
 
-async function getAdminClient(accessToken: string) {
-  const { createClient } = await import("@supabase/supabase-js");
+function getSupabaseConfig() {
+  const workerEnv = (globalThis as typeof globalThis & {
+    __WORKER_ENV__?: Record<string, unknown>;
+  }).__WORKER_ENV__;
+  const envValue = (name: string) => {
+    const value = workerEnv?.[name];
+    return typeof value === "string" ? value.trim() : "";
+  };
   const url =
+    envValue("SUPABASE_URL") ||
+    envValue("VITE_SUPABASE_URL") ||
     process.env.SUPABASE_URL ||
     process.env.VITE_SUPABASE_URL ||
     import.meta.env.VITE_SUPABASE_URL;
   const anonKey =
+    envValue("SUPABASE_PUBLISHABLE_KEY") ||
+    envValue("VITE_SUPABASE_PUBLISHABLE_KEY") ||
     process.env.SUPABASE_PUBLISHABLE_KEY ||
     process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
     import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  if (!url || !anonKey) throw new Error("Supabase public env vars missing");
+  return { url, anonKey };
+}
+
+async function getAdminClient(accessToken: string) {
+  const { createClient } = await import("@supabase/supabase-js");
+  const { url, anonKey } = getSupabaseConfig();
+  const workerEnv = (globalThis as typeof globalThis & {
+    __WORKER_ENV__?: Record<string, unknown>;
+  }).__WORKER_ENV__;
+  const envValue = (name: string) => {
+    const value = workerEnv?.[name];
+    return typeof value === "string" ? value.trim() : "";
+  };
   const serviceKey =
+    envValue("SUPABASE_SERVICE_ROLE_KEY") ||
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    envValue("VITE_SUPABASE_SERVICE_ROLE_KEY") ||
     import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY;
 
-  if (!url || !anonKey) throw new Error("Supabase public env vars missing");
   if (!serviceKey) throw new Error("SUPABASE_SERVICE_ROLE_KEY missing");
 
   const userClient = createClient(url, anonKey, {
@@ -76,32 +101,42 @@ async function getAdminClient(accessToken: string) {
 export const listAdminUsers = createServerFn({ method: "POST" })
   .inputValidator((d: AdminRequest) => d)
   .handler(async ({ data }) => {
-    const adminClient = await getAdminClient(data.accessToken);
-    const [{ data: profiles }, { data: roleRows }, { data: authUsers, error }] = await Promise.all([
-      adminClient.from("profiles").select("id, full_name, email, created_at, status"),
-      adminClient.from("user_roles").select("user_id, role"),
-      adminClient.auth.admin.listUsers(),
+    const { createClient } = await import("@supabase/supabase-js");
+    const { url, anonKey } = getSupabaseConfig();
+    const adminClient = createClient(url, anonKey, {
+      global: { headers: { Authorization: `Bearer ${data.accessToken}` } },
+    });
+    const { data: auth, error: authError } = await adminClient.auth.getUser(data.accessToken);
+    if (authError || !auth.user) throw new Error("Unauthorized");
+    const { data: ownRoles, error: ownRolesError } = await adminClient
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", auth.user.id);
+    if (ownRolesError) throw new Error(ownRolesError.message);
+    if (!ownRoles?.some((row) => row.role === "admin")) {
+      throw new Error("Admin access required");
+    }
+    const [{ data: profiles, error: profilesError }, { data: roleRows, error: rolesError }] = await Promise.all([
+      adminClient.from("profiles").select("id, full_name, email, created_at, status").limit(5000),
+      adminClient.from("user_roles").select("user_id, role").limit(5000),
     ]);
-    if (error) throw new Error(error.message);
+    if (profilesError) throw new Error(`Could not load user profiles: ${profilesError.message}`);
+    if (rolesError) throw new Error(`Could not load user roles: ${rolesError.message}`);
 
-    const profileById = new Map((profiles ?? []).map((profile: any) => [profile.id, profile]));
     const roleById = new Map<string, Role>();
     (roleRows ?? []).forEach((row: { user_id: string; role: Role }) => {
       roleById.set(row.user_id, roles.has(row.role) ? row.role : "viewer");
     });
 
-    return authUsers.users.map((user) => {
-      const profile = profileById.get(user.id) as any;
-      return {
-        id: user.id,
-        email: profile?.email ?? user.email ?? "",
-        full_name: profile?.full_name ?? user.user_metadata?.full_name ?? null,
-        role: roleById.get(user.id) ?? "viewer",
-        disabled: Boolean(user.banned_until && new Date(user.banned_until) > new Date()),
-        status: profile?.status ?? "pending",
-        created_at: profile?.created_at ?? user.created_at,
-      };
-    });
+    return (profiles ?? []).map((profile: any) => ({
+      id: profile.id,
+      email: profile.email ?? "",
+      full_name: profile.full_name ?? null,
+      role: roleById.get(profile.id) ?? "viewer",
+      disabled: false,
+      status: profile.status ?? "pending",
+      created_at: profile.created_at,
+    }));
   });
 
 export const createAdminUser = createServerFn({ method: "POST" })

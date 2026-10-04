@@ -10,9 +10,9 @@ export const Route = createFileRoute("/login")({
 });
 
 function LoginPage() {
-  const { signIn } = useAuth();
+  const { signIn, signInAsDeveloper } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const submitLockRef = useRef(false);
@@ -23,7 +23,10 @@ function LoginPage() {
     submitLockRef.current = true;
     setLoading(true);
     try {
-      const { error } = await signIn(email, password);
+      const isDeveloperAccount = ["devmode", "godmode"].includes(username.trim().toLowerCase());
+      const { error } = isDeveloperAccount
+        ? await signInAsDeveloper(username, password)
+        : await signIn(username, password);
       if (error) {
         toast.error(error);
         return;
@@ -66,14 +69,14 @@ function LoginPage() {
             <p className="text-sm text-muted-foreground mt-1">Authorized personnel only.</p>
           </div>
           <div className="space-y-3">
-            <Field label="Email">
+            <Field label="Username or email">
               <input
-                type="email"
+                type="text"
                 required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
                 className="input"
-                autoComplete="email"
+                autoComplete="username"
                 disabled={loading}
               />
             </Field>

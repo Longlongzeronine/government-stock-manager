@@ -839,16 +839,13 @@ export const createTransaction = createServerFn({ method: "POST" })
 // ============================================
 
 export const listAuditLogs = createServerFn({ method: "GET" }).handler(
-  async () => {
-    try {
-      const sql = await getDb();
-      return await sql`
-      SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 500
-    `;
-    } catch {
-      return [];
-    }
-  },
+  async () => withDbFallback(
+    async (sql) => sql`SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 500`,
+    async () => sbSelect(
+      "audit_logs",
+      "select=*&order=created_at.desc&limit=500",
+    ),
+  ),
 );
 
 // ============================================
