@@ -24,11 +24,11 @@ import QRCode from "qrcode";
 import { PageHeader } from "@/components/layout/AppShell";
 import { SummaryActions } from "@/components/common/SummaryActions";
 import { FundClusterControl } from "@/components/common/FundClusterControl";
+import { ItemDialog } from "@/components/inventory/ItemDialog";
 import { exportCSV } from "@/lib/export";
 import { useAuth } from "@/contexts/AuthContext";
 import {
-  createIarForm,
-  createIarItem,
+  postIar,
   createIcsForm,
   createIcsItem,
   createParForm,
@@ -39,6 +39,7 @@ import {
   getRisFormStatus,
   listFormPersonnelMemory,
   listItems,
+  listCategories,
   listTransactionsAsc,
   rememberFormPersonnel,
   reserveNextFormNumber,
@@ -84,6 +85,7 @@ type Transaction = {
   source_form_type?: "IAR" | "RIS" | string | null;
   source_form_id?: string | null;
   source_line_id?: string | null;
+  product_description?: string | null;
   item?: Item;
 };
 
@@ -95,6 +97,7 @@ type Line = {
   quantity: string;
   unitCost: string;
   remarks: string;
+  productDescription?: string;
 };
 
 type IarState = {
@@ -249,8 +252,47 @@ function FormsFlow() {
   });
   const [risLines, setRisLines] = useState<Line[]>([blankLine()]);
   const [saving, setSaving] = useState(false);
+  const postingIar = useRef(false);
+  const draftHydrated = useRef(false);
+  const draftWriteReady = useRef(false);
+  const draftRestored = useRef(false);
   const initializedPersonnel = useRef(false);
   const initializedRisNumber = useRef(false);
+
+  // Forms Flow route unmounts during page navigation. Keep drafts in this
+  // browser session so switching to Inventory/Stock Card cannot erase input.
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("forms-flow-draft-v1");
+      if (raw) {
+        const draft = JSON.parse(raw);
+        draftRestored.current = true;
+        if (draft.iar) setIar(draft.iar);
+        if (Array.isArray(draft.iarLines)) setIarLines(draft.iarLines);
+        if (draft.ris) setRis(draft.ris);
+        if (Array.isArray(draft.risLines)) setRisLines(draft.risLines);
+        if (draft.propertyFlow) setPropertyFlow(draft.propertyFlow);
+        if (draft.tab) setTab(draft.tab);
+        if (draft.selectedItemId) setSelectedItemId(draft.selectedItemId);
+      }
+    } catch { /* Ignore stale or blocked browser storage. */ }
+    draftHydrated.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!draftHydrated.current) return;
+    // Hydration effect schedules state updates in same commit. Skip that commit
+    // so default state cannot overwrite the saved draft before restored render.
+    if (!draftWriteReady.current) {
+      draftWriteReady.current = true;
+      return;
+    }
+    try {
+      sessionStorage.setItem("forms-flow-draft-v1", JSON.stringify({
+        iar, iarLines, ris, risLines, propertyFlow, tab, selectedItemId,
+      }));
+    } catch { /* Browser storage may be unavailable. */ }
+  }, [iar, iarLines, ris, risLines, propertyFlow, tab, selectedItemId]);
 
   // Poll like the Inventory page so on-hand quantities stay in sync with it.
   const { data: items = [] } = useQuery({
@@ -277,6 +319,7 @@ function FormsFlow() {
   );
 
   useEffect(() => {
+    if (draftRestored.current) return;
     if (initializedPersonnel.current || personnelMemory.length === 0) return;
     initializedPersonnel.current = true;
     const latest = groupPersonnelMemory(personnelMemory as PersonnelMemory[]);
@@ -294,6 +337,7 @@ function FormsFlow() {
   }, [personnelMemory]);
 
   useEffect(() => {
+    if (draftRestored.current) return;
     if (initializedRisNumber.current) return;
     initializedRisNumber.current = true;
     void reserveNextRisNumber(today).then((risNo) => {
@@ -347,55 +391,42 @@ function FormsFlow() {
   }
 
   async function saveIar() {
-    const validLines = iarLines.filter(
-      (line) => line.item_id && Number(line.quantity) > 0,
+    if (postingIar.current) return;
+    const attemptedLines = iarLines.filter((line) =>
+      line.item_id || line.quantity.trim() || line.unitCost.trim() || line.productDescription?.trim(),
+    );
+    const validLines = attemptedLines.filter((line) =>
+      line.item_id && Number.isFinite(Number(line.quantity)) && Number(line.quantity) > 0
+      && Number.isFinite(Number(line.unitCost || 0)) && Number(line.unitCost || 0) >= 0,
     );
     if (!iar.iarNo.trim()) return toast.error("IAR number is required.");
     if (validLines.length === 0)
       return toast.error("Add at least one accepted item.");
+    if (validLines.length !== attemptedLines.length)
+      return toast.error("Complete each started item row with an item, positive quantity, and nonnegative unit cost.");
 
+    postingIar.current = true;
     setSaving(true);
     try {
-      const iarRecord = await createIarForm({ data: {
-        iar_no: iar.iarNo,
-        supplier: iar.supplier || null,
-        invoice_no: iar.invoiceNo || null,
-        accepted_by: iar.acceptedBy || null,
-        created_by: user?.id,
-        created_by_name: userName,
+      await postIar({ data: {
+        iar_no: iar.iarNo, supplier: iar.supplier || null,
+        invoice_no: iar.invoiceNo || null, accepted_by: iar.acceptedBy || null,
+        created_by: user?.id, created_by_name: userName,
+        form_data: {
+          entity_name: iar.entityName, fund_cluster: iar.fundCluster,
+          po_no_date: iar.poNoDate, requisitioning_office: iar.requisitioningOffice,
+          responsibility_center: iar.responsibilityCenter, iar_date: iar.iarDate,
+          invoice_date: iar.invoiceDate, date_inspected: iar.dateInspected,
+          date_received: iar.dateReceived, inspection_officer: iar.inspectionOfficer,
+        },
+        lines: validLines.map((line) => ({
+          item_id: line.item_id, quantity: Number(line.quantity),
+          unit_cost: Number(line.unitCost || 0), remarks: line.remarks || null,
+          product_description: line.productDescription?.trim() || null,
+        })),
       } });
-
-      for (const line of validLines) {
-        const tx = await createTransaction({ data: {
-          item_id: line.item_id,
-          type: "IN",
-          quantity: Number(line.quantity),
-          staff_id: user?.id,
-          staff_name: userName,
-          source_form_type: "IAR",
-          source_form_id: iarRecord.id,
-          remarks: [
-            `IAR ${iar.iarNo}`,
-            iar.supplier ? `Supplier: ${iar.supplier}` : "",
-            iar.invoiceNo ? `Invoice: ${iar.invoiceNo}` : "",
-            line.unitCost ? `Unit Cost: ${peso(Number(line.unitCost))}` : "",
-            line.remarks,
-          ]
-            .filter(Boolean)
-            .join(" | "),
-        } });
-
-        await createIarItem({ data: {
-        iar_id: iarRecord.id,
-        item_id: line.item_id,
-        quantity: Number(line.quantity),
-        unit_cost: Number(line.unitCost || 0),
-        amount: Number(line.quantity) * Number(line.unitCost || 0),
-        remarks: line.remarks || null,
-        transaction_id: tx.id,
-        } });
-      }
     } catch (error) {
+      postingIar.current = false;
       if (isUniqueViolation(error as { code?: string; message?: string })) {
         const nextIarNo = makeFormNumber("IAR", today);
         setIar({ ...iar, iarNo: nextIarNo });
@@ -408,6 +439,7 @@ function FormsFlow() {
       return toast.error(errorMessage(error));
     }
 
+    postingIar.current = false;
     await rememberPersonnel("iar_accepted_by", iar.acceptedBy);
     setSaving(false);
     toast.success("IAR posted. Stock card receipts were added.");
@@ -1256,6 +1288,8 @@ function EntryPanel({
             lines={iarLines}
             onLines={setIarLines}
             showCost
+            showProductDescription
+            allowAddItem={canWrite}
           />
           <FlowActions>
             <button
@@ -1641,7 +1675,7 @@ function IarPaper({
   }
 
   function removeLine(id: string) {
-    onLines(lines.length > 1 ? lines.filter((line) => line.id !== id) : lines);
+    onLines(lines.length > 1 ? lines.filter((line) => line.id !== id) : [blankLine()]);
   }
 
   return (
@@ -1822,16 +1856,22 @@ function IarPaper({
                 <td>{previewLine?.item?.stock_number || ""}</td>
                 <td>
                   {editable ? (
-                    <ItemLookup
-                      items={items}
-                      className="paper-cell-control"
-                      value={sourceLine?.item_id || ""}
-                      onChange={(itemId) =>
-                        updateLineAt(index, { item_id: itemId })
-                      }
-                    />
+                    <div className="grid gap-1">
+                      <ItemLookup
+                        items={items}
+                        className="paper-cell-control"
+                        value={sourceLine?.item_id || ""}
+                        onChange={(itemId) => updateLineAt(index, { item_id: itemId })}
+                      />
+                      <input
+                        className="paper-cell-control print-hidden"
+                        placeholder="Optional product variation"
+                        value={sourceLine?.productDescription || ""}
+                        onChange={(event) => updateLineAt(index, { productDescription: event.target.value })}
+                      />
+                    </div>
                   ) : (
-                    itemDescription(previewLine?.item)
+                    [itemDescription(previewLine?.item), previewLine?.productDescription].filter(Boolean).join(" — ")
                   )}
                 </td>
                 <td>{previewLine?.item?.unit || ""}</td>
@@ -2066,7 +2106,10 @@ function StockCardPaper({
               <td>
                 {row ? format(new Date(row.created_at), "MM/dd/yyyy") : ""}
               </td>
-              <td>{extractReference(row?.remarks)}</td>
+              <td>
+                {extractReference(row?.remarks)}
+                {row?.product_description && <small className="block text-[10px]">{row.product_description}</small>}
+              </td>
               <td className="right">
                 {row?.type === "IN" ? row.quantity : ""}
               </td>
@@ -2123,7 +2166,7 @@ function RisPaper({
   }
 
   function removeLine(id: string) {
-    onLines(lines.length > 1 ? lines.filter((line) => line.id !== id) : lines);
+    onLines(lines.length > 1 ? lines.filter((line) => line.id !== id) : [blankLine()]);
   }
 
   return (
@@ -2881,18 +2924,30 @@ function LineEditor({
   lines,
   onLines,
   showCost = false,
+  showProductDescription = false,
   checkStock = false,
+  allowAddItem = false,
   emptyMessage = "No items available.",
 }: {
   items: Item[];
   lines: Line[];
   onLines: (lines: Line[]) => void;
   showCost?: boolean;
+  showProductDescription?: boolean;
   // true where the form consumes stock (RIS issuance) so the entered quantity is
   // capped and flagged against the live on-hand quantity from Inventory.
   checkStock?: boolean;
+  allowAddItem?: boolean;
   emptyMessage?: string;
 }) {
+  const queryClient = useQueryClient();
+  const [itemToAdd, setItemToAdd] = useState<{ lineId: string; name: string } | null>(null);
+  const { data: categories = [] } = useQuery({
+    queryKey: ["categories"],
+    queryFn: () => listCategories() as Promise<any[]>,
+    enabled: allowAddItem,
+  });
+
   function updateLine(id: string, patch: Partial<Line>) {
     onLines(
       lines.map((line) => (line.id === id ? { ...line, ...patch } : line)),
@@ -2900,18 +2955,19 @@ function LineEditor({
   }
 
   function removeLine(id: string) {
-    onLines(lines.length > 1 ? lines.filter((line) => line.id !== id) : lines);
+    onLines(lines.length > 1 ? lines.filter((line) => line.id !== id) : [blankLine()]);
   }
 
   return (
     <div className="flow-scroll">
-      <table className="flow-table line-editor-table min-w-[720px]">
+      <table className="flow-table line-editor-table min-w-[800px]">
         <thead>
           <tr>
             <th>Item</th>
             <th className="text-right">Available</th>
             <th className="text-right">Quantity</th>
             {showCost && <th className="text-right">Unit Cost</th>}
+            {showProductDescription && <th>Receipt Description</th>}
             <th>Remarks</th>
             <th></th>
           </tr>
@@ -2919,7 +2975,7 @@ function LineEditor({
         <tbody>
           {items.length === 0 && (
             <tr>
-              <td colSpan={showCost ? 6 : 5} className="px-3 py-6 text-center text-muted-foreground">
+              <td colSpan={5 + Number(showCost) + Number(showProductDescription)} className="px-3 py-6 text-center text-muted-foreground">
                 {emptyMessage}
               </td>
             </tr>
@@ -2931,7 +2987,9 @@ function LineEditor({
             // Live on-hand quantity coming straight from Inventory.
             const availableQty = item ? Number(item.quantity) || 0 : null;
             const lineQty = Number(line.quantity) || 0;
-            const outOfStock = availableQty !== null && availableQty <= 0;
+            // IAR receives stock, so zero on-hand is valid before posting a
+            // receipt. Only stock-consuming forms (RIS) should flag it.
+            const outOfStock = checkStock && availableQty !== null && availableQty <= 0;
             const exceedsStock =
               checkStock &&
               availableQty !== null &&
@@ -2947,6 +3005,7 @@ function LineEditor({
                     onChange={(itemId) =>
                       updateLine(line.id, { item_id: itemId })
                     }
+                    onAddMissingItem={allowAddItem ? (name) => setItemToAdd({ lineId: line.id, name }) : undefined}
                     placeholder="Type item name or description"
                   />
                 </td>
@@ -2994,14 +3053,25 @@ function LineEditor({
                   <td>
                     <input
                       className="flow-input text-right"
-                      type="number"
-                      min={0}
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
+                      autoComplete="off"
                       placeholder="0.00"
+                      aria-label="Unit cost"
                       value={line.unitCost}
                       onChange={(e) =>
                         updateLine(line.id, { unitCost: e.target.value })
                       }
+                    />
+                  </td>
+                )}
+                {showProductDescription && (
+                  <td>
+                    <input
+                      className="flow-input"
+                      placeholder="Optional variation / receipt detail"
+                      value={line.productDescription || ""}
+                      onChange={(e) => updateLine(line.id, { productDescription: e.target.value })}
                     />
                   </td>
                 )}
@@ -3042,6 +3112,33 @@ function LineEditor({
           </tr>
         </tfoot>
       </table>
+      {itemToAdd && allowAddItem && (
+        <ItemDialog
+          editing={null}
+          cats={categories}
+          initialName={itemToAdd.name}
+          onClose={() => setItemToAdd(null)}
+          onCategoryCreated={() => { void queryClient.invalidateQueries({ queryKey: ["categories"] }); }}
+          onSaved={(createdItem) => {
+            if (!createdItem?.id) throw new Error("Saved item did not return an inventory ID.");
+            queryClient.setQueryData<Item[]>(["items"], (current) => current
+              ? [...current.filter((item) => item.id !== createdItem.id), createdItem]
+              : [createdItem]);
+            onLines(lines.map((line) => line.id === itemToAdd.lineId
+              ? {
+                  ...line,
+                  item_id: createdItem.id,
+                  productDescription: createdItem.description || line.productDescription,
+                  unitCost: line.unitCost.trim() || Number(createdItem.acquisition_cost) <= 0
+                    ? line.unitCost
+                    : String(createdItem.acquisition_cost),
+                }
+              : line));
+            setItemToAdd(null);
+            void queryClient.invalidateQueries({ queryKey: ["items"] });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -3202,7 +3299,7 @@ function SupportTable({
             {rows.map((row) => (
               <tr key={row.id}>
                 <td>{extractReference(row.remarks)}</td>
-                <td>{row.item?.name || "-"}</td>
+                <td>{row.item?.name || "-"}{row.product_description && <small className="block text-muted-foreground">{row.product_description}</small>}</td>
                 <td className="text-right tabular-nums">{row.quantity}</td>
                 <td>{format(new Date(row.created_at), "MMM d, yyyy")}</td>
               </tr>
@@ -3356,35 +3453,65 @@ function ItemLookup({
   items,
   value,
   onChange,
+  onAddMissingItem,
   className,
   placeholder = "Type item name or description",
 }: {
   items: Item[];
   value: string;
   onChange: (itemId: string) => void;
+  onAddMissingItem?: (name: string) => void;
   className: string;
   placeholder?: string;
 }) {
   const listId = useRef(`item-lookup-${createId()}`).current;
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const selected = items.find((item) => item.id === value);
   const [text, setText] = useState(() => itemLabel(selected));
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
 
   useEffect(() => {
-    setText(itemLabel(items.find((item) => item.id === value)));
+    if (value) setText(itemLabel(items.find((item) => item.id === value)));
   }, [items, value]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
 
   function handleText(next: string) {
     setText(next);
+    setActiveIndex(-1);
+    setOpen(true);
     const normalized = next.trim().toLocaleLowerCase();
-    const exact = items.find(
-      (item) =>
-        itemLabel(item).toLocaleLowerCase() === normalized ||
-        item.name.toLocaleLowerCase() === normalized ||
-        (item.stock_number || "").toLocaleLowerCase() === normalized ||
-        (item.barcode_value || "").toLocaleLowerCase() === normalized,
+    const byLabel = items.filter((item) => itemLabel(item).toLocaleLowerCase() === normalized);
+    const byCode = items.filter((item) =>
+      [item.stock_number, item.barcode_value, item.qr_code_value]
+        .some((code) => String(code || "").toLocaleLowerCase() === normalized),
     );
-    if (exact) onChange(exact.id);
-    else if (!normalized) onChange("");
+    const byName = items.filter((item) => item.name.trim().toLocaleLowerCase() === normalized);
+    const match = byLabel.length === 1 ? byLabel[0]
+      : byCode.length === 1 ? byCode[0]
+        : byName.length === 1 ? byName[0] : undefined;
+    // Clear stale selection when typed text has no unique match. Otherwise a
+    // visible unmatched name could silently post against the previous item id.
+    if (match) {
+      setText(itemLabel(match));
+      setOpen(false);
+    }
+    onChange(match?.id || "");
   }
 
   const words = text
@@ -3396,22 +3523,75 @@ function ItemLookup({
     return words.length === 0 || words.every((word) => searchable.includes(word));
   });
 
+  const showAddItem = Boolean(onAddMissingItem && text.trim() && matches.length === 0);
+
   return (
-    <>
+    <div ref={rootRef} className="relative min-w-0">
       <input
         className={className}
-        list={listId}
         value={text}
         placeholder={placeholder}
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={open}
+        aria-controls={listId}
         onChange={(event) => handleText(event.target.value)}
+        onFocus={() => setOpen(true)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" && matches.length > 0) {
+            event.preventDefault();
+            setOpen(true);
+            setActiveIndex((index) => Math.min(index + 1, Math.min(matches.length, 20) - 1));
+          } else if (event.key === "ArrowUp" && matches.length > 0) {
+            event.preventDefault();
+            setActiveIndex((index) => Math.max(index - 1, 0));
+          } else if (event.key === "Enter" && open && activeIndex >= 0 && matches[activeIndex]) {
+            event.preventDefault();
+            const item = matches[activeIndex];
+            setText(itemLabel(item));
+            onChange(item.id);
+            setOpen(false);
+          }
+        }}
         autoComplete="off"
       />
-      <datalist id={listId}>
-        {matches.map((item) => (
-          <option key={item.id} value={itemLabel(item)} />
-        ))}
-      </datalist>
-    </>
+      {open && text.trim() && (matches.length > 0 || showAddItem) && (
+        <div id={listId} className="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-md border border-border bg-popover text-popover-foreground shadow-lg">
+          {matches.length > 0 ? (
+            <div role="listbox" aria-label="Matching inventory items" className="p-1">
+              {matches.slice(0, 20).map((item, index) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="option"
+                  aria-selected={item.id === value}
+                  className={`block w-full rounded px-2.5 py-2 text-left text-sm hover:bg-accent ${index === activeIndex ? "bg-accent" : ""}`}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => { setText(itemLabel(item)); onChange(item.id); setOpen(false); }}
+                >
+                  <span className="block truncate">{item.name}</span>
+                  {item.description && <span className="block truncate text-xs text-muted-foreground">{item.description}</span>}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="px-3 py-2 text-xs text-muted-foreground">No matching inventory item.</p>
+          )}
+          {showAddItem && (
+            <div className="border-t border-border p-1">
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-sm font-medium text-primary hover:bg-accent"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => { onAddMissingItem?.(text.trim()); setOpen(false); }}
+              >
+                <Plus className="h-4 w-4" /> Add Item “{text.trim()}”
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -3474,7 +3654,7 @@ function blankLine(): Line {
   return {
     id: createId(),
     item_id: "",
-    quantity: "1",
+    quantity: "",
     unitCost: "",
     remarks: "",
   };
@@ -4018,7 +4198,7 @@ const flowStyles = `
 .flow-icon:hover,.flow-secondary:hover{background:var(--color-accent)}
 .line-editor-table th:first-child,.line-editor-table td:first-child{min-width:300px}
 .line-editor-table th:nth-child(3),.line-editor-table td:nth-child(3){width:92px}
-.line-editor-table th:nth-child(4),.line-editor-table td:nth-child(4){width:105px}
+.line-editor-table th:nth-child(4),.line-editor-table td:nth-child(4){width:145px;min-width:145px}
 .flow-preview-shell{border:1px solid var(--color-border);border-radius:8px;background:var(--color-card);overflow:hidden}
 .flow-preview-bg{overflow:auto;background:#e5e7eb;padding:16px}
 .flow-preview-zoom{transform-origin:top center;margin:0 auto}

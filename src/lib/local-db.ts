@@ -229,6 +229,7 @@ export async function ensureSchema() {
       staff_id TEXT DEFAULT NULL,
       staff_name TEXT DEFAULT NULL,
       remarks TEXT DEFAULT NULL,
+      product_description TEXT DEFAULT NULL,
       source_form_type TEXT DEFAULT NULL,
       source_form_id TEXT DEFAULT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -237,7 +238,8 @@ export async function ensureSchema() {
     ALTER TABLE transactions
       ADD COLUMN IF NOT EXISTS source_form_type TEXT DEFAULT NULL,
       ADD COLUMN IF NOT EXISTS source_form_id TEXT DEFAULT NULL,
-      ADD COLUMN IF NOT EXISTS source_line_id TEXT DEFAULT NULL;
+      ADD COLUMN IF NOT EXISTS source_line_id TEXT DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS product_description TEXT DEFAULT NULL;
 
     CREATE TABLE IF NOT EXISTS audit_logs (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -256,6 +258,7 @@ export async function ensureSchema() {
       supplier TEXT DEFAULT NULL,
       invoice_no TEXT DEFAULT NULL,
       accepted_by TEXT DEFAULT NULL,
+      form_data JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_by TEXT DEFAULT NULL,
       created_by_name TEXT DEFAULT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -264,6 +267,8 @@ export async function ensureSchema() {
       review_notes TEXT DEFAULT NULL
     );
 
+    ALTER TABLE iar_forms ADD COLUMN IF NOT EXISTS form_data JSONB NOT NULL DEFAULT '{}'::jsonb;
+
     CREATE TABLE IF NOT EXISTS iar_items (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       iar_id UUID NOT NULL REFERENCES iar_forms(id) ON DELETE CASCADE,
@@ -271,13 +276,15 @@ export async function ensureSchema() {
       quantity NUMERIC(12,2) NOT NULL,
       unit_cost NUMERIC(14,2) NOT NULL DEFAULT 0,
       amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+      product_description TEXT DEFAULT NULL,
       remarks TEXT DEFAULT NULL,
       transaction_id UUID DEFAULT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     ALTER TABLE iar_items
-      ADD COLUMN IF NOT EXISTS amount NUMERIC(14,2) NOT NULL DEFAULT 0;
+      ADD COLUMN IF NOT EXISTS amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS product_description TEXT DEFAULT NULL;
 
     CREATE TABLE IF NOT EXISTS ris_forms (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

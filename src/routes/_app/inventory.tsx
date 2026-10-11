@@ -1,10 +1,11 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { listItems, listCategories, listSuppliers, createItem, updateItem, updateItemMonthlyQuantity, deleteItem, importItems, createCategory } from "@/lib/data.functions";
+import { listItems, listCategories, listSuppliers, updateItem, updateItemMonthlyQuantity, deleteItem, importItems } from "@/lib/data.functions";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { StatusBadge } from "@/components/common/StatusBadge";
+import { ItemDialog } from "@/components/inventory/ItemDialog";
 import { MobileCard, MobileCardRow } from "@/components/common/MobileCard";
 import { ChevronDown, Plus, ScanLine, Search, Pencil, Trash2, Download, FileText, FileSpreadsheet, Clipboard, Printer, Loader2, LayoutGrid, Check, Upload } from "lucide-react";
 import { toast } from "sonner";
@@ -70,7 +71,8 @@ function Inventory() {
     return items.filter((i: any) => {
       if (search && !i.name.toLowerCase().includes(search.toLowerCase())) return false;
       if (catFilter && i.category_id !== catFilter) return false;
-      if (typeFilter && i.item_type !== typeFilter) return false;
+      const classification = i.inventory_classification || classifyInventoryItem(i.item_type, i.acquisition_cost).inventory_classification;
+      if (typeFilter && classification !== typeFilter) return false;
       return true;
     });
   }, [items, search, catFilter, typeFilter]);
@@ -122,7 +124,6 @@ function Inventory() {
         <ItemDialog
           editing={editing}
           cats={cats}
-          sups={sups}
           onClose={() => setOpen(false)}
           onSaved={() => { setOpen(false); qc.invalidateQueries({ queryKey: ["items"] }); }}
           onCategoryCreated={() => qc.invalidateQueries({ queryKey: ["categories"] })}
@@ -196,8 +197,9 @@ function Inventory() {
           <div className="flex gap-1 bg-muted/50 rounded-lg p-0.5 border border-border">
             {[
               { label: "All", value: "" },
-              { label: "Supplies", value: "supply" },
-              { label: "Materials", value: "material" },
+              { label: "Supplies", value: "expendable_supply" },
+              { label: "Semi-Expendable", value: "semi_expendable_property" },
+              { label: "PPE", value: "ppe" },
             ].map((t) => (
               <button
                 key={t.value}
@@ -362,7 +364,6 @@ function Inventory() {
         <ItemDialog
           editing={editing}
           cats={cats}
-          sups={sups}
           onClose={() => setOpen(false)}
           onSaved={() => { setOpen(false); qc.invalidateQueries({ queryKey: ["items"] }); }}
         />
@@ -399,9 +400,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const importInput = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
-  const [layout, setLayout] = useState<"template" | "compact" | "easy">(() => {
-    try { const saved = typeof window !== "undefined" ? window.localStorage.getItem("app-cse-layout") : null; if (saved === "compact") return "compact"; if (saved === "simple" || saved === "easy") return "easy"; return "template"; } catch { return "template"; }
-  });
+  const [layout, setLayout] = useState<"template" | "compact" | "easy">("easy");
   const [layoutOpen, setLayoutOpen] = useState(false);
   const layoutWrapRef = useRef<HTMLDivElement | null>(null);
   const chooseLayout = (next: "template" | "compact" | "easy") => {
@@ -1044,7 +1043,6 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
         <ItemDialog
           editing={editItem}
           cats={cats || []}
-          sups={sups || []}
           onClose={() => { setAddOpen(false); setEditItem(null); }}
           onSaved={() => { setAddOpen(false); setEditItem(null); onItemsChanged(); }}
           onCategoryCreated={onCategoryCreated}
@@ -1198,176 +1196,6 @@ function classificationLabel(item: any) {
 
 function money(value: number) {
   return new Intl.NumberFormat("en-PH", { style: "currency", currency: "PHP" }).format(value || 0);
-}
-
-const ITEM_MONTH_KEYS = ["jan_quantity", "feb_quantity", "mar_quantity", "apr_quantity", "may_quantity", "jun_quantity", "jul_quantity", "aug_quantity", "sep_quantity", "oct_quantity", "nov_quantity", "dec_quantity"] as const;
-const ITEM_MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-function ItemDialog({ editing, cats, onClose, onSaved, onCategoryCreated }: any) {
-  const [form, setForm] = useState<any>(() => ({
-    barcode_value: editing?.barcode_value ?? "",
-    name: editing?.name ?? "",
-    description: editing?.description ?? "",
-    category_id: editing?.category_id ?? "",
-    supplier_id: editing?.supplier_id ?? "",
-    item_type: editing?.item_type ?? "supply",
-    acquisition_cost: editing?.acquisition_cost ?? 0,
-    unit: editing?.unit ?? "pieces",
-    reorder_level: editing?.reorder_level ?? 10,
-    ...Object.fromEntries(ITEM_MONTH_KEYS.map((key) => [key, Number(editing?.[key] ?? 0)])),
-  }));
-  const [localCats, setLocalCats] = useState<any[]>(() => cats || []);
-  const [saving, setSaving] = useState(false);
-  const [addingCategory, setAddingCategory] = useState(false);
-  const [newCategory, setNewCategory] = useState("");
-  const [creatingCategory, setCreatingCategory] = useState(false);
-
-  const monthTotal = ITEM_MONTH_KEYS.reduce((sum, key) => sum + (Number(form[key]) || 0), 0);
-  const dialogClassification = classifyInventoryItem(form.item_type, form.acquisition_cost);
-
-  async function createCategoryInline() {
-    const name = newCategory.trim();
-    if (!name) return;
-    setCreatingCategory(true);
-    try {
-      const created = await createCategory({ data: { name } });
-      if (!created) return;
-      setLocalCats((prev) => [created, ...prev.filter((c: any) => c.id !== created.id)]);
-      setForm((current: any) => ({ ...current, category_id: created.id }));
-      setNewCategory("");
-      setAddingCategory(false);
-      onCategoryCreated?.();
-      toast.success(`Category "${name}" created`);
-    } catch (e: any) {
-      toast.error(e?.message ?? "Failed to create category");
-    } finally {
-      setCreatingCategory(false);
-    }
-  }
-
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-    const payload = {
-      barcode_value: form.barcode_value?.trim() || null,
-      name: form.name,
-      description: form.description || null,
-      category_id: form.category_id || null,
-      supplier_id: form.supplier_id || null,
-      item_type: form.item_type || "supply",
-      acquisition_cost: Number(form.acquisition_cost) || 0,
-      unit: form.unit,
-      reorder_level: Number(form.reorder_level) || 10,
-      quantity: monthTotal,
-      ...Object.fromEntries(ITEM_MONTH_KEYS.map((key) => [key, Number(form[key]) || 0])),
-    };
-    try {
-      if (editing) {
-        await updateItem({ data: { ...payload, id: editing.id } });
-      } else {
-        const created = await createItem({ data: payload });
-        if ((created as any)?.legacySchemaUsed) {
-          toast.warning("Item saved. Online Supabase schema needs update for all fields.");
-        }
-      }
-      setSaving(false);
-      toast.success(editing ? "Item updated" : "Item created");
-      onSaved();
-    } catch (e: any) {
-      setSaving(false);
-      toast.error(e?.message ?? "Save failed");
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 bg-foreground/30 backdrop-blur-sm grid place-items-center z-50 p-4">
-      <form onSubmit={save} className="bg-card border border-border rounded-lg w-full max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-        <h2 className="text-xl">{editing ? "Edit item" : "Add new item"}</h2>
-        <p className="text-xs text-muted-foreground">Fields match the APP-CSE 2026 template columns.</p>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Code">
-            <input className="dlg-input" placeholder="PS-DBM code (e.g. 1234-5678)" value={form.barcode_value} onChange={(e) => setForm({ ...form, barcode_value: e.target.value })} />
-          </Field>
-          <Field label="Unit of Measure">
-            <input className="dlg-input" list="item-unit-options" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} />
-            <datalist id="item-unit-options"><option value="pieces" /><option value="gallon" /><option value="bottle" /><option value="pack" /><option value="box" /><option value="ream" /><option value="roll" /><option value="set" /><option value="unit" /><option value="ticket" /></datalist>
-          </Field>
-          <Field label="Item &amp; Specifications" full>
-            <input className="dlg-input" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          </Field>
-          <Field label="Unit Price">
-            <input type="number" min={0} step="0.01" className="dlg-input" value={form.acquisition_cost} onChange={(e) => setForm({ ...form, acquisition_cost: e.target.value as any })} />
-          </Field>
-          <Field label="Item Type">
-            <select className="dlg-input" value={form.item_type} onChange={(e) => setForm({ ...form, item_type: e.target.value })}>
-              <option value="supply">Supply (Expendable)</option>
-              <option value="material">Material (Semi-Expendable / PPE)</option>
-            </select>
-          </Field>
-          <Field label="Classification">
-            <div className="dlg-input flex items-center justify-between gap-2">
-              <span className="font-medium">{classificationLabel({ inventory_classification: dialogClassification.inventory_classification, semi_expendable_tier: dialogClassification.semi_expendable_tier })}</span>
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Auto from type &amp; cost</span>
-            </div>
-          </Field>
-          <Field label="Category">
-            {addingCategory ? (
-              <div className="flex gap-2">
-                <input
-                  className="dlg-input"
-                  placeholder="New category name"
-                  value={newCategory}
-                  autoFocus
-                  onChange={(e) => setNewCategory(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); createCategoryInline(); } }}
-                />
-                <button type="button" disabled={creatingCategory || !newCategory.trim()} onClick={createCategoryInline} className="px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium whitespace-nowrap disabled:opacity-50">
-                  {creatingCategory ? "Creating…" : "Create"}
-                </button>
-                <button type="button" onClick={() => { setAddingCategory(false); setNewCategory(""); }} className="px-3 py-2 rounded-md border border-input text-sm whitespace-nowrap">Cancel</button>
-              </div>
-            ) : (
-              <div className="flex gap-2">
-                <select className="dlg-input" value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })}>
-                  <option value="">—</option>
-                  {localCats.map((c: any) => (<option key={c.id} value={c.id}>{c.name}</option>))}
-                </select>
-                <button type="button" onClick={() => setAddingCategory(true)} title="Create a new category" className="px-3 py-2 rounded-md border border-input text-sm whitespace-nowrap hover:bg-accent">+ New</button>
-              </div>
-            )}
-          </Field>
-          <div className="col-span-2">
-            <span className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Monthly Quantity Requirement (Jan–Dec)</span>
-            <div className="mt-2 grid grid-cols-3 sm:grid-cols-6 gap-2">
-              {ITEM_MONTH_KEYS.map((key, index) => (
-                <label key={key} className="block">
-                  <span className="text-[10px] uppercase text-muted-foreground">{ITEM_MONTH_LABELS[index]}</span>
-                  <input type="number" min={0} className="dlg-input" value={form[key] ?? 0} onChange={(e) => setForm({ ...form, [key]: e.target.value as any })} />
-                </label>
-              ))}
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">Total quantity for the year: <strong>{monthTotal}</strong></p>
-          </div>
-        </div>
-        <div className="flex justify-end gap-2 pt-2">
-          <button type="button" onClick={onClose} className="px-4 py-2 rounded-md border border-input text-sm">Cancel</button>
-          <button disabled={saving} className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50">
-            {saving ? "Saving…" : "Save"}
-          </button>
-        </div>
-        <style>{`.dlg-input{width:100%;border:1px solid var(--color-input);background:var(--color-card);border-radius:6px;padding:.5rem .7rem;font-size:.875rem;outline:none}.dlg-input:focus{border-color:var(--color-ring);box-shadow:0 0 0 3px color-mix(in oklab,var(--color-ring) 25%,transparent)}`}</style>
-      </form>
-    </div>
-  );
-}
-
-function Field({ label, children, full }: any) {
-  return (
-    <label className={`block ${full ? "col-span-2" : ""}`}>
-      <span className="text-xs uppercase tracking-wider font-medium text-muted-foreground">{label}</span>
-      <div className="mt-1.5">{children}</div>
-    </label>
-  );
 }
 
 function ExportMenu({ rows, title }: { rows: any[]; title: string }) {

@@ -43,7 +43,10 @@ async function withDbFallback<T>(
     const sql = await getDb();
     return await local(sql);
   } catch (error) {
-    if (!getRestConfig()) throw error;
+    // Do not replay writes against hosted Supabase for validation, unique, or
+    // business-rule failures from a reachable local DB. Fallback only when the
+    // local PostgreSQL connection itself is unavailable.
+    if (!getRestConfig() || !isLocalDatabaseUnavailable(error)) throw error;
     try {
       return await remote();
     } catch (remoteError) {
@@ -54,6 +57,14 @@ async function withDbFallback<T>(
       throw error;
     }
   }
+}
+
+function isLocalDatabaseUnavailable(error: unknown) {
+  const value = error as { code?: string; message?: string };
+  return Boolean(
+    value?.code && (/^08/.test(value.code) || ["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EHOSTUNREACH"].includes(value.code))
+    || /connect(?:ion)? (?:refused|timeout|terminated)|connection closed unexpectedly|econnrefused|etimedout|ehostunreach/i.test(value?.message || ""),
+  );
 }
 
 function cleanBarcode(row: any) {
@@ -311,25 +322,48 @@ function omitUnsupportedItemColumn(
 export const createItem = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
+    const name = String(data.name || "").trim();
+    if (!name) throw new Error("Item name is required.");
+    const itemData = {
+      ...data,
+      name,
+      description: String(data.description || "").trim() || null,
+    };
     return withDbFallback(
       async (sql) => {
-        const [maxRow] = await sql`SELECT COALESCE(MAX(sort_order), 0) AS m FROM items`;
-        const nextSort = Number(maxRow.m) + 1;
-        const [row] = await sql`
-          INSERT INTO items ${sql(itemWritePayload(data, { stock_number: data.stock_number || await nextStockNumber(sql), sort_order: nextSort }))}
-          RETURNING *
-        `;
-        const [codedRow] = await sql`
-          UPDATE items
-          SET qr_code_value = COALESCE(NULLIF(btrim(qr_code_value), ''), 'ITEM:' || id::text)
-          WHERE id = ${row.id}
-          RETURNING *
-        `;
-        return codedRow;
+        return sql.begin(async (tx: any) => {
+          await tx`SELECT pg_advisory_xact_lock(hashtextextended(
+            lower(btrim(${itemData.name})) || '|' || lower(btrim(coalesce(${itemData.description}, ''))), 0
+          ))`;
+          const [duplicate] = await tx`
+            SELECT id FROM items
+            WHERE lower(btrim(name)) = lower(btrim(${itemData.name}))
+              AND lower(btrim(coalesce(description, ''))) = lower(btrim(coalesce(${itemData.description}, '')))
+            LIMIT 1
+          `;
+          if (duplicate) throw new Error("Matching inventory item already exists. Select or edit the existing item to avoid a duplicate master record.");
+          const [maxRow] = await tx`SELECT COALESCE(MAX(sort_order), 0) AS m FROM items`;
+          const nextSort = Number(maxRow.m) + 1;
+          const [row] = await tx`
+            INSERT INTO items ${tx(itemWritePayload(itemData, { stock_number: itemData.stock_number || await nextStockNumber(tx), sort_order: nextSort }))}
+            RETURNING *
+          `;
+          const [codedRow] = await tx`
+            UPDATE items
+            SET qr_code_value = COALESCE(NULLIF(btrim(qr_code_value), ''), 'ITEM:' || id::text)
+            WHERE id = ${row.id}
+            RETURNING *
+          `;
+          return codedRow;
+        });
       },
       async () => {
         const writeCfg = getRestWriteConfig();
-        let payload: Record<string, unknown> = itemWritePayload(data);
+        const matches = await sbSelect("items", `select=id,name,description&name=ilike.${encodeURIComponent(itemData.name)}&limit=2000`);
+        if (matches.some((item: any) => String(item.name || "").trim().toLocaleLowerCase() === itemData.name.toLocaleLowerCase() && String(item.description || "").trim().toLocaleLowerCase() === String(itemData.description || "").trim().toLocaleLowerCase())) {
+          throw new Error("Matching inventory item already exists. Select or edit the existing item to avoid a duplicate master record.");
+        }
+        let payload: Record<string, unknown> = itemWritePayload(itemData);
         let monthlyQuantitiesSaved = true;
         let legacySchemaUsed = false;
         let created: any;
@@ -595,15 +629,89 @@ export const deleteItem = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     return withDbFallback(
       async (sql) => {
-        await sql`DELETE FROM items WHERE id = ${data.id}`;
-        return { ok: true };
+        return sql.begin(async (tx: any) => {
+          await tx`SELECT id FROM items WHERE id = ${data.id} FOR UPDATE`;
+          const [refs] = await tx`
+            SELECT
+              EXISTS(SELECT 1 FROM transactions WHERE item_id = ${data.id})
+              OR EXISTS(SELECT 1 FROM iar_items WHERE item_id = ${data.id})
+              OR EXISTS(SELECT 1 FROM ris_items WHERE item_id = ${data.id})
+              OR EXISTS(SELECT 1 FROM ics_items WHERE item_id = ${data.id})
+              OR EXISTS(SELECT 1 FROM par_items WHERE item_id = ${data.id})
+              OR EXISTS(SELECT 1 FROM accountability_events WHERE item_id = ${data.id})
+              OR EXISTS(SELECT 1 FROM splc_entries WHERE item_id = ${data.id}) AS referenced
+          `;
+          if (refs?.referenced) throw new Error("Item has transaction history and cannot be deleted. Historical records are preserved.");
+          await tx`DELETE FROM items WHERE id = ${data.id}`;
+          return { ok: true };
+        });
       },
       async () => {
-        await sbDelete("items", `id=eq.${data.id}`, getRestWriteConfig());
-        return { ok: true };
+        try {
+          return await sbRpc("delete_unused_inventory_item", { target_item_id: data.id });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          // Older hosted projects may not have applied the RPC migration yet.
+          // Fall back to FK-protected REST delete; never bypass history constraints.
+          if (!/delete_unused_inventory_item.*(schema cache|could not find the function)/i.test(message)) {
+            throw error;
+          }
+          await sbDelete("items", `id=eq.${encodeURIComponent(data.id)}`, getRestWriteConfig());
+          return { ok: true };
+        }
       },
     );
   });
+
+// Post header, receipt lines, stock transactions and balances atomically.
+export const postIar = createServerFn({ method: "POST" })
+  .inputValidator((d: any) => d)
+  .handler(async ({ data }) => withDbFallback(
+    async (sql) => sql.begin(async (tx: any) => {
+      const [form] = await tx`
+        INSERT INTO iar_forms ${tx({
+          iar_no: data.iar_no, supplier: data.supplier || null,
+          invoice_no: data.invoice_no || null, accepted_by: data.accepted_by || null,
+          form_data: data.form_data || {},
+          created_by: data.created_by || null, created_by_name: data.created_by_name || null,
+        })} RETURNING *
+      `;
+      for (const line of data.lines ?? []) {
+        const quantity = Number(line.quantity);
+        const unitCost = Number(line.unit_cost || 0);
+        if (!line.item_id || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitCost) || unitCost < 0) throw new Error("Each IAR item needs an item, positive quantity, and nonnegative unit cost.");
+        const [item] = await tx`SELECT id FROM items WHERE id = ${line.item_id} FOR UPDATE`;
+        if (!item) throw new Error("Selected inventory item was not found.");
+        const remarks = [`IAR ${data.iar_no}`, line.product_description ? `Description: ${line.product_description}` : "", data.supplier ? `Supplier: ${data.supplier}` : "", data.invoice_no ? `Invoice: ${data.invoice_no}` : "", unitCost ? `Unit Cost: PHP ${unitCost.toFixed(2)}` : "", line.remarks || ""].filter(Boolean).join(" | ");
+        const [transaction] = await tx`INSERT INTO transactions ${tx({
+          item_id: line.item_id, type: "IN", quantity, staff_id: data.created_by || null,
+          staff_name: data.created_by_name || null, source_form_type: "IAR", source_form_id: form.id,
+          remarks, product_description: line.product_description || null,
+        })} RETURNING *`;
+        await tx`UPDATE items SET quantity = quantity + ${quantity} WHERE id = ${line.item_id}`;
+        await tx`INSERT INTO iar_items ${tx({
+          iar_id: form.id, item_id: line.item_id, quantity,
+          product_description: line.product_description || null,
+          unit_cost: unitCost, amount: quantity * unitCost,
+          remarks: line.remarks || null, transaction_id: transaction.id,
+        })}`;
+      }
+      return form;
+    }),
+    async () => {
+      try {
+        return await sbRpc("post_iar", { payload: data });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/post_iar.*schema cache|schema cache.*post_iar/i.test(message)) {
+          throw new Error(
+            "IAR posting is unavailable: hosted Supabase is missing post_iar(payload). Apply supabase/migrations/20261011000000_atomic_iar_posting.sql in the Supabase SQL Editor, then reload the schema cache.",
+          );
+        }
+        throw error;
+      }
+    },
+  ));
 
 // ============================================
 // CATEGORIES
