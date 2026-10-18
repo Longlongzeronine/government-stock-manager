@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import {
   Boxes,
@@ -23,7 +23,7 @@ import { toast } from "sonner";
 import QRCode from "qrcode";
 import { PageHeader } from "@/components/layout/AppShell";
 import { SummaryActions } from "@/components/common/SummaryActions";
-import { FundClusterControl } from "@/components/common/FundClusterControl";
+import { FUND_CLUSTER_OPTIONS, FundClusterControl } from "@/components/common/FundClusterControl";
 import { ItemDialog } from "@/components/inventory/ItemDialog";
 import { exportCSV } from "@/lib/export";
 import { useAuth } from "@/contexts/AuthContext";
@@ -36,7 +36,9 @@ import {
   createRisForm,
   createRisItem,
   createTransaction,
+  getNextRisNumberFromHistory,
   getRisFormStatus,
+  listIarForms,
   listFormPersonnelMemory,
   listItems,
   listCategories,
@@ -89,6 +91,12 @@ type Transaction = {
   item?: Item;
 };
 
+type IarFormRecord = {
+  id: string;
+  iar_no?: string | null;
+  form_data?: { fund_cluster?: string | null } | null;
+};
+
 type StockRow = Transaction & { balance: number };
 
 type Line = {
@@ -115,6 +123,7 @@ type IarState = {
   dateReceived: string;
   inspectionOfficer: string;
   acceptedBy: string;
+  receiptDescription: string;
 };
 
 type RisState = {
@@ -204,9 +213,10 @@ function FormsFlow() {
   const [reportMonth, setReportMonth] = useState(today.slice(0, 7));
   const [rpciStartDate, setRpciStartDate] = useState(`${today.slice(0, 4)}-01-01`);
   const [rpciEndDate, setRpciEndDate] = useState(today);
-  const [stockCardFundCluster, setStockCardFundCluster] = useState(FORM_DEFAULTS.fundCluster);
-  const [risFundCluster, setRisFundCluster] = useState(FORM_DEFAULTS.fundCluster);
-  const [rsmiFundCluster, setRsmiFundCluster] = useState(FORM_DEFAULTS.fundCluster);
+  const [activeFundCluster, setActiveFundCluster] = useState(FORM_DEFAULTS.fundCluster);
+  const stockCardFundCluster = activeFundCluster;
+  const risFundCluster = activeFundCluster;
+  const rsmiFundCluster = activeFundCluster;
   const [rpciFundCluster, setRpciFundCluster] = useState(FORM_DEFAULTS.fundCluster);
   const [rpciEntries, setRpciEntries] = useState<Record<string, RpciEntry>>({});
   const [iar, setIar] = useState<IarState>({
@@ -224,7 +234,20 @@ function FormsFlow() {
     dateReceived: today,
     inspectionOfficer: FORM_DEFAULTS.inspectionOfficer,
     acceptedBy: FORM_DEFAULTS.custodian,
+    receiptDescription: "",
   });
+  function setFormsFundCluster(value: string) {
+    setActiveFundCluster(value);
+    setIar((current) => current.fundCluster === value ? current : { ...current, fundCluster: value });
+    const clusterItemIds = getIarItemIdsForCluster(transactions, iarForms, value);
+    if (!clusterItemIds.has(selectedItemId)) {
+      setSelectedItemId(pickerItems.find((item) => clusterItemIds.has(item.id))?.id || "");
+    }
+  }
+  function setIarAndFundCluster(next: IarState) {
+    setIar(next);
+    if (next.fundCluster !== activeFundCluster) setFormsFundCluster(next.fundCluster);
+  }
   const [iarLines, setIarLines] = useState<Line[]>(
     Array.from({ length: 4 }, blankLine),
   );
@@ -250,7 +273,10 @@ function FormsFlow() {
     approvalStatus: "pending",
     issuedAt: "",
   });
+  const risStateRef = useRef(ris);
+  risStateRef.current = ris;
   const [risLines, setRisLines] = useState<Line[]>([blankLine()]);
+  const [risValidationAttempted, setRisValidationAttempted] = useState(false);
   const [saving, setSaving] = useState(false);
   const postingIar = useRef(false);
   const draftHydrated = useRef(false);
@@ -267,7 +293,10 @@ function FormsFlow() {
       if (raw) {
         const draft = JSON.parse(raw);
         draftRestored.current = true;
-        if (draft.iar) setIar(draft.iar);
+        if (draft.iar) {
+          setIar(draft.iar);
+          setActiveFundCluster(draft.iar.fundCluster || FORM_DEFAULTS.fundCluster);
+        }
         if (Array.isArray(draft.iarLines)) setIarLines(draft.iarLines);
         if (draft.ris) setRis(draft.ris);
         if (Array.isArray(draft.risLines)) setRisLines(draft.risLines);
@@ -307,6 +336,21 @@ function FormsFlow() {
     refetchInterval: 3000,
   });
 
+  const { data: iarForms = [] } = useQuery({
+    queryKey: ["iar-forms"],
+    queryFn: () => listIarForms() as Promise<IarFormRecord[]>,
+    refetchInterval: 3000,
+  });
+  const iarFundClusterOptions = useMemo(
+    () => [...new Set([
+      ...FUND_CLUSTER_OPTIONS,
+      ...iarForms
+        .map((form) => String(form.form_data?.fund_cluster || "").trim())
+        .filter(Boolean),
+    ])],
+    [iarForms],
+  );
+
   const { data: personnelMemory = [] } = useQuery({
     queryKey: ["form-personnel-memory"],
     queryFn: () =>
@@ -316,6 +360,10 @@ function FormsFlow() {
   const personnelOptions = useMemo(
     () => groupPersonnelMemory(personnelMemory as PersonnelMemory[]),
     [personnelMemory],
+  );
+  const clusterItemIds = useMemo(
+    () => getIarItemIdsForCluster(transactions, iarForms, activeFundCluster),
+    [transactions, iarForms, activeFundCluster],
   );
 
   useEffect(() => {
@@ -337,12 +385,32 @@ function FormsFlow() {
   }, [personnelMemory]);
 
   useEffect(() => {
-    if (draftRestored.current) return;
     if (initializedRisNumber.current) return;
     initializedRisNumber.current = true;
-    void reserveNextRisNumber(today).then((risNo) => {
-      if (risNo) setRis((current) => ({ ...current, risNo }));
-    });
+    void getNextRisNumberFromHistory({ data: { date: today } })
+      .then((risNo) => {
+        if (!risNo) return;
+        const current = risStateRef.current;
+        if (current.verificationStatus === "verified") {
+          const verification = createVerificationIdentity();
+          setRis({
+            ...current,
+            risNo,
+            office: "",
+            purpose: "",
+            verificationToken: verification.token,
+            verificationCode: verification.code,
+            verificationStatus: "draft",
+            approvalStatus: "pending",
+            issuedAt: "",
+          });
+          setRisLines([blankLine()]);
+          setRisValidationAttempted(false);
+        } else {
+          setRis((latest) => ({ ...latest, risNo }));
+        }
+      })
+      .catch((error) => console.error("Unable to sync RIS number from history:", errorMessage(error)));
   }, [today]);
 
   const flowItems = useMemo(
@@ -357,13 +425,18 @@ function FormsFlow() {
     return [...flowItems, ...items.filter((item) => !flowIds.has(item.id))];
   }, [items, flowItems]);
   const acceptedStockItems = useMemo(
-    () => getAcceptedStockItems(pickerItems, transactions),
-    [pickerItems, transactions],
+    () => getAcceptedStockItems(pickerItems, transactions).filter((item) => clusterItemIds.has(item.id)),
+    [pickerItems, transactions, clusterItemIds],
   );
   const stockCardItems = useMemo(
-    () => getStockCardItems(pickerItems, transactions),
-    [pickerItems, transactions],
+    () => getStockCardItems(pickerItems, transactions).filter((item) => clusterItemIds.has(item.id)),
+    [pickerItems, transactions, clusterItemIds],
   );
+  useEffect(() => {
+    if (stockCardItems.length && !stockCardItems.some((item) => item.id === selectedItemId)) {
+      setSelectedItemId(stockCardItems[0].id);
+    }
+  }, [stockCardItems, selectedItemId]);
   const selectedItem = stockCardItems.find(
     (item: Item) => item.id === selectedItemId,
   );
@@ -372,8 +445,8 @@ function FormsFlow() {
     [selectedItem, transactions],
   );
   const rsmiRows = useMemo(
-    () => getRsmiRows(transactions, reportMonth),
-    [transactions, reportMonth],
+    () => getRsmiRows(transactions, reportMonth, activeFundCluster, iarForms),
+    [transactions, reportMonth, activeFundCluster, iarForms],
   );
   const rpciRows = useMemo(
     () => getRpciRows(items, transactions, rpciStartDate, rpciEndDate, rpciEntries),
@@ -388,6 +461,7 @@ function FormsFlow() {
     queryClient.invalidateQueries({ queryKey: ["items"] });
     queryClient.invalidateQueries({ queryKey: ["transactions"] });
     queryClient.invalidateQueries({ queryKey: ["transactions", "forms-flow"] });
+    queryClient.invalidateQueries({ queryKey: ["iar-forms"] });
   }
 
   async function saveIar() {
@@ -418,12 +492,21 @@ function FormsFlow() {
           responsibility_center: iar.responsibilityCenter, iar_date: iar.iarDate,
           invoice_date: iar.invoiceDate, date_inspected: iar.dateInspected,
           date_received: iar.dateReceived, inspection_officer: iar.inspectionOfficer,
+          receipt_description: iar.receiptDescription,
         },
-        lines: validLines.map((line) => ({
-          item_id: line.item_id, quantity: Number(line.quantity),
-          unit_cost: Number(line.unitCost || 0), remarks: line.remarks || null,
-          product_description: line.productDescription?.trim() || null,
-        })),
+        lines: validLines.map((line) => {
+          const item = items.find((candidate) => candidate.id === line.item_id);
+          const unitCost = line.unitCost.trim() === ""
+            ? Number(item?.acquisition_cost || 0)
+            : Number(line.unitCost);
+          return {
+            item_id: line.item_id,
+            quantity: Number(line.quantity),
+            unit_cost: unitCost,
+            remarks: line.remarks || null,
+            product_description: line.productDescription?.trim() || item?.description || null,
+          };
+        }),
       } });
     } catch (error) {
       postingIar.current = false;
@@ -444,6 +527,7 @@ function FormsFlow() {
     setSaving(false);
     toast.success("IAR posted. Stock card receipts were added.");
     refreshFlow();
+    setFormsFundCluster(iar.fundCluster);
     setSelectedItemId(validLines[0]?.item_id || "");
     setIar({
       ...iar,
@@ -457,30 +541,69 @@ function FormsFlow() {
   }
 
   async function saveRis() {
-    if (ris.verificationStatus === "verified")
-      return toast.info("This RIS is already issued and verified. Reset to start a new RIS.");
-    const validLines = risLines.filter(
+    if (ris.verificationStatus === "verified") {
+      const nextRisNo =
+        (await getNextRisNumberFromHistory({ data: { date: today } })) ||
+        (await reserveNextRisNumber(today)) ||
+        incrementRisNumber(ris.risNo, today);
+      const verification = createVerificationIdentity();
+      setRis((current) => ({
+        ...current,
+        risNo: nextRisNo,
+        office: "",
+        purpose: "",
+        requestedDate: today,
+        approvedDate: today,
+        issuedDate: today,
+        receivedDate: today,
+        verificationToken: verification.token,
+        verificationCode: verification.code,
+        verificationStatus: "draft",
+        approvalStatus: "pending",
+        issuedAt: "",
+      }));
+      setRisLines([blankLine()]);
+      setRisValidationAttempted(false);
+      toast.info(`New RIS ready: ${nextRisNo}. Add items and issue it.`);
+      return;
+    }
+    const attemptedLines = risLines.filter((line) =>
+      line.item_id || line.quantity.trim() || line.remarks.trim(),
+    );
+    const validLines = attemptedLines.filter(
       (line) => line.item_id && Number(line.quantity) > 0,
     );
-    if (!ris.risNo.trim()) return toast.error("RIS number is required.");
-    if (!ris.office.trim())
-      return toast.error("Requesting office is required.");
+    setRisValidationAttempted(true);
+    if (
+      !ris.risNo.trim() || !ris.office.trim() || !ris.requestedBy.trim() ||
+      !ris.purpose.trim() || !ris.approvedBy.trim() || !ris.issuedBy.trim() ||
+      !ris.receivedBy.trim()
+    ) return;
+    if (validLines.length !== attemptedLines.length)
+      return toast.error("Complete each started item row with an item and positive quantity.");
     if (validLines.length === 0)
       return toast.error("Add at least one item to issue.");
 
+    // Repeated item IDs are valid separate RIS lines. Check their combined
+    // quantity against stock before creating the unique RIS header.
+    const requestedByItem = new Map<string, number>();
     for (const line of validLines) {
-      const item = acceptedStockItems.find(
-        (candidate: Item) => candidate.id === line.item_id,
+      requestedByItem.set(
+        line.item_id,
+        (requestedByItem.get(line.item_id) || 0) + Number(line.quantity),
       );
+    }
+    for (const [itemId, requestedQuantity] of requestedByItem) {
+      const item = acceptedStockItems.find((candidate: Item) => candidate.id === itemId);
       if (!item) {
         return toast.error("RIS can only issue items that were accepted through IAR and still have stock.");
       }
-      if (item && Number(item.quantity) <= 0) {
+      if (Number(item.quantity) <= 0) {
         return toast.error(`${item.name} is out of stock.`);
       }
-      if (item && Number(line.quantity) > item.quantity) {
+      if (requestedQuantity > Number(item.quantity)) {
         return toast.error(
-          `${item.name} has only ${item.quantity} ${item.unit} available. Enter ${item.quantity} or less.`,
+          `${item.name} has only ${item.quantity} ${item.unit} available across all RIS rows.`,
         );
       }
     }
@@ -539,6 +662,7 @@ function FormsFlow() {
           source_form_id: risRecord.id,
           remarks: [
             `RIS ${ris.risNo}`,
+            `Fund Cluster: ${risFundCluster}`,
             `Office: ${ris.office}`,
             "Responsibility Center: 16 009 03 0001 07",
             ris.purpose ? `Purpose: ${ris.purpose}` : "",
@@ -584,15 +708,29 @@ function FormsFlow() {
       rememberPersonnel("ris_issued_by", ris.issuedBy),
       rememberPersonnel("ris_received_by", ris.receivedBy),
     ]);
+    const nextRisNo =
+      (await reserveNextRisNumber(today)) || incrementRisNumber(ris.risNo, today);
+    const nextVerification = createVerificationIdentity();
     setSaving(false);
-    toast.success("RIS issued. Authenticated QR verification is active.");
+    toast.success(`RIS issued. Next RIS No.: ${nextRisNo}`);
     refreshFlow();
     setRis({
       ...ris,
-      verificationStatus: "verified",
+      risNo: nextRisNo,
+      office: "",
+      purpose: "",
+      requestedDate: today,
+      approvedDate: today,
+      issuedDate: today,
+      receivedDate: today,
+      verificationToken: nextVerification.token,
+      verificationCode: nextVerification.code,
+      verificationStatus: "draft",
       approvalStatus: "pending",
-      issuedAt: new Date().toISOString(),
+      issuedAt: "",
     });
+    setRisLines([blankLine()]);
+    setRisValidationAttempted(false);
     setTab("ris");
   }
 
@@ -600,6 +738,7 @@ function FormsFlow() {
     if (!window.confirm(`Clear the current ${activeStageLabel(tab)} input?`))
       return;
     if (tab === "iar") {
+      setFormsFundCluster(FORM_DEFAULTS.fundCluster);
       setIar({
         iarNo: makeFormNumber("IAR", today),
         entityName: FORM_DEFAULTS.entityName,
@@ -615,6 +754,7 @@ function FormsFlow() {
         dateReceived: today,
         inspectionOfficer: FORM_DEFAULTS.inspectionOfficer,
         acceptedBy: FORM_DEFAULTS.custodian,
+        receiptDescription: "",
       });
       setIarLines(Array.from({ length: 4 }, blankLine));
     } else if (tab === "ris") {
@@ -644,6 +784,7 @@ function FormsFlow() {
         issuedAt: "",
       });
       setRisLines([blankLine()]);
+      setRisValidationAttempted(false);
     }
   }
 
@@ -707,7 +848,6 @@ function FormsFlow() {
               onClick={saveActiveStage}
               disabled={
                 !canWrite || saving || tab === "stock-card" || tab === "rsmi" || tab === "rpci"
-                || (tab === "ris" && ris.verificationStatus === "verified")
               }
               className="flow-header-primary"
             >
@@ -852,7 +992,7 @@ function FormsFlow() {
                   canWrite={canWrite}
                   saving={saving}
                   iar={iar}
-                  setIar={setIar}
+                  setIar={setIarAndFundCluster}
                   iarLines={iarLines}
                   setIarLines={setIarLines}
                   ris={ris}
@@ -868,9 +1008,11 @@ function FormsFlow() {
                   rpciEndDate={rpciEndDate}
                   setRpciEndDate={setRpciEndDate}
                   rsmiFundCluster={rsmiFundCluster}
-                  setRsmiFundCluster={setRsmiFundCluster}
+                  setRsmiFundCluster={setFormsFundCluster}
+                  rsmiFundClusterOptions={iarFundClusterOptions.length ? iarFundClusterOptions : undefined}
                   onSaveIar={saveIar}
                   onSaveRis={saveRis}
+                  risValidationAttempted={risValidationAttempted}
                   personnelOptions={personnelOptions}
                 />
               )}
@@ -884,7 +1026,7 @@ function FormsFlow() {
                 risItems={acceptedStockItems}
                 stockCardItems={stockCardItems}
                 iar={iar}
-                setIar={setIar}
+                setIar={setIarAndFundCluster}
                 iarLines={iarLines}
                 setIarLines={setIarLines}
                 ris={ris}
@@ -893,9 +1035,9 @@ function FormsFlow() {
                 setRisLines={setRisLines}
                 selectedItem={selectedItem}
                 stockCardFundCluster={stockCardFundCluster}
-                setStockCardFundCluster={setStockCardFundCluster}
+                setStockCardFundCluster={setFormsFundCluster}
                 risFundCluster={risFundCluster}
-                setRisFundCluster={setRisFundCluster}
+                setRisFundCluster={setFormsFundCluster}
                 selectedItemId={selectedItemId}
                 setSelectedItemId={setSelectedItemId}
                 stockRows={stockRows}
@@ -907,7 +1049,8 @@ function FormsFlow() {
                 rpciEndDate={rpciEndDate}
                 setRpciEndDate={setRpciEndDate}
                 rsmiFundCluster={rsmiFundCluster}
-                setRsmiFundCluster={setRsmiFundCluster}
+                setRsmiFundCluster={setFormsFundCluster}
+                rsmiFundClusterOptions={iarFundClusterOptions.length ? iarFundClusterOptions : undefined}
                 rpciFundCluster={rpciFundCluster}
                 setRpciFundCluster={setRpciFundCluster}
                 rpciRows={rpciRows}
@@ -1208,8 +1351,10 @@ function EntryPanel({
   setRpciEndDate,
   rsmiFundCluster,
   setRsmiFundCluster,
+  rsmiFundClusterOptions,
   onSaveIar,
   onSaveRis,
+  risValidationAttempted,
   personnelOptions,
 }: {
   tab: FlowTab;
@@ -1236,8 +1381,10 @@ function EntryPanel({
   setRpciEndDate: (date: string) => void;
   rsmiFundCluster: string;
   setRsmiFundCluster: (value: string) => void;
+  rsmiFundClusterOptions?: readonly string[];
   onSaveIar: () => void;
   onSaveRis: () => void;
+  risValidationAttempted: boolean;
   personnelOptions: Partial<Record<PersonnelRole, string[]>>;
 }) {
   if (tab === "iar") {
@@ -1293,7 +1440,7 @@ function EntryPanel({
           />
           <FlowActions>
             <button
-              disabled={!canWrite || saving || ris.verificationStatus === "verified"}
+              disabled={!canWrite || saving}
               onClick={onSaveIar}
               className="flow-primary"
             >
@@ -1316,17 +1463,21 @@ function EntryPanel({
           <div className="grid gap-3 sm:grid-cols-2">
             <FlowField label="RIS No.">
               <input
-                className="flow-input"
+                className={`flow-input ${risValidationAttempted && !ris.risNo.trim() ? "border-red-500 ring-1 ring-red-500 focus:border-red-500 focus:ring-red-500" : ""}`}
                 placeholder="e.g. RIS-2026-07-10-143005123"
                 value={ris.risNo}
+                required
+                aria-invalid={risValidationAttempted && !ris.risNo.trim()}
                 onChange={(e) => setRis({ ...ris, risNo: e.target.value })}
               />
             </FlowField>
             <FlowField label="Requesting Office">
               <input
-                className="flow-input"
+                className={`flow-input ${risValidationAttempted && !ris.office.trim() ? "border-red-500 ring-1 ring-red-500 focus:border-red-500 focus:ring-red-500" : ""}`}
                 placeholder="e.g. Training and Assessment"
                 value={ris.office}
+                required
+                aria-invalid={risValidationAttempted && !ris.office.trim()}
                 onChange={(e) => setRis({ ...ris, office: e.target.value })}
               />
             </FlowField>
@@ -1336,14 +1487,18 @@ function EntryPanel({
                 placeholder={FORM_DEFAULTS.requestedBy}
                 value={ris.requestedBy}
                 options={personnelOptions.ris_requested_by}
+                required
+                invalid={risValidationAttempted && !ris.requestedBy.trim()}
                 onChange={(value) => setRis({ ...ris, requestedBy: value })}
               />
             </FlowField>
             <FlowField label="Purpose">
               <input
-                className="flow-input"
+                className={`flow-input ${risValidationAttempted && !ris.purpose.trim() ? "border-red-500 ring-1 ring-red-500 focus:border-red-500 focus:ring-red-500" : ""}`}
                 placeholder="e.g. For official supplies and maintenance"
                 value={ris.purpose}
+                required
+                aria-invalid={risValidationAttempted && !ris.purpose.trim()}
                 onChange={(e) => setRis({ ...ris, purpose: e.target.value })}
               />
             </FlowField>
@@ -1353,6 +1508,8 @@ function EntryPanel({
                 placeholder={FORM_DEFAULTS.approvedBy}
                 value={ris.approvedBy}
                 options={personnelOptions.ris_approved_by}
+                required
+                invalid={risValidationAttempted && !ris.approvedBy.trim()}
                 onChange={(value) => setRis({ ...ris, approvedBy: value })}
               />
             </FlowField>
@@ -1362,6 +1519,8 @@ function EntryPanel({
                 placeholder={FORM_DEFAULTS.issuedBy}
                 value={ris.issuedBy}
                 options={personnelOptions.ris_issued_by}
+                required
+                invalid={risValidationAttempted && !ris.issuedBy.trim()}
                 onChange={(value) => setRis({ ...ris, issuedBy: value })}
               />
             </FlowField>
@@ -1371,6 +1530,8 @@ function EntryPanel({
                 placeholder={FORM_DEFAULTS.receivedBy}
                 value={ris.receivedBy}
                 options={personnelOptions.ris_received_by}
+                required
+                invalid={risValidationAttempted && !ris.receivedBy.trim()}
                 onChange={(value) => setRis({ ...ris, receivedBy: value })}
               />
             </FlowField>
@@ -1417,6 +1578,7 @@ function EntryPanel({
               value={selectedItemId}
               onChange={setSelectedItemId}
               className="flow-input"
+              displayNameOnly
               placeholder={
                 stockCardItems.length > 0
                   ? "Type any word from the item name or description"
@@ -1445,7 +1607,7 @@ function EntryPanel({
           />
         </FlowField>
         <FlowField label="Fund Cluster">
-          <FundClusterControl value={rsmiFundCluster} onChange={setRsmiFundCluster} className="flow-input" />
+          <FundClusterControl value={rsmiFundCluster} onChange={setRsmiFundCluster} options={rsmiFundClusterOptions} className="flow-input" />
         </FlowField>
       </div>
     </section>
@@ -1506,6 +1668,7 @@ function PaperPreview({
   rsmiRows,
   rsmiFundCluster,
   setRsmiFundCluster,
+  rsmiFundClusterOptions,
   stockCardFundCluster,
   setStockCardFundCluster,
   risFundCluster,
@@ -1545,6 +1708,7 @@ function PaperPreview({
   rsmiRows: RsmiRow[];
   rsmiFundCluster: string;
   setRsmiFundCluster: (value: string) => void;
+  rsmiFundClusterOptions?: readonly string[];
   stockCardFundCluster: string;
   setStockCardFundCluster: (value: string) => void;
   risFundCluster: string;
@@ -1613,6 +1777,7 @@ function PaperPreview({
               onReportMonth={setReportMonth}
               fundCluster={rsmiFundCluster}
               onFundCluster={setRsmiFundCluster}
+              fundClusterOptions={rsmiFundClusterOptions}
               rows={rsmiRows}
               editable={editable}
             />
@@ -1860,18 +2025,29 @@ function IarPaper({
                       <ItemLookup
                         items={items}
                         className="paper-cell-control"
+                        displayNameOnly
                         value={sourceLine?.item_id || ""}
-                        onChange={(itemId) => updateLineAt(index, { item_id: itemId })}
+                        onChange={(itemId) => {
+                          const selected = items.find((candidate) => candidate.id === itemId);
+                          updateLineAt(index, {
+                            item_id: itemId,
+                            productDescription: selected?.description || "",
+                            unitCost: selected ? String(Number(selected.acquisition_cost || 0)) : "",
+                          });
+                        }}
                       />
-                      <input
-                        className="paper-cell-control print-hidden"
-                        placeholder="Optional product variation"
-                        value={sourceLine?.productDescription || ""}
-                        onChange={(event) => updateLineAt(index, { productDescription: event.target.value })}
+                      <AutoResizeTextarea
+                        className="paper-cell-control product-description-control"
+                        rows={2}
+                        value={sourceLine?.productDescription ?? previewLine?.item?.description ?? ""}
+                        onChange={(value) => updateLineAt(index, { productDescription: value })}
                       />
                     </div>
                   ) : (
-                    [itemDescription(previewLine?.item), previewLine?.productDescription].filter(Boolean).join(" — ")
+                    <div className="grid gap-1">
+                      <span>{previewLine?.item?.name || ""}</span>
+                      <small className="whitespace-pre-wrap">{previewLine?.productDescription || previewLine?.item?.description || ""}</small>
+                    </div>
                   )}
                 </td>
                 <td>{previewLine?.item?.unit || ""}</td>
@@ -1914,6 +2090,17 @@ function IarPaper({
           <Plus className="h-4 w-4" /> Add Row
         </button>
       )}
+      <div className="paper-purpose">
+        <strong>Receipt Purpose / Coverage:</strong>{" "}
+        {editable ? (
+          <input
+            className="paper-inline-control"
+            placeholder="Purpose of supplies or what this receipt covers"
+            value={form.receiptDescription}
+            onChange={(event) => onForm({ ...form, receiptDescription: event.target.value })}
+          />
+        ) : form.receiptDescription}
+      </div>
       <table className="paper-grid iar-signoff-grid">
         <tbody>
           <tr>
@@ -2051,6 +2238,7 @@ function StockCardPaper({
                 <ItemLookup
                   items={items}
                   className="paper-inline-control strong"
+                  displayNameOnly
                   value={selectedItemId}
                   onChange={onSelectedItemId}
                   placeholder={
@@ -2108,7 +2296,6 @@ function StockCardPaper({
               </td>
               <td>
                 {extractReference(row?.remarks)}
-                {row?.product_description && <small className="block text-[10px]">{row.product_description}</small>}
               </td>
               <td className="right">
                 {row?.type === "IN" ? row.quantity : ""}
@@ -2278,16 +2465,14 @@ function RisPaper({
                 <td>{previewLine?.item?.unit || ""}</td>
                 <td>
                   {editable && sourceLine ? (
-                    <ItemLookup
-                      items={items}
-                      className="paper-cell-control"
-                      value={sourceLine.item_id}
-                      onChange={(itemId) =>
-                        updateLine(sourceLine.id, { item_id: itemId })
-                      }
-                    />
+                    <>
+                      <span>{previewLine?.item?.name || ""}</span>
+                      {previewLine?.item?.description && (
+                        ` — ${previewLine.item.description}`
+                      )}
+                    </>
                   ) : (
-                    itemDescription(previewLine?.item)
+                    combinedItemDescription(previewLine?.item)
                   )}
                 </td>
                 <td className="right">
@@ -2648,6 +2833,7 @@ function RsmiPaper({
   onReportMonth,
   fundCluster,
   onFundCluster,
+  fundClusterOptions,
   rows,
   editable,
 }: {
@@ -2656,6 +2842,7 @@ function RsmiPaper({
   onReportMonth: (month: string) => void;
   fundCluster: string;
   onFundCluster: (value: string) => void;
+  fundClusterOptions?: readonly string[];
   rows: RsmiRow[];
   editable: boolean;
 }) {
@@ -2676,7 +2863,7 @@ function RsmiPaper({
             </td>
             <td>
               <strong>Fund Cluster :</strong>{" "}
-              <FundClusterControl value={fundCluster} onChange={onFundCluster} editable={editable} className="paper-inline-control strong" />
+              <FundClusterControl value={fundCluster} onChange={onFundCluster} options={fundClusterOptions} editable={editable} className="paper-inline-control strong" />
             </td>
           </tr>
           <tr>
@@ -2960,14 +3147,14 @@ function LineEditor({
 
   return (
     <div className="flow-scroll">
-      <table className="flow-table line-editor-table min-w-[800px]">
+      <table className={`flow-table line-editor-table min-w-[800px] ${showProductDescription && showCost ? "has-product-description has-unit-cost min-w-[1100px]" : ""}`}>
         <thead>
           <tr>
             <th>Item</th>
+            {showProductDescription && <th>Product Description</th>}
             <th className="text-right">Available</th>
             <th className="text-right">Quantity</th>
             {showCost && <th className="text-right">Unit Cost</th>}
-            {showProductDescription && <th>Receipt Description</th>}
             <th>Remarks</th>
             <th></th>
           </tr>
@@ -3001,14 +3188,31 @@ function LineEditor({
                   <ItemLookup
                     items={items}
                     className="flow-input"
+                    displayNameOnly
                     value={line.item_id}
-                    onChange={(itemId) =>
-                      updateLine(line.id, { item_id: itemId })
-                    }
+                    onChange={(itemId) => {
+                      const selected = items.find((candidate) => candidate.id === itemId);
+                      updateLine(line.id, {
+                        item_id: itemId,
+                        ...(showCost ? { unitCost: selected ? String(Number(selected.acquisition_cost || 0)) : "" } : {}),
+                        ...(showProductDescription ? { productDescription: selected?.description || "" } : {}),
+                      });
+                    }}
                     onAddMissingItem={allowAddItem ? (name) => setItemToAdd({ lineId: line.id, name }) : undefined}
                     placeholder="Type item name or description"
                   />
                 </td>
+                {showProductDescription && (
+                  <td>
+                    <AutoResizeTextarea
+                      className="flow-input product-description-input"
+                      rows={2}
+                      label="Product Description"
+                      value={line.productDescription ?? item?.description ?? ""}
+                      onChange={(value) => updateLine(line.id, { productDescription: value })}
+                    />
+                  </td>
+                )}
                 <td className="text-right tabular-nums">
                   {item
                     ? outOfStock
@@ -3058,20 +3262,10 @@ function LineEditor({
                       autoComplete="off"
                       placeholder="0.00"
                       aria-label="Unit cost"
-                      value={line.unitCost}
+                      value={line.unitCost !== "" ? line.unitCost : item ? String(Number(item.acquisition_cost || 0)) : ""}
                       onChange={(e) =>
                         updateLine(line.id, { unitCost: e.target.value })
                       }
-                    />
-                  </td>
-                )}
-                {showProductDescription && (
-                  <td>
-                    <input
-                      className="flow-input"
-                      placeholder="Optional variation / receipt detail"
-                      value={line.productDescription || ""}
-                      onChange={(e) => updateLine(line.id, { productDescription: e.target.value })}
                     />
                   </td>
                 )}
@@ -3100,7 +3294,7 @@ function LineEditor({
         </tbody>
         <tfoot>
           <tr>
-            <td colSpan={showCost ? 6 : 5}>
+            <td colSpan={5 + Number(showCost) + Number(showProductDescription)}>
               <button
                 className="flow-secondary"
                 disabled={items.length === 0}
@@ -3441,6 +3635,40 @@ function FlowField({
   );
 }
 
+function AutoResizeTextarea({
+  className,
+  value,
+  onChange,
+  rows = 2,
+  label,
+}: {
+  className: string;
+  value: string;
+  onChange: (value: string) => void;
+  rows?: number;
+  label?: string;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [value]);
+
+  return (
+    <textarea
+      ref={textareaRef}
+      className={className}
+      rows={rows}
+      aria-label={label}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
+}
+
 function FlowActions({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex justify-end gap-2 border-t border-border pt-4">
@@ -3456,6 +3684,7 @@ function ItemLookup({
   onAddMissingItem,
   className,
   placeholder = "Type item name or description",
+  displayNameOnly = false,
 }: {
   items: Item[];
   value: string;
@@ -3463,17 +3692,22 @@ function ItemLookup({
   onAddMissingItem?: (name: string) => void;
   className: string;
   placeholder?: string;
+  displayNameOnly?: boolean;
 }) {
   const listId = useRef(`item-lookup-${createId()}`).current;
   const rootRef = useRef<HTMLDivElement | null>(null);
   const selected = items.find((item) => item.id === value);
-  const [text, setText] = useState(() => itemLabel(selected));
+  const displayLabel = (item?: Item | null) => displayNameOnly ? item?.name || "" : itemLabel(item);
+  const [text, setText] = useState(() => displayLabel(selected));
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
 
   useEffect(() => {
-    if (value) setText(itemLabel(items.find((item) => item.id === value)));
-  }, [items, value]);
+    if (value) {
+      const selectedItem = items.find((item) => item.id === value);
+      setText(displayNameOnly ? selectedItem?.name || "" : itemLabel(selectedItem));
+    }
+  }, [items, value, displayNameOnly]);
 
   useEffect(() => {
     if (!open) return;
@@ -3508,7 +3742,7 @@ function ItemLookup({
     // Clear stale selection when typed text has no unique match. Otherwise a
     // visible unmatched name could silently post against the previous item id.
     if (match) {
-      setText(itemLabel(match));
+      setText(displayLabel(match));
       setOpen(false);
     }
     onChange(match?.id || "");
@@ -3548,7 +3782,7 @@ function ItemLookup({
           } else if (event.key === "Enter" && open && activeIndex >= 0 && matches[activeIndex]) {
             event.preventDefault();
             const item = matches[activeIndex];
-            setText(itemLabel(item));
+            setText(displayLabel(item));
             onChange(item.id);
             setOpen(false);
           }
@@ -3559,7 +3793,7 @@ function ItemLookup({
         <div id={listId} className="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-md border border-border bg-popover text-popover-foreground shadow-lg">
           {matches.length > 0 ? (
             <div role="listbox" aria-label="Matching inventory items" className="p-1">
-              {matches.slice(0, 20).map((item, index) => (
+              {matches.map((item, index) => (
                 <button
                   key={item.id}
                   type="button"
@@ -3567,10 +3801,13 @@ function ItemLookup({
                   aria-selected={item.id === value}
                   className={`block w-full rounded px-2.5 py-2 text-left text-sm hover:bg-accent ${index === activeIndex ? "bg-accent" : ""}`}
                   onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => { setText(itemLabel(item)); onChange(item.id); setOpen(false); }}
+                  onClick={() => { setText(displayLabel(item)); onChange(item.id); setOpen(false); }}
                 >
                   <span className="block truncate">{item.name}</span>
                   {item.description && <span className="block truncate text-xs text-muted-foreground">{item.description}</span>}
+                  <span className="block truncate text-[11px] text-muted-foreground">
+                    Stock {item.stock_number || "unassigned"} · {item.unit} · {peso(Number(item.acquisition_cost || 0))}
+                  </span>
                 </button>
               ))}
             </div>
@@ -3601,21 +3838,27 @@ function PersonnelInput({
   options = [],
   className,
   placeholder,
+  required = false,
+  invalid = false,
 }: {
   value: string;
   onChange: (value: string) => void;
   options?: string[];
   className: string;
   placeholder: string;
+  required?: boolean;
+  invalid?: boolean;
 }) {
   const listId = useRef(`personnel-${createId()}`).current;
   return (
     <>
       <input
-        className={className}
+        className={`${className} ${invalid ? "border-red-500 ring-1 ring-red-500 focus:border-red-500 focus:ring-red-500" : ""}`}
         list={listId}
         value={value}
         placeholder={placeholder}
+        required={required}
+        aria-invalid={invalid}
         autoComplete="off"
         onChange={(event) => onChange(event.target.value)}
       />
@@ -3640,6 +3883,10 @@ function normalizePrintControls(root: HTMLElement) {
     const value =
       input.type === "date" && input.value ? shortDate(input.value) : input.value;
     replaceControlWithText(input, value || "");
+  });
+
+  root.querySelectorAll("textarea").forEach((textarea) => {
+    replaceControlWithText(textarea, textarea.value || "");
   });
 }
 
@@ -3672,6 +3919,12 @@ function makeFormNumber(prefix: "IAR" | "RIS", date: string) {
     .map((part, index) => String(part).padStart(index === 3 ? 3 : 2, "0"))
     .join("");
   return `${prefix}-${date}-${timePart}`;
+}
+
+function incrementRisNumber(current: string, date: string) {
+  const match = current.match(/^(\d{4}-\d{2}-\d{2})-(\d+)$/);
+  if (!match || match[1] !== date) return `${date}-0000002`;
+  return `${date}-${String(Number(match[2]) + 1).padStart(7, "0")}`;
 }
 
 async function reserveNextRisNumber(date: string) {
@@ -3734,7 +3987,12 @@ function groupPersonnelMemory(rows: PersonnelMemory[]) {
 }
 
 function itemDescription(item?: Item | null) {
-  return item?.description?.trim() || item?.name || "";
+  return item?.description?.trim() || "";
+}
+
+function combinedItemDescription(item?: Item | null) {
+  if (!item) return "";
+  return [item.name?.trim(), item.description?.trim()].filter(Boolean).join(" — ");
 }
 
 function itemSearchText(item: Item): string {
@@ -3923,12 +4181,17 @@ function itemMatchesPropertyFlow(item: Item, flow: PropertyFlow) {
 function getRsmiRows(
   transactions: Transaction[],
   reportMonth: string,
+  fundCluster: string,
+  iarForms: IarFormRecord[],
 ): RsmiRow[] {
+  const itemClusters = getIarItemClusters(transactions, iarForms);
+
   return transactions
     .filter(
       (tx) =>
         tx.type === "OUT" &&
         isRisTransaction(tx) &&
+        (extractFundCluster(tx.remarks) || inferLegacyIssueCluster(itemClusters.get(tx.item_id))) === fundCluster &&
         dateKey(tx.created_at) === reportMonth,
     )
     .map((tx) => {
@@ -3939,13 +4202,59 @@ function getRsmiRows(
         risNo: extractReference(tx.remarks),
         responsibilityCenterCode: extractResponsibilityCenter(tx.remarks),
         stockNo: tx.item?.stock_number || "",
-        item: tx.item?.name || "Unknown item",
+        item: combinedItemDescription(tx.item) || "Unknown item",
         unit: tx.item?.unit || "",
         quantity: tx.quantity,
         unitCost,
         amount: tx.quantity * unitCost,
       };
     });
+}
+
+function getIarItemIdsForCluster(
+  transactions: Transaction[],
+  iarForms: IarFormRecord[],
+  fundCluster: string,
+): Set<string> {
+  return new Set(
+    [...getIarItemClusters(transactions, iarForms).entries()]
+      .filter(([, clusters]) => clusters.has(fundCluster))
+      .map(([itemId]) => itemId),
+  );
+}
+
+function getIarItemClusters(
+  transactions: Transaction[],
+  iarForms: IarFormRecord[],
+): Map<string, Set<string>> {
+  const formsById = new Map<string, IarFormRecord>(
+    iarForms.map((form): [string, IarFormRecord] => [form.id, form]),
+  );
+  const formsByNumber = new Map<string, IarFormRecord>(
+    iarForms
+      .filter((form) => form.iar_no)
+      .map((form): [string, IarFormRecord] => [String(form.iar_no).trim(), form]),
+  );
+  const itemClusters = new Map<string, Set<string>>();
+  transactions
+    .filter((tx) => tx.type === "IN" && isIarTransaction(tx))
+    .forEach((tx) => {
+      const linkedForm = tx.source_form_id
+        ? formsById.get(tx.source_form_id)
+        : undefined;
+      const iarNo = extractReference(tx.remarks).replace(/^IAR\s*/i, "").trim();
+      const form = linkedForm || formsByNumber.get(iarNo);
+      const cluster = String(form?.form_data?.fund_cluster || "").trim();
+      if (!cluster) return;
+      const clusters = itemClusters.get(tx.item_id) || new Set<string>();
+      clusters.add(cluster);
+      itemClusters.set(tx.item_id, clusters);
+    });
+  return itemClusters;
+}
+
+function inferLegacyIssueCluster(clusters?: Set<string>) {
+  return clusters?.size === 1 ? [...clusters][0] : "";
 }
 
 function getRpciRows(
@@ -4151,6 +4460,14 @@ function extractOffice(remarks?: string | null) {
   return office?.replace("Office:", "").trim() || "";
 }
 
+function extractFundCluster(remarks?: string | null) {
+  if (!remarks) return "";
+  const cluster = remarks
+    .split("|")
+    .find((part) => part.trim().startsWith("Fund Cluster:"));
+  return cluster?.replace("Fund Cluster:", "").trim() || "";
+}
+
 function extractResponsibilityCenter(remarks?: string | null) {
   if (!remarks) return "16 009 03 0001 07";
   const center = remarks
@@ -4196,9 +4513,18 @@ const flowStyles = `
 .flow-secondary{border:1px solid var(--color-input);background:var(--color-card);color:var(--color-foreground)}
 .flow-icon{display:inline-grid;place-items:center;border-radius:5px;padding:.3rem}
 .flow-icon:hover,.flow-secondary:hover{background:var(--color-accent)}
-.line-editor-table th:first-child,.line-editor-table td:first-child{min-width:300px}
+.line-editor-table th:first-child,.line-editor-table td:first-child{min-width:190px;width:190px}
 .line-editor-table th:nth-child(3),.line-editor-table td:nth-child(3){width:92px}
-.line-editor-table th:nth-child(4),.line-editor-table td:nth-child(4){width:145px;min-width:145px}
+.line-editor-table:not(.has-product-description) th:nth-child(3),.line-editor-table:not(.has-product-description) td:nth-child(3){width:88px}
+.line-editor-table.has-product-description.has-unit-cost{table-layout:fixed;min-width:1100px}
+.line-editor-table.has-product-description th:nth-child(2),.line-editor-table.has-product-description td:nth-child(2){width:300px}
+.line-editor-table.has-product-description th:nth-child(3),.line-editor-table.has-product-description td:nth-child(3){width:110px}
+.line-editor-table.has-product-description th:nth-child(4),.line-editor-table.has-product-description td:nth-child(4){width:90px}
+.line-editor-table.has-unit-cost th:nth-child(5),.line-editor-table.has-unit-cost td:nth-child(5){width:160px;min-width:160px}
+.line-editor-table th:nth-child(6),.line-editor-table td:nth-child(6){width:170px}
+.line-editor-table th:last-child,.line-editor-table td:last-child{width:52px}
+.line-editor-table .product-description-input{min-height:72px;overflow:hidden;resize:none;white-space:pre-wrap}
+.product-description-control{width:100%;min-height:56px;height:auto;overflow:hidden;resize:none;white-space:pre-wrap}
 .flow-preview-shell{border:1px solid var(--color-border);border-radius:8px;background:var(--color-card);overflow:hidden}
 .flow-preview-bg{overflow:auto;background:#e5e7eb;padding:16px}
 .flow-preview-zoom{transform-origin:top center;margin:0 auto}
@@ -4227,6 +4553,8 @@ const flowStyles = `
 .official-meta-grid .paper-inline-control{font-weight:800;text-decoration:underline;text-underline-offset:2px}
 .stock-paper .paper-meta.two{grid-template-columns:1.5fr 1fr}
 .stock-meta-grid td:first-child{width:50%}
+.stock-meta-grid tr:nth-child(2) td:first-child>div{display:inline-block;vertical-align:middle;width:calc(100% - 42px)}
+.stock-meta-grid tr:nth-child(2) td:first-child>div .paper-inline-control{width:100%}
 .stock-paper .stock-card th{font-size:11px}
 .stock-paper .stock-card th:first-child,.stock-paper .stock-card td:first-child{width:76px}
 .stock-paper .stock-card th:nth-child(2),.stock-paper .stock-card td:nth-child(2){width:110px}

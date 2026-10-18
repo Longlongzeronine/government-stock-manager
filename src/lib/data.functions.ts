@@ -63,7 +63,7 @@ function isLocalDatabaseUnavailable(error: unknown) {
   const value = error as { code?: string; message?: string };
   return Boolean(
     value?.code && (/^08/.test(value.code) || ["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EHOSTUNREACH"].includes(value.code))
-    || /connect(?:ion)? (?:refused|timeout|terminated)|connection closed unexpectedly|econnrefused|etimedout|ehostunreach/i.test(value?.message || ""),
+    || /connect(?:ion)? (?:refused|timeout|terminated)|connection closed unexpectedly|econnrefused|etimedout|ehostunreach|proxy request failed,?\s*cannot connect to the specified address/i.test(value?.message || ""),
   );
 }
 
@@ -106,6 +106,29 @@ async function fetchSuppliersById(ids: string[]) {
   return new Map(rows.map((s: any) => [String(s.id), s]));
 }
 
+async function resolveHostedCategoryId(categoryId: unknown, categoryName: unknown) {
+  const id = String(categoryId || "").trim();
+  const name = String(categoryName || "").trim();
+  if (id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    const matches = await sbSelect("categories", `select=id&id=eq.${encodeURIComponent(id)}&limit=1`);
+    if (matches.length) return String(matches[0].id);
+  }
+  if (!name) return null;
+  const matches = await sbSelect("categories", `select=id,name&name=ilike.${encodeURIComponent(name)}&limit=2000`);
+  const existing = matches.find((category: any) => String(category.name || "").trim().toLocaleLowerCase() === name.toLocaleLowerCase());
+  if (existing) return String(existing.id);
+  try {
+    const created = await sbInsert("categories", { name }, getRestWriteConfig());
+    return String((created as any).id);
+  } catch (error) {
+    // A concurrent category creation may win between lookup and insert.
+    const refreshed = await sbSelect("categories", `select=id,name&name=ilike.${encodeURIComponent(name)}&limit=2000`);
+    const raced = refreshed.find((category: any) => String(category.name || "").trim().toLocaleLowerCase() === name.toLocaleLowerCase());
+    if (raced) return String(raced.id);
+    throw error;
+  }
+}
+
 async function attachCategorySupplier(rows: any[]) {
   const cats = await fetchCategoriesById(
     rows.map((r: any) => String(r.category_id || "")),
@@ -143,6 +166,42 @@ async function nextStockNumber(sql: any) {
   return String(Number(row?.next_number || 1)).padStart(3, "0");
 }
 
+async function ensureLocalStockNumbers(sql: any) {
+  await sql.begin(async (tx: any) => {
+    await tx`SELECT pg_advisory_xact_lock(hashtextextended('inventory-stock-number-sequence', 0))`;
+    const missing = await tx`
+      SELECT id FROM items
+      WHERE stock_number IS NULL OR btrim(stock_number) = ''
+      ORDER BY sort_order ASC NULLS LAST, created_at ASC, id
+      FOR UPDATE
+    `;
+    for (const item of missing) {
+      const stockNumber = await nextStockNumber(tx);
+      await tx`UPDATE items SET stock_number = ${stockNumber} WHERE id = ${item.id}`;
+    }
+  });
+}
+
+function assignMissingStockNumbers(rows: any[]) {
+  const numbered = rows.map((row) => ({ ...row }));
+  const highest = numbered.reduce((max, row) => {
+    const value = String(row.stock_number || "").trim();
+    return /^\d+$/.test(value) ? Math.max(max, Number(value)) : max;
+  }, 0);
+  let next = highest + 1;
+  const missing = numbered
+    .filter((row) => !String(row.stock_number || "").trim())
+    .sort((a, b) =>
+      (Number(a.sort_order ?? Number.MAX_SAFE_INTEGER) - Number(b.sort_order ?? Number.MAX_SAFE_INTEGER)) ||
+      String(a.created_at || "").localeCompare(String(b.created_at || "")) ||
+      String(a.id).localeCompare(String(b.id)),
+    );
+  for (const row of missing) {
+    row.stock_number = String(next++).padStart(3, "0");
+  }
+  return { numbered, missing };
+}
+
 // ============================================
 // ITEMS
 // ============================================
@@ -170,6 +229,7 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
   return withDbFallback(
     async (sql) => {
       await ensureItemCodes(sql);
+      await ensureLocalStockNumbers(sql);
       const rows = await sql`
         SELECT
           i.*,
@@ -196,7 +256,38 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
         "items",
         "select=*,category:categories(id,name),supplier:suppliers(id,name)&order=name.asc&limit=2000",
       );
-      return rows.map((r: any) => withCategorySupplier(r));
+      const { numbered, missing } = assignMissingStockNumbers(rows);
+      if (missing.length > 0) {
+        try {
+          await sbRpc("ensure_stock_numbers", {
+            p_item_ids: missing.map((item) => item.id),
+          });
+          const refreshedRows = await sbSelect(
+            "items",
+            "select=*,category:categories(id,name),supplier:suppliers(id,name)&order=name.asc&limit=2000",
+          );
+          return refreshedRows.map((r: any) => withCategorySupplier(r));
+        } catch (error) {
+          // Older hosted projects may not have the repair RPC yet. Fall back
+          // to writing the stable generated numbers directly below.
+          console.warn("Stock number RPC unavailable; repairing item rows via REST:", error);
+        }
+      }
+      for (const item of missing) {
+        try {
+          await sbUpdate(
+            "items",
+            `id=eq.${encodeURIComponent(item.id)}`,
+            { stock_number: item.stock_number },
+            getRestWriteConfig(),
+          );
+        } catch (error) {
+          // Keep generated number visible in this response even if a hosted
+          // deployment has not granted the REST key permission to repair rows.
+          console.error(`Unable to save stock number for item ${item.id}:`, error);
+        }
+      }
+      return numbered.map((r: any) => withCategorySupplier(r));
     },
   ).catch((e: any) => {
     console.error("listItems error:", e);
@@ -308,6 +399,25 @@ function missingItemColumn(error: unknown) {
   return match?.[1] || null;
 }
 
+async function sbInsertWithOptionalColumns<T = any>(
+  table: string,
+  row: Record<string, unknown>,
+  optionalColumns: readonly string[],
+  writeCfg: { url: string; key: string } | null = null,
+): Promise<T> {
+  let payload = { ...row };
+  const optional = new Set(optionalColumns);
+  for (;;) {
+    try {
+      return await sbInsert<T>(table, payload, writeCfg);
+    } catch (error) {
+      const column = missingItemColumn(error);
+      if (!column || !optional.delete(column)) throw error;
+      delete payload[column];
+    }
+  }
+}
+
 function omitUnsupportedItemColumn(
   payload: Record<string, unknown>,
   column: string,
@@ -344,6 +454,7 @@ export const createItem = createServerFn({ method: "POST" })
           if (duplicate) throw new Error("Matching inventory item already exists. Select or edit the existing item to avoid a duplicate master record.");
           const [maxRow] = await tx`SELECT COALESCE(MAX(sort_order), 0) AS m FROM items`;
           const nextSort = Number(maxRow.m) + 1;
+          await tx`SELECT pg_advisory_xact_lock(hashtextextended('inventory-stock-number-sequence', 0))`;
           const [row] = await tx`
             INSERT INTO items ${tx(itemWritePayload(itemData, { stock_number: itemData.stock_number || await nextStockNumber(tx), sort_order: nextSort }))}
             RETURNING *
@@ -363,7 +474,8 @@ export const createItem = createServerFn({ method: "POST" })
         if (matches.some((item: any) => String(item.name || "").trim().toLocaleLowerCase() === itemData.name.toLocaleLowerCase() && String(item.description || "").trim().toLocaleLowerCase() === String(itemData.description || "").trim().toLocaleLowerCase())) {
           throw new Error("Matching inventory item already exists. Select or edit the existing item to avoid a duplicate master record.");
         }
-        let payload: Record<string, unknown> = itemWritePayload(itemData);
+        const hostedCategoryId = await resolveHostedCategoryId(itemData.category_id, itemData.category_name);
+        let payload: Record<string, unknown> = itemWritePayload({ ...itemData, category_id: hostedCategoryId });
         let monthlyQuantitiesSaved = true;
         let legacySchemaUsed = false;
         let created: any;
@@ -567,10 +679,11 @@ export const updateItem = createServerFn({ method: "POST" })
           data.item_type,
           data.acquisition_cost,
         );
+        const hostedCategoryId = await resolveHostedCategoryId(data.category_id, data.category_name);
         const payload: Record<string, unknown> = {
           name: data.name,
           description: data.description ?? null,
-          category_id: data.category_id || null,
+          category_id: hostedCategoryId,
           supplier_id: data.supplier_id || null,
           item_type: data.item_type || "supply",
           inventory_classification:
@@ -680,8 +793,15 @@ export const postIar = createServerFn({ method: "POST" })
         const quantity = Number(line.quantity);
         const unitCost = Number(line.unit_cost || 0);
         if (!line.item_id || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitCost) || unitCost < 0) throw new Error("Each IAR item needs an item, positive quantity, and nonnegative unit cost.");
-        const [item] = await tx`SELECT id FROM items WHERE id = ${line.item_id} FOR UPDATE`;
+        const [item] = await tx`SELECT id, stock_number FROM items WHERE id = ${line.item_id} FOR UPDATE`;
         if (!item) throw new Error("Selected inventory item was not found.");
+        if (!String(item.stock_number || "").trim()) {
+          // Serialize number allocation across concurrent IAR posts. Existing
+          // numbers (including suffixes such as 001A) remain attached to item.
+          await tx`SELECT pg_advisory_xact_lock(hashtextextended('inventory-stock-number-sequence', 0))`;
+          const stockNumber = await nextStockNumber(tx);
+          await tx`UPDATE items SET stock_number = ${stockNumber} WHERE id = ${item.id}`;
+        }
         const remarks = [`IAR ${data.iar_no}`, line.product_description ? `Description: ${line.product_description}` : "", data.supplier ? `Supplier: ${data.supplier}` : "", data.invoice_no ? `Invoice: ${data.invoice_no}` : "", unitCost ? `Unit Cost: PHP ${unitCost.toFixed(2)}` : "", line.remarks || ""].filter(Boolean).join(" | ");
         const [transaction] = await tx`INSERT INTO transactions ${tx({
           item_id: line.item_id, type: "IN", quantity, staff_id: data.created_by || null,
@@ -700,7 +820,16 @@ export const postIar = createServerFn({ method: "POST" })
     }),
     async () => {
       try {
-        return await sbRpc("post_iar", { payload: data });
+        const result = await sbRpc("post_iar", { payload: data });
+        const itemIds = [...new Set((data.lines ?? []).map((line: any) => String(line.item_id || "")).filter(Boolean))];
+        try {
+          await sbRpc("ensure_stock_numbers", { p_item_ids: itemIds });
+        } catch (error) {
+          // Older hosted projects may not have the repair RPC until the stock
+          // number migration is applied. Do not report a posted IAR as failed.
+          console.error("IAR posted, but stock number repair failed:", error);
+        }
+        return result;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (/post_iar.*schema cache|schema cache.*post_iar/i.test(message)) {
@@ -730,12 +859,16 @@ export const listCategories = createServerFn({ method: "GET" }).handler(
 export const createCategory = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [row] = await sql`
-      INSERT INTO categories ${sql({ name: data.name, description: data.description || null })}
-      RETURNING *
-    `;
-    return row;
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`
+          INSERT INTO categories ${sql({ name: data.name, description: data.description || null })}
+          RETURNING *
+        `;
+        return row;
+      },
+      async () => sbInsert("categories", { name: data.name, description: data.description || null }, getRestWriteConfig()),
+    );
   });
 
 export const updateCategory = createServerFn({ method: "POST" })
@@ -910,18 +1043,46 @@ export const listTransactionsAsc = createServerFn({ method: "GET" })
 export const createTransaction = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
     const quantity = Number(data.quantity);
-    return await sql.begin(async (tx: any) => {
-      const [item] = await tx`
-        SELECT quantity FROM items WHERE id = ${data.item_id} FOR UPDATE
-      `;
-      if (!item) throw new Error("Inventory item was not found.");
-      if (data.type === "OUT" && Number(item.quantity) < quantity) {
-        throw new Error(`Only ${item.quantity} units are available.`);
-      }
-      const [row] = await tx`
-        INSERT INTO transactions ${tx({
+    return withDbFallback(
+      async (sql) => sql.begin(async (tx: any) => {
+        const [item] = await tx`
+          SELECT quantity FROM items WHERE id = ${data.item_id} FOR UPDATE
+        `;
+        if (!item) throw new Error("Inventory item was not found.");
+        if (data.type === "OUT" && Number(item.quantity) < quantity) {
+          throw new Error(`Only ${item.quantity} units are available.`);
+        }
+        const [row] = await tx`
+          INSERT INTO transactions ${tx({
+            item_id: data.item_id,
+            type: data.type,
+            quantity,
+            staff_id: data.staff_id || null,
+            staff_name: data.staff_name || null,
+            remarks: data.remarks || null,
+            source_form_type: data.source_form_type || null,
+            source_form_id: data.source_form_id || null,
+          })}
+          RETURNING *
+        `;
+        await tx`
+          UPDATE items
+          SET quantity = quantity + ${data.type === "IN" ? quantity : -quantity}
+          WHERE id = ${data.item_id}
+        `;
+        return row;
+      }),
+      async () => {
+        const [item] = await sbSelect(
+          "items",
+          `select=id,quantity&id=eq.${encodeURIComponent(data.item_id)}&limit=1`,
+        );
+        if (!item) throw new Error("Inventory item was not found.");
+        if (data.type === "OUT" && Number(item.quantity) < quantity) {
+          throw new Error(`Only ${item.quantity} units are available.`);
+        }
+        return sbInsert("transactions", {
           item_id: data.item_id,
           type: data.type,
           quantity,
@@ -930,16 +1091,9 @@ export const createTransaction = createServerFn({ method: "POST" })
           remarks: data.remarks || null,
           source_form_type: data.source_form_type || null,
           source_form_id: data.source_form_id || null,
-        })}
-        RETURNING *
-      `;
-      await tx`
-        UPDATE items
-        SET quantity = quantity + ${data.type === "IN" ? quantity : -quantity}
-        WHERE id = ${data.item_id}
-      `;
-      return row;
-    });
+        }, getRestWriteConfig());
+      },
+    );
   });
 
 // ============================================
@@ -962,12 +1116,15 @@ export const listAuditLogs = createServerFn({ method: "GET" }).handler(
 
 export const listIarForms = createServerFn({ method: "GET" }).handler(
   async () => {
-    try {
-      const sql = await getDb();
-      return await sql`SELECT * FROM iar_forms ORDER BY created_at DESC`;
-    } catch {
-      return [];
-    }
+    return withDbFallback(
+      async (sql) => await sql`
+        SELECT id, iar_no, form_data FROM iar_forms ORDER BY created_at DESC
+      `,
+      async () => await sbSelect(
+        "iar_forms",
+        "select=id,iar_no,form_data&order=created_at.desc&limit=5000",
+      ),
+    ).catch(() => []);
   },
 );
 
@@ -1013,9 +1170,7 @@ export const createIarItem = createServerFn({ method: "POST" })
 export const createRisForm = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [row] = await sql`
-      INSERT INTO ris_forms ${sql({
+    const payload = {
         ris_no: data.ris_no,
         office: data.office || null,
         purpose: data.purpose || null,
@@ -1034,17 +1189,35 @@ export const createRisForm = createServerFn({ method: "POST" })
         created_by_name: data.created_by_name || null,
         status: data.status || "pending",
         priority: data.priority || "normal",
-      })}
-      RETURNING *
-    `;
-    return row;
+    };
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`INSERT INTO ris_forms ${sql(payload)} RETURNING *`;
+        return row;
+      },
+      async () => sbInsertWithOptionalColumns(
+        "ris_forms",
+        payload,
+        [
+          "priority",
+          "approved_date",
+          "issued_date",
+          "verification_token",
+          "verification_code",
+          "document_version",
+          "verification_status",
+          "verification_published_at",
+        ],
+        getRestWriteConfig(),
+      ),
+    );
   });
 
 export const listRisForms = createServerFn({ method: "GET" })
   .inputValidator((d: { created_by?: string } | undefined) => d ?? {})
   .handler(async ({ data }) => {
-    try {
-      const sql = await getDb();
+    return withDbFallback(
+      async (sql) => {
       const createdBy = data.created_by?.trim() || null;
       return await sql`
         SELECT
@@ -1076,24 +1249,103 @@ export const listRisForms = createServerFn({ method: "GET" })
           CASE WHEN r.status IN ('pending', 'draft') THEN 0 ELSE 1 END,
           r.created_at DESC
       `;
-    } catch (e) {
-      console.error("listRisForms error:", e);
-      return [];
-    }
+      },
+      async () => {
+        const ownerFilter = data.created_by?.trim()
+          ? `&created_by=eq.${encodeURIComponent(data.created_by.trim())}`
+          : "";
+        const forms = await sbSelect<any>(
+          "ris_forms",
+          `select=id,ris_no,office,purpose,requested_by,status,created_at${ownerFilter}&order=created_at.desc&limit=1000`,
+        );
+        if (forms.length === 0) return [];
+
+        const formIds = forms.map((form) => String(form.id));
+        const risItems = await sbSelect<any>(
+          "ris_items",
+          `select=ris_id,item_id,quantity,remarks&ris_id=in.(${formIds.map(encodeURIComponent).join(",")})&limit=10000`,
+        );
+        const itemIds = [...new Set(risItems.map((line) => String(line.item_id)))];
+        const items = itemIds.length
+          ? await sbSelect<any>(
+              "items",
+              `select=id,name,unit,acquisition_cost,category_id,supplier_id&id=in.(${itemIds.map(encodeURIComponent).join(",")})&limit=10000`,
+            )
+          : [];
+        const categoryIds = [...new Set(items.map((item) => String(item.category_id || "")).filter(Boolean))];
+        const supplierIds = [...new Set(items.map((item) => String(item.supplier_id || "")).filter(Boolean))];
+        const [categories, suppliers] = await Promise.all([
+          categoryIds.length
+            ? sbSelect<any>("categories", `select=id,name&id=in.(${categoryIds.map(encodeURIComponent).join(",")})&limit=10000`)
+            : Promise.resolve([]),
+          supplierIds.length
+            ? sbSelect<any>("suppliers", `select=id,name&id=in.(${supplierIds.map(encodeURIComponent).join(",")})&limit=10000`)
+            : Promise.resolve([]),
+        ]);
+        const itemById = new Map(items.map((item) => [String(item.id), item]));
+        const categoryById = new Map(categories.map((category: any) => [String(category.id), category.name]));
+        const supplierById = new Map(suppliers.map((supplier: any) => [String(supplier.id), supplier.name]));
+        const linesByForm = new Map<string, any[]>();
+        for (const line of risItems) {
+          const lines = linesByForm.get(String(line.ris_id)) || [];
+          lines.push(line);
+          linesByForm.set(String(line.ris_id), lines);
+        }
+
+        return forms.map((form) => {
+          const lines = linesByForm.get(String(form.id)) || [];
+          const lineItems = lines.map((line) => ({
+            line,
+            item: itemById.get(String(line.item_id)),
+          }));
+          const distinct = (values: unknown[]) => [...new Set(values
+            .filter((value) => value !== null && value !== undefined && String(value).trim() !== "")
+            .map(String))].sort();
+          const itemNames = distinct(lineItems.map(({ item }) => item?.name));
+          const categoriesForForm = distinct(lineItems.map(({ item }) => item ? categoryById.get(String(item.category_id || "")) : ""));
+          const units = distinct(lineItems.map(({ item }) => item?.unit));
+          const vendors = distinct(lineItems.map(({ item }) => item ? supplierById.get(String(item.supplier_id || "")) : ""));
+          const quantity = lines.reduce((sum, line) => sum + Number(line.quantity || 0), 0);
+          const totalAmount = lineItems.reduce((sum, { line, item }) => sum + Number(line.quantity || 0) * Number(item?.acquisition_cost || 0), 0);
+          const remarks = distinct(lines.map((line) => line.remarks));
+          return {
+            ...form,
+            priority: "normal",
+            review_notes: null,
+            item_name: itemNames.join(", ") || "No item listed",
+            category_name: categoriesForForm.join(", ") || "Uncategorized",
+            quantity,
+            unit: units.join(", ") || "pcs",
+            acquisition_cost: quantity > 0 ? totalAmount / quantity : 0,
+            total_amount: totalAmount,
+            remarks: remarks.join(" | ") || form.purpose || "",
+            supplier_name: vendors.join(", "),
+          };
+        });
+      },
+    );
   });
 
 export const getRisFormStatus = createServerFn({ method: "GET" })
   .inputValidator((d: { ris_no: string }) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [row] = await sql`
-      SELECT status
-      FROM ris_forms
-      WHERE ris_no = ${data.ris_no}
-      ORDER BY created_at DESC
-      LIMIT 1
-    `;
-    return (row?.status as string | null | undefined) ?? null;
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`
+          SELECT status FROM ris_forms
+          WHERE ris_no = ${data.ris_no}
+          ORDER BY created_at DESC LIMIT 1
+        `;
+        return (row?.status as string | null | undefined) ?? null;
+      },
+      async () => {
+        const [row] = await sbSelect<any>(
+          "ris_forms",
+          `select=status&ris_no=eq.${encodeURIComponent(data.ris_no)}&order=created_at.desc&limit=1`,
+        );
+        return (row?.status as string | null | undefined) ?? null;
+      },
+    );
   });
 
 export const updateRisFormStatus = createServerFn({ method: "POST" })
@@ -1105,40 +1357,65 @@ export const updateRisFormStatus = createServerFn({ method: "POST" })
     }) => d,
   )
   .handler(async ({ data }) => {
-    const sql = await getDb();
     const status = data.status;
-    const [row] = await sql`
-      UPDATE ris_forms
-      SET
-        status = ${status},
-        review_notes = coalesce(nullif(btrim(${data.review_note || ""}), ''), review_notes),
-        approved_date = CASE
-          WHEN ${status} IN ('approved', 'issued') THEN coalesce(approved_date, current_date)
-          ELSE approved_date
-        END
-      WHERE id = ${data.id}
-        AND status IN ('pending', 'draft', 'approved', 'issued', 'rejected', 'cancelled')
-      RETURNING *
-    `;
-    if (!row) throw new Error("RIS request was not found or could not be updated.");
-    return row;
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`
+          UPDATE ris_forms
+          SET
+            status = ${status},
+            review_notes = coalesce(nullif(btrim(${data.review_note || ""}), ''), review_notes),
+            approved_date = CASE
+              WHEN ${status} IN ('approved', 'issued') THEN coalesce(approved_date, current_date)
+              ELSE approved_date
+            END
+          WHERE id = ${data.id}
+            AND status IN ('pending', 'draft', 'approved', 'issued', 'rejected', 'cancelled')
+          RETURNING *
+        `;
+        if (!row) throw new Error("RIS request was not found or could not be updated.");
+        return row;
+      },
+      async () => {
+        let payload: Record<string, unknown> = { status, review_notes: data.review_note || null };
+        const optional = new Set(["review_notes", "approved_date"]);
+        for (;;) {
+          try {
+            const rows = await sbUpdate(
+              "ris_forms",
+              `id=eq.${encodeURIComponent(data.id)}`,
+              payload,
+              getRestWriteConfig(),
+            );
+            if (!rows[0]) throw new Error("RIS request was not found or could not be updated.");
+            return rows[0];
+          } catch (error) {
+            const column = missingItemColumn(error);
+            if (!column || !optional.delete(column)) throw error;
+            delete payload[column];
+          }
+        }
+      },
+    );
   });
 
 export const createRisItem = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [row] = await sql`
-      INSERT INTO ris_items ${sql({
+    const payload = {
         ris_id: data.ris_id,
         item_id: data.item_id,
         quantity: Number(data.quantity),
         remarks: data.remarks || null,
         transaction_id: data.transaction_id || null,
-      })}
-      RETURNING *
-    `;
-    return row;
+    };
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`INSERT INTO ris_items ${sql(payload)} RETURNING *`;
+        return row;
+      },
+      async () => sbInsert("ris_items", payload, getRestWriteConfig()),
+    );
   });
 
 export const getRisVerification = createServerFn({ method: "GET" })
@@ -1219,26 +1496,100 @@ export const reserveNextFormNumber = createServerFn({ method: "POST" })
     const year = Number(date.slice(0, 4));
     const prefix = data.prefix.toUpperCase();
     return withDbFallback(
-      async (sql) => {
-        const [counter] = await sql`
+      async (sql) => sql.begin(async (tx: any) => {
+        let historyNext = 1;
+        if (prefix === "RIS") {
+          const [latest] = await tx`
+            SELECT COALESCE(
+              MAX(NULLIF(substring(ris_no from '-([0-9]+)$'), '')::bigint),
+              0
+            ) AS last_number
+            FROM ris_forms
+            WHERE ris_no LIKE ${`${date}-%`}
+          `;
+          historyNext = Number(latest.last_number || 0) + 1;
+        }
+        const [counter] = await tx`
           INSERT INTO form_number_counters (form_prefix, series_year, last_number)
-          VALUES (${prefix}, ${year}, 1)
+          VALUES (${prefix}, ${year}, ${historyNext})
           ON CONFLICT (form_prefix, series_year)
-          DO UPDATE SET last_number = form_number_counters.last_number + 1
+          DO UPDATE SET last_number = GREATEST(
+            form_number_counters.last_number + 1,
+            EXCLUDED.last_number
+          )
           RETURNING last_number
         `;
         const series = String(counter.last_number).padStart(7, "0");
         return prefix === "RIS"
           ? `${date}-${series}`
           : `${prefix}-${date}-${series}`;
-      },
+      }),
       // Hosted Worker cannot open a TCP connection to local PostgreSQL.
       // Supabase RPC performs the same atomic upsert in the hosted database.
-      async () =>
-        await sbRpc<string>("next_form_number", {
-          p_form_prefix: prefix,
-          p_form_date: date,
-        }),
+      async () => {
+        let reservedSeries = 0;
+        try {
+          const reserved = await sbRpc<string>("next_form_number", {
+            p_form_prefix: prefix,
+            p_form_date: date,
+          });
+          reservedSeries = Number(reserved.match(/-(\d+)$/)?.[1] || 0);
+        } catch (rpcError) {
+          if (prefix !== "RIS") throw rpcError;
+        }
+        if (prefix !== "RIS") return `${prefix}-${date}-${String(reservedSeries).padStart(7, "0")}`;
+        const history = await sbSelect<{ ris_no: string }>(
+          "ris_forms",
+          `select=ris_no&ris_no=like.${encodeURIComponent(date)}-*&order=ris_no.desc&limit=10000`,
+        );
+        const historySeries = history.reduce((max, form) => {
+          const match = form.ris_no.match(new RegExp(`^${date}-(\\d+)$`));
+          return Math.max(max, Number(match?.[1] || 0));
+        }, 0);
+        return `${date}-${String(Math.max(reservedSeries, historySeries + 1, 1)).padStart(7, "0")}`;
+      },
+    );
+  });
+
+export const getNextRisNumberFromHistory = createServerFn({ method: "GET" })
+  .inputValidator((d: { date: string }) => d)
+  .handler(async ({ data }) => {
+    const date = data.date;
+    const year = Number(date.slice(0, 4));
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`
+          SELECT GREATEST(
+            COALESCE((
+              SELECT last_number FROM form_number_counters
+              WHERE form_prefix = 'RIS' AND series_year = ${year}
+            ), 0),
+            COALESCE((
+              SELECT MAX(NULLIF(substring(ris_no from '-([0-9]+)$'), '')::bigint)
+              FROM ris_forms WHERE ris_no LIKE ${`${date}-%`}
+            ), 0)
+          ) + 1 AS next_number
+        `;
+        return `${date}-${String(Number(row.next_number)).padStart(7, "0")}`;
+      },
+      async () => {
+        const [latest] = await sbSelect<{ ris_no: string }>(
+          "ris_forms",
+          `select=ris_no&ris_no=like.${encodeURIComponent(date)}-*&order=ris_no.desc&limit=1`,
+        );
+        const historySeries = Number(latest?.ris_no?.match(/-(\d+)$/)?.[1] || 0);
+        let counterSeries = 0;
+        try {
+          const [counter] = await sbSelect<{ last_number: number }>(
+            "form_number_counters",
+            `select=last_number&form_prefix=eq.RIS&series_year=eq.${year}&limit=1`,
+          );
+          counterSeries = Number(counter?.last_number || 0);
+        } catch {
+          // Older hosted projects may not have the optional counter table.
+        }
+        return `${date}-${String(Math.max(historySeries, counterSeries) + 1).padStart(7, "0")}`;
+      },
     );
   });
 

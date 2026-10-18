@@ -175,11 +175,11 @@ export async function sbRpc<T = any>(
 
 /** True when running inside Cloudflare Workers (no local Postgres reachable). */
 export function isWorkersRuntime(): boolean {
-  const proc = (globalThis as any)?.process;
-  // Workers with nodejs_compat still expose process, but DATABASE_URL secret
-  // is only present when explicitly set  localhost fallback means misconfig.
-  const url = String(proc?.env?.DATABASE_URL || "").trim();
-  if (!url) return true;
-  if (/localhost|127\.0\.0\.1/.test(url)) return true;
-  return false;
+  const runtime = globalThis as any;
+  // src/server.ts sets this marker for every Cloudflare Worker request. Do not
+  // infer runtime from DATABASE_URL: local Vite reads that value from .env in
+  // local-db.ts, where it is not necessarily present in process.env.
+  if (typeof runtime.WebSocketPair !== "undefined") return true;
+  if (runtime.process?.versions?.node) return false;
+  return runtime.__WORKER_ENV__ !== undefined;
 }

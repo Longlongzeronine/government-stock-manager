@@ -65,9 +65,13 @@ these files one by one, in this order:
 1. `supabase/migrations/20260727000000_forms_flow_improvements.sql`
 2. `supabase/migrations/20260911000000_approval_workflow.sql`
 3. `supabase/migrations/20260921000000_inventory_monthly_columns.sql`
+4. `supabase/migrations/20261018000000_iar_stock_number_generation.sql`
+5. `supabase/migrations/20261018010000_stock_card_number_sequence.sql`
 
-All three are idempotent (`if not exists`, `drop ... if exists`), so they are safe to
-re-run. After they are applied, backfill the new columns with a full resync:
+These migrations are idempotent, so they are safe to re-run. The stock number
+migration assigns numbers to existing inventory records and numbers future item
+inserts sequentially, starting at `001`. After they are applied, backfill the new
+columns with a full resync:
 
 ```bash
 npm run sync:once
@@ -151,9 +155,9 @@ npx wrangler secret put DATABASE_URL
 npx wrangler deploy
 ```
 
-`process.env.DATABASE_URL` then resolves inside the Worker and `data.functions.ts`
-runs against the synced Supabase data instead of your PC. Local development keeps
-using `.env` (`localhost:5433`) unchanged.
+`process.env.DATABASE_URL` then resolves inside the Worker. If the Postgres pooler
+cannot be reached from the Worker, data functions fall back to Supabase REST over
+HTTPS. Local development keeps using `.env` (`localhost:5433`) unchanged.
 
 ## 6. Import through the SQL editor instead of the API
 

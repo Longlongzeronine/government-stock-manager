@@ -7,6 +7,7 @@ type FundClusterControlProps = {
   onChange: (value: string) => void;
   editable?: boolean;
   className?: string;
+  options?: readonly string[];
 };
 
 export function FundClusterControl({
@@ -14,10 +15,9 @@ export function FundClusterControl({
   onChange,
   editable = true,
   className = "flow-input",
+  options = FUND_CLUSTER_OPTIONS,
 }: FundClusterControlProps) {
-  const isPreset = FUND_CLUSTER_OPTIONS.includes(
-    value as (typeof FUND_CLUSTER_OPTIONS)[number],
-  );
+  const isPreset = options.includes(value);
 
   if (!editable) return <span className="strong">{value || ""}</span>;
 
@@ -34,7 +34,7 @@ export function FundClusterControl({
           )
         }
       >
-        {FUND_CLUSTER_OPTIONS.map((option) => (
+        {options.map((option) => (
           <option key={option} value={option}>
             {option}
           </option>

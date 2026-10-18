@@ -78,6 +78,7 @@ export function ItemDialog({
       name: String(form.name || "").trim(),
       description: form.description || null,
       category_id: form.category_id || null,
+      category_name: localCats.find((category: any) => String(category.id) === String(form.category_id))?.name || null,
       supplier_id: form.supplier_id || null,
       item_type: form.item_type || "supply",
       acquisition_cost: Number(form.acquisition_cost) || 0,
