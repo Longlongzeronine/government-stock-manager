@@ -433,7 +433,13 @@ function FormsFlow() {
     [pickerItems, transactions, clusterItemIds],
   );
   useEffect(() => {
-    if (stockCardItems.length && !stockCardItems.some((item) => item.id === selectedItemId)) {
+    // Keep an explicitly cleared Stock Card item empty. Only replace a prior
+    // selection when filtering removes that selected inventory item.
+    if (
+      selectedItemId &&
+      stockCardItems.length &&
+      !stockCardItems.some((item) => item.id === selectedItemId)
+    ) {
       setSelectedItemId(stockCardItems[0].id);
     }
   }, [stockCardItems, selectedItemId]);
