@@ -217,7 +217,7 @@ function FormsFlow() {
   const stockCardFundCluster = activeFundCluster;
   const risFundCluster = activeFundCluster;
   const rsmiFundCluster = activeFundCluster;
-  const [rpciFundCluster, setRpciFundCluster] = useState(FORM_DEFAULTS.fundCluster);
+  const rpciFundCluster = activeFundCluster;
   const [rpciEntries, setRpciEntries] = useState<Record<string, RpciEntry>>({});
   const [iar, setIar] = useState<IarState>({
     iarNo: makeFormNumber("IAR", today),
@@ -455,8 +455,17 @@ function FormsFlow() {
     [transactions, reportMonth, activeFundCluster, iarForms],
   );
   const rpciRows = useMemo(
-    () => getRpciRows(items, transactions, rpciStartDate, rpciEndDate, rpciEntries),
-    [items, transactions, rpciStartDate, rpciEndDate, rpciEntries],
+    () =>
+      getRpciRows(
+        items,
+        transactions,
+        rpciStartDate,
+        rpciEndDate,
+        rpciEntries,
+        activeFundCluster,
+        iarForms,
+      ),
+    [items, transactions, rpciStartDate, rpciEndDate, rpciEntries, activeFundCluster, iarForms],
   );
   const flowStats = useMemo(
     () => getFlowStats(transactions, reportMonth, tab),
@@ -1058,7 +1067,7 @@ function FormsFlow() {
                 setRsmiFundCluster={setFormsFundCluster}
                 rsmiFundClusterOptions={iarFundClusterOptions.length ? iarFundClusterOptions : undefined}
                 rpciFundCluster={rpciFundCluster}
-                setRpciFundCluster={setRpciFundCluster}
+                setRpciFundCluster={setFormsFundCluster}
                 rpciRows={rpciRows}
                 rpciEntries={rpciEntries}
                 setRpciEntries={setRpciEntries}
@@ -1644,6 +1653,14 @@ function EntryPanel({
             onChange={(event) => setRpciEndDate(event.target.value)}
           />
         </FlowField>
+        <FlowField label="Fund Cluster">
+          <FundClusterControl
+            value={rsmiFundCluster}
+            onChange={setRsmiFundCluster}
+            options={rsmiFundClusterOptions}
+            className="flow-input"
+          />
+        </FlowField>
       </div>
     </section>
   );
@@ -1797,6 +1814,7 @@ function PaperPreview({
               onEndDate={setRpciEndDate}
               fundCluster={rpciFundCluster}
               onFundCluster={setRpciFundCluster}
+              fundClusterOptions={rsmiFundClusterOptions}
               rows={rpciRows}
               entries={rpciEntries}
               onEntries={setRpciEntries}
@@ -2979,6 +2997,7 @@ function RpciPaper({
   onEndDate,
   fundCluster,
   onFundCluster,
+  fundClusterOptions,
   rows,
   entries,
   onEntries,
@@ -2991,6 +3010,7 @@ function RpciPaper({
   onEndDate: (date: string) => void;
   fundCluster: string;
   onFundCluster: (value: string) => void;
+  fundClusterOptions?: readonly string[];
   rows: RpciRow[];
   entries: Record<string, RpciEntry>;
   onEntries: (entries: Record<string, RpciEntry>) => void;
@@ -3040,7 +3060,7 @@ function RpciPaper({
       </div>
       <div className="mt-3 text-[10px]">
         Fund Cluster:{" "}
-        <FundClusterControl value={fundCluster} onChange={onFundCluster} editable={editable} className="paper-inline-control strong" />
+        <FundClusterControl value={fundCluster} onChange={onFundCluster} options={fundClusterOptions} editable={editable} className="paper-inline-control strong" />
       </div>
       <div className="mt-2 text-[9px]">
         For which <span className="strong">{FORM_DEFAULTS.custodian}</span>, Provincial Training Center - Davao del Norte, is accountable.
@@ -4269,6 +4289,8 @@ function getRpciRows(
   startDate: string,
   endDate: string,
   entries: Record<string, RpciEntry>,
+  fundCluster: string,
+  iarForms: IarFormRecord[],
 ): RpciRow[] {
   const periodStart = new Date(`${startDate}T00:00:00`);
   const periodEnd = new Date(`${endDate}T23:59:59.999`);
@@ -4277,11 +4299,14 @@ function getRpciRows(
     periodStart.getTime() <= periodEnd.getTime();
   if (!rangeIsValid) return [];
 
+  const itemClusters = getIarItemClusters(transactions, iarForms);
+
   return items
     .filter(
       (item) =>
-        item.item_type === "supply" ||
-        item.inventory_classification === "expendable_supply",
+        (item.item_type === "supply" ||
+          item.inventory_classification === "expendable_supply") &&
+        itemClusters.get(item.id)?.has(fundCluster),
     )
     .map((item) => {
       const movementsAfterYear = transactions
