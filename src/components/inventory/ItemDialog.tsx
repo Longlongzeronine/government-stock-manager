@@ -8,7 +8,6 @@ const ITEM_MONTH_KEYS = [
   "may_quantity", "jun_quantity", "jul_quantity", "aug_quantity",
   "sep_quantity", "oct_quantity", "nov_quantity", "dec_quantity",
 ] as const;
-const ITEM_MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 type ItemDialogProps = {
   editing: any | null;
@@ -17,6 +16,7 @@ type ItemDialogProps = {
   onSaved: (item?: any) => void | Promise<void>;
   onCategoryCreated?: () => void;
   initialName?: string;
+  initialDescription?: string;
 };
 
 export function ItemDialog({
@@ -26,11 +26,12 @@ export function ItemDialog({
   onSaved,
   onCategoryCreated,
   initialName = "",
+  initialDescription = "",
 }: ItemDialogProps) {
   const [form, setForm] = useState<any>(() => ({
     barcode_value: editing?.barcode_value ?? "",
     name: editing?.name ?? initialName,
-    description: editing?.description ?? "",
+    description: editing?.description ?? initialDescription,
     category_id: editing?.category_id ?? "",
     supplier_id: editing?.supplier_id ?? "",
     item_type: editing?.item_type ?? "supply",
@@ -47,7 +48,6 @@ export function ItemDialog({
 
   useEffect(() => setLocalCats(cats || []), [cats]);
 
-  const monthTotal = ITEM_MONTH_KEYS.reduce((sum, key) => sum + (Number(form[key]) || 0), 0);
   const dialogClassification = classifyInventoryItem(form.item_type, form.acquisition_cost);
 
   async function createCategoryInline() {
@@ -84,7 +84,9 @@ export function ItemDialog({
       acquisition_cost: Number(form.acquisition_cost) || 0,
       unit: form.unit,
       reorder_level: Number(form.reorder_level) || 10,
-      quantity: monthTotal,
+      // Monthly requirement fields are hidden. Preserve current on-hand stock
+      // when editing; newly created items start at zero until received in IAR.
+      quantity: Number(editing?.quantity) || 0,
       ...Object.fromEntries(ITEM_MONTH_KEYS.map((key) => [key, Number(form[key]) || 0])),
     };
 
@@ -158,18 +160,6 @@ export function ItemDialog({
               </div>
             )}
           </Field>
-          <div className="col-span-full">
-            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Monthly Quantity Requirement (Jan–Dec)</span>
-            <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-6">
-              {ITEM_MONTH_KEYS.map((key, index) => (
-                <label key={key} className="block">
-                  <span className="text-[10px] uppercase text-muted-foreground">{ITEM_MONTH_LABELS[index]}</span>
-                  <input type="number" min={0} className="dlg-input" value={form[key] ?? 0} onChange={(event) => setForm({ ...form, [key]: event.target.value as any })} />
-                </label>
-              ))}
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">Total quantity for the year: <strong>{monthTotal}</strong></p>
-          </div>
         </div>
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" onClick={onClose} className="rounded-md border border-input px-4 py-2 text-sm">Cancel</button>

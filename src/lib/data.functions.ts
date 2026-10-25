@@ -808,7 +808,7 @@ export const postIar = createServerFn({ method: "POST" })
           staff_name: data.created_by_name || null, source_form_type: "IAR", source_form_id: form.id,
           remarks, product_description: line.product_description || null,
         })} RETURNING *`;
-        await tx`UPDATE items SET quantity = quantity + ${quantity} WHERE id = ${line.item_id}`;
+        // The transactions AFTER INSERT trigger is the single balance writer.
         await tx`INSERT INTO iar_items ${tx({
           iar_id: form.id, item_id: line.item_id, quantity,
           product_description: line.product_description || null,
@@ -1044,14 +1044,30 @@ export const createTransaction = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
     const quantity = Number(data.quantity);
+    const availableFromStockCard = (itemQuantity: number, movements: any[]) => {
+      const netMovement = movements
+        .filter((movement) => {
+          const source = String(movement.source_form_type || "").toUpperCase();
+          const reference = String(movement.remarks || "").split("|")[0].trim().toUpperCase();
+          return source === "IAR" || source === "RIS" || reference.startsWith("IAR ") || reference.startsWith("RIS ");
+        })
+        .reduce((sum, movement) => sum + (movement.type === "IN" ? Number(movement.quantity) : -Number(movement.quantity)), 0);
+      return Math.max(0, itemQuantity - netMovement) + netMovement;
+    };
     return withDbFallback(
       async (sql) => sql.begin(async (tx: any) => {
         const [item] = await tx`
           SELECT quantity FROM items WHERE id = ${data.item_id} FOR UPDATE
         `;
         if (!item) throw new Error("Inventory item was not found.");
-        if (data.type === "OUT" && Number(item.quantity) < quantity) {
-          throw new Error(`Only ${item.quantity} units are available.`);
+        const stockCardTransactions = data.type === "OUT" && data.source_form_type === "RIS"
+          ? await tx`SELECT type, quantity, source_form_type, remarks FROM transactions WHERE item_id = ${data.item_id}`
+          : [];
+        const available = data.source_form_type === "RIS"
+          ? availableFromStockCard(Number(item.quantity), stockCardTransactions)
+          : Number(item.quantity);
+        if (data.type === "OUT" && available < quantity) {
+          throw new Error(`Only ${available} units are available.`);
         }
         const [row] = await tx`
           INSERT INTO transactions ${tx({
@@ -1066,11 +1082,7 @@ export const createTransaction = createServerFn({ method: "POST" })
           })}
           RETURNING *
         `;
-        await tx`
-          UPDATE items
-          SET quantity = quantity + ${data.type === "IN" ? quantity : -quantity}
-          WHERE id = ${data.item_id}
-        `;
+        // The transactions AFTER INSERT trigger is the sole balance writer.
         return row;
       }),
       async () => {
@@ -1079,8 +1091,17 @@ export const createTransaction = createServerFn({ method: "POST" })
           `select=id,quantity&id=eq.${encodeURIComponent(data.item_id)}&limit=1`,
         );
         if (!item) throw new Error("Inventory item was not found.");
-        if (data.type === "OUT" && Number(item.quantity) < quantity) {
-          throw new Error(`Only ${item.quantity} units are available.`);
+        const stockCardTransactions = data.type === "OUT" && data.source_form_type === "RIS"
+          ? await sbSelect<any>(
+              "transactions",
+              `select=type,quantity,source_form_type,remarks&item_id=eq.${encodeURIComponent(data.item_id)}&limit=5000`,
+            )
+          : [];
+        const available = data.source_form_type === "RIS"
+          ? availableFromStockCard(Number(item.quantity), stockCardTransactions)
+          : Number(item.quantity);
+        if (data.type === "OUT" && available < quantity) {
+          throw new Error(`Only ${available} units are available.`);
         }
         return sbInsert("transactions", {
           item_id: data.item_id,

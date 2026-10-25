@@ -424,13 +424,23 @@ function FormsFlow() {
     const flowIds = new Set(flowItems.map((item) => item.id));
     return [...flowItems, ...items.filter((item) => !flowIds.has(item.id))];
   }, [items, flowItems]);
+  // Use the Stock Card ledger balance as the available quantity throughout
+  // the issue and RPCI forms. Keep item identity and descriptive fields from
+  // Inventory, but replace quantity with the balance shown on Stock Card.
+  const stockBalanceItems = useMemo(
+    () => pickerItems.map((item) => ({
+      ...item,
+      quantity: getStockRows(item, transactions).at(-1)?.balance ?? (Number(item.quantity) || 0),
+    })),
+    [pickerItems, transactions],
+  );
   const acceptedStockItems = useMemo(
-    () => getAcceptedStockItems(pickerItems, transactions).filter((item) => clusterItemIds.has(item.id)),
-    [pickerItems, transactions, clusterItemIds],
+    () => getAcceptedStockItems(stockBalanceItems, transactions).filter((item) => clusterItemIds.has(item.id)),
+    [stockBalanceItems, transactions, clusterItemIds],
   );
   const stockCardItems = useMemo(
-    () => getStockCardItems(pickerItems, transactions).filter((item) => clusterItemIds.has(item.id)),
-    [pickerItems, transactions, clusterItemIds],
+    () => getStockCardItems(stockBalanceItems, transactions).filter((item) => clusterItemIds.has(item.id)),
+    [stockBalanceItems, transactions, clusterItemIds],
   );
   useEffect(() => {
     // Keep an explicitly cleared Stock Card item empty. Only replace a prior
@@ -457,26 +467,28 @@ function FormsFlow() {
   const rpciRows = useMemo(
     () =>
       getRpciRows(
-        items,
+        stockBalanceItems,
         transactions,
         rpciStartDate,
         rpciEndDate,
         rpciEntries,
-        activeFundCluster,
+        rpciFundCluster,
         iarForms,
       ),
-    [items, transactions, rpciStartDate, rpciEndDate, rpciEntries, activeFundCluster, iarForms],
+    [stockBalanceItems, transactions, rpciStartDate, rpciEndDate, rpciEntries, rpciFundCluster, iarForms],
   );
   const flowStats = useMemo(
     () => getFlowStats(transactions, reportMonth, tab),
     [transactions, reportMonth, tab],
   );
 
-  function refreshFlow() {
-    queryClient.invalidateQueries({ queryKey: ["items"] });
-    queryClient.invalidateQueries({ queryKey: ["transactions"] });
-    queryClient.invalidateQueries({ queryKey: ["transactions", "forms-flow"] });
-    queryClient.invalidateQueries({ queryKey: ["iar-forms"] });
+  async function refreshFlow() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["items"] }),
+      queryClient.invalidateQueries({ queryKey: ["transactions"] }),
+      queryClient.invalidateQueries({ queryKey: ["transactions", "forms-flow"] }),
+      queryClient.invalidateQueries({ queryKey: ["iar-forms"] }),
+    ]);
   }
 
   async function saveIar() {
@@ -541,7 +553,7 @@ function FormsFlow() {
     await rememberPersonnel("iar_accepted_by", iar.acceptedBy);
     setSaving(false);
     toast.success("IAR posted. Stock card receipts were added.");
-    refreshFlow();
+    await refreshFlow();
     setFormsFundCluster(iar.fundCluster);
     setSelectedItemId(validLines[0]?.item_id || "");
     setIar({
@@ -2280,7 +2292,10 @@ function StockCardPaper({
               <span className="strong">{item?.stock_number || ""}</span>
             </td>
             <td>
-              <strong>Re-order Point :</strong>
+              <strong>Available Balance :</strong>{" "}
+              <span className="strong">
+                {item ? `${rows.at(-1)?.balance ?? Number(item.quantity) ?? 0} ${item.unit || ""}`.trim() : ""}
+              </span>
             </td>
           </tr>
           <tr>
@@ -3154,7 +3169,7 @@ function LineEditor({
   emptyMessage?: string;
 }) {
   const queryClient = useQueryClient();
-  const [itemToAdd, setItemToAdd] = useState<{ lineId: string; name: string } | null>(null);
+  const [itemToAdd, setItemToAdd] = useState<{ lineId: string; name: string; description: string } | null>(null);
   const { data: categories = [] } = useQuery({
     queryKey: ["categories"],
     queryFn: () => listCategories() as Promise<any[]>,
@@ -3224,7 +3239,8 @@ function LineEditor({
                         ...(showProductDescription ? { productDescription: selected?.description || "" } : {}),
                       });
                     }}
-                    onAddMissingItem={allowAddItem ? (name) => setItemToAdd({ lineId: line.id, name }) : undefined}
+                    onAddMissingItem={allowAddItem ? (name, description) => setItemToAdd({ lineId: line.id, name, description }) : undefined}
+                    productDescription={line.productDescription || ""}
                     placeholder="Type item name or description"
                   />
                 </td>
@@ -3337,6 +3353,7 @@ function LineEditor({
           editing={null}
           cats={categories}
           initialName={itemToAdd.name}
+          initialDescription={itemToAdd.description}
           onClose={() => setItemToAdd(null)}
           onCategoryCreated={() => { void queryClient.invalidateQueries({ queryKey: ["categories"] }); }}
           onSaved={(createdItem) => {
@@ -3708,6 +3725,7 @@ function ItemLookup({
   value,
   onChange,
   onAddMissingItem,
+  productDescription = "",
   className,
   placeholder = "Type item name or description",
   displayNameOnly = false,
@@ -3715,7 +3733,8 @@ function ItemLookup({
   items: Item[];
   value: string;
   onChange: (itemId: string) => void;
-  onAddMissingItem?: (name: string) => void;
+  onAddMissingItem?: (name: string, description: string) => void;
+  productDescription?: string;
   className: string;
   placeholder?: string;
   displayNameOnly?: boolean;
@@ -3783,7 +3802,16 @@ function ItemLookup({
     return words.length === 0 || words.every((word) => searchable.includes(word));
   });
 
-  const showAddItem = Boolean(onAddMissingItem && text.trim() && matches.length === 0);
+  const normalizedName = text.trim().toLocaleLowerCase();
+  const normalizedDescription = productDescription.trim().toLocaleLowerCase();
+  const exactCombinationExists = items.some((item) =>
+    item.name.trim().toLocaleLowerCase() === normalizedName &&
+    (item.description || "").trim().toLocaleLowerCase() === normalizedDescription,
+  );
+  const canAddVariant = displayNameOnly && items.some((item) =>
+    item.name.trim().toLocaleLowerCase() === normalizedName,
+  ) && !exactCombinationExists;
+  const showAddItem = Boolean(onAddMissingItem && text.trim() && (matches.length === 0 || canAddVariant));
 
   return (
     <div ref={rootRef} className="relative min-w-0">
@@ -3846,7 +3874,7 @@ function ItemLookup({
                 type="button"
                 className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-sm font-medium text-primary hover:bg-accent"
                 onMouseDown={(event) => event.preventDefault()}
-                onClick={() => { onAddMissingItem?.(text.trim()); setOpen(false); }}
+                onClick={() => { onAddMissingItem?.(text.trim(), productDescription.trim()); setOpen(false); }}
               >
                 <Plus className="h-4 w-4" /> Add Item “{text.trim()}”
               </button>
@@ -4093,7 +4121,10 @@ function getStockRows(
     (sum, tx) => sum + (tx.type === "IN" ? tx.quantity : -tx.quantity),
     0,
   );
-  let balance = item.quantity - netMovement;
+  // Item balance can briefly lag its transaction after posting. Never let a
+  // stale/low item balance create a negative opening balance that cancels a
+  // newly loaded receipt from the Stock Card row.
+  let balance = Math.max(0, item.quantity - netMovement);
   return itemTransactions.map((tx) => {
     balance += tx.type === "IN" ? tx.quantity : -tx.quantity;
     return { ...tx, balance };
@@ -4270,7 +4301,7 @@ function getIarItemClusters(
         : undefined;
       const iarNo = extractReference(tx.remarks).replace(/^IAR\s*/i, "").trim();
       const form = linkedForm || formsByNumber.get(iarNo);
-      const cluster = String(form?.form_data?.fund_cluster || "").trim();
+      const cluster = normalizeFundCluster(form?.form_data?.fund_cluster);
       if (!cluster) return;
       const clusters = itemClusters.get(tx.item_id) || new Set<string>();
       clusters.add(cluster);
@@ -4281,6 +4312,10 @@ function getIarItemClusters(
 
 function inferLegacyIssueCluster(clusters?: Set<string>) {
   return clusters?.size === 1 ? [...clusters][0] : "";
+}
+
+function normalizeFundCluster(value: unknown) {
+  return String(value || "").trim().toUpperCase().replace(/M00E/g, "MOOE");
 }
 
 function getRpciRows(
@@ -4299,20 +4334,28 @@ function getRpciRows(
     periodStart.getTime() <= periodEnd.getTime();
   if (!rangeIsValid) return [];
 
+  const stockCardItemIds = new Set(
+    transactions
+      .filter((transaction) => isIarTransaction(transaction) || isRisTransaction(transaction))
+      .map((transaction) => transaction.item_id),
+  );
   const itemClusters = getIarItemClusters(transactions, iarForms);
+  const selectedCluster = normalizeFundCluster(fundCluster);
 
   return items
     .filter(
       (item) =>
         (item.item_type === "supply" ||
           item.inventory_classification === "expendable_supply") &&
-        itemClusters.get(item.id)?.has(fundCluster),
+        stockCardItemIds.has(item.id) &&
+        itemClusters.get(item.id)?.has(selectedCluster),
     )
     .map((item) => {
       const movementsAfterYear = transactions
         .filter(
           (transaction) =>
             transaction.item_id === item.id &&
+            (isIarTransaction(transaction) || isRisTransaction(transaction)) &&
             new Date(transaction.created_at).getTime() > periodEnd.getTime(),
         )
         .reduce(
@@ -4323,7 +4366,8 @@ function getRpciRows(
               : -Number(transaction.quantity)),
           0,
         );
-      const cardBalance = Number(item.quantity) - movementsAfterYear;
+      const currentCardBalance = getStockRows(item, transactions).at(-1)?.balance ?? (Number(item.quantity) || 0);
+      const cardBalance = currentCardBalance - movementsAfterYear;
       const entry = entries[item.id];
       const onHand =
         entry?.onHand === undefined || entry.onHand === ""
@@ -4356,8 +4400,13 @@ function getRpciRows(
         remarks: entry?.remarks || "",
       };
     })
-    .filter((row) => row.cardBalance !== 0 || row.onHand !== 0)
-    .sort((a, b) => a.article.localeCompare(b.article));
+    .sort((a, b) => {
+      const aHasStockNumber = Boolean(a.stockNo.trim());
+      const bHasStockNumber = Boolean(b.stockNo.trim());
+      if (aHasStockNumber !== bHasStockNumber) return aHasStockNumber ? -1 : 1;
+      return a.stockNo.localeCompare(b.stockNo, undefined, { numeric: true, sensitivity: "base" }) ||
+        a.article.localeCompare(b.article);
+    });
 }
 
 async function createAccountabilityDocuments({
