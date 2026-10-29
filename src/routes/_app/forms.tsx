@@ -4424,14 +4424,10 @@ function getStockRows(
     (tx) =>
       tx.item_id === item.id && (isIarTransaction(tx) || isRisTransaction(tx)),
   );
-  const netMovement = itemTransactions.reduce(
-    (sum, tx) => sum + (tx.type === "IN" ? tx.quantity : -tx.quantity),
-    0,
-  );
-  // Item balance can briefly lag its transaction after posting. Never let a
-  // stale/low item balance create a negative opening balance that cancels a
-  // newly loaded receipt from the Stock Card row.
-  let balance = Math.max(0, item.quantity - netMovement);
+  // Stock Card is a transaction ledger: start at zero and apply each receipt
+  // or issue once. Using items.quantity here invents opening stock when that
+  // cached balance was doubled by an older IAR database function.
+  let balance = 0;
   return itemTransactions.map((tx) => {
     balance += tx.type === "IN" ? tx.quantity : -tx.quantity;
     return { ...tx, balance };
