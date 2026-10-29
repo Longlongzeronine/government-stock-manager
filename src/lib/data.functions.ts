@@ -725,17 +725,26 @@ const monthColumns = ["jan_quantity", "feb_quantity", "mar_quantity", "apr_quant
 
 export const updateItemMonthlyQuantity = createServerFn({ method: "POST" })
   .inputValidator((d: { id: string; month: number; quantity: number }) => d)
-  .handler(async ({ data }) => {
+  .handler(async ({ data }) => withDbFallback(async (sql) => {
     const column = monthColumns[data.month];
     if (!column) throw new Error("Invalid month");
-    const sql = await getDb();
     const [row] = await sql`
       UPDATE items SET ${sql({ [column]: Math.max(0, Number(data.quantity) || 0) })}
       WHERE id = ${data.id}
       RETURNING *
     `;
     return row;
-  });
+  }, async () => {
+    const column = monthColumns[data.month];
+    if (!column) throw new Error("Invalid month");
+    const [row] = await sbUpdate(
+      "items",
+      `id=eq.${encodeURIComponent(data.id)}`,
+      { [column]: Math.max(0, Number(data.quantity) || 0) },
+      getRestWriteConfig(),
+    );
+    return row;
+  }));
 
 export const deleteItem = createServerFn({ method: "POST" })
   .inputValidator((d: { id: string }) => d)

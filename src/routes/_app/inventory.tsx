@@ -54,18 +54,43 @@ function Inventory() {
   const { data: items = [] } = useQuery({
     queryKey: ["items"],
     queryFn: () => listItems(),
-    refetchInterval: 3000,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   });
   const { data: cats = [] } = useQuery({
     queryKey: ["categories"],
     queryFn: () => listCategories(),
-    refetchInterval: 3000,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
   });
   const { data: sups = [] } = useQuery({
     queryKey: ["suppliers"],
     queryFn: () => listSuppliers(),
-    refetchInterval: 3000,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
   });
+
+  function updateItemsCache(change?: any) {
+    if (!change) {
+      void qc.invalidateQueries({ queryKey: ["items"] });
+      return;
+    }
+    qc.setQueryData<any[]>(["items"], (current = []) => {
+      if (change.deletedId) return current.filter((item) => item.id !== change.deletedId);
+      const saved = change;
+      const existing = current.find((item) => item.id === saved.id);
+      const category = saved.category
+        ?? (saved.category_id ? cats.find((item: any) => item.id === saved.category_id) : null)
+        ?? (existing?.category_id === saved.category_id ? existing.category : null);
+      const supplier = saved.supplier
+        ?? (saved.supplier_id ? sups.find((item: any) => item.id === saved.supplier_id) : null)
+        ?? (existing?.supplier_id === saved.supplier_id ? existing.supplier : null);
+      const merged = { ...existing, ...saved, category, supplier };
+      return existing
+        ? current.map((item) => item.id === merged.id ? merged : item)
+        : [merged, ...current];
+    });
+  }
 
   const filtered = useMemo(() => {
     return items.filter((i: any) => {
@@ -117,7 +142,7 @@ function Inventory() {
         cats={cats}
         sups={sups}
         canEdit={isAdmin}
-        onItemsChanged={() => qc.invalidateQueries({ queryKey: ["items"] })}
+        onItemsChanged={updateItemsCache}
         onCategoryCreated={() => qc.invalidateQueries({ queryKey: ["categories"] })}
       />
       {open && (
@@ -125,7 +150,7 @@ function Inventory() {
           editing={editing}
           cats={cats}
           onClose={() => setOpen(false)}
-          onSaved={() => { setOpen(false); qc.invalidateQueries({ queryKey: ["items"] }); }}
+          onSaved={(item: any) => { setOpen(false); updateItemsCache(item); }}
           onCategoryCreated={() => qc.invalidateQueries({ queryKey: ["categories"] })}
         />
       )}
@@ -464,7 +489,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
     if (!confirm(`Permanently delete "${item.name}" from the plan? This cannot be undone.`)) return;
     try {
       await deleteItem({ data: { id: item.id } });
-      onItemsChanged();
+      onItemsChanged({ deletedId: item.id });
       setSelected((current) => { const next = new Set(current); next.delete(item.id); return next; });
       toast.success("Item deleted");
     } catch (error: any) {
@@ -533,16 +558,18 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
     const next = { ...monthlyPlan, [id]: current.map((month, monthIndex) => monthIndex === index ? Math.max(0, Number(value) || 0) : month) };
     setMonthlyPlan(next);
     try {
-      await updateItemMonthlyQuantity({ data: { id, month: index, quantity: next[id][index] } });
-      onItemsChanged();
+      const saved = await updateItemMonthlyQuantity({ data: { id, month: index, quantity: next[id][index] } });
+      onItemsChanged({ ...item, ...saved, [`${["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"][index]}_quantity`]: next[id][index] });
     } catch (error: any) {
       toast.error(error?.message ?? "Monthly quantity update failed");
     }
   };
   const saveItem = async (item: any, changes: Record<string, unknown>) => {
+    const changed = Object.fromEntries(Object.entries(changes).filter(([key, value]) => String(item[key] ?? "") !== String(value ?? "")));
+    if (!Object.keys(changed).length) return;
     try {
-      await updateItem({ data: { ...item, ...changes } });
-      onItemsChanged();
+      const saved = await updateItem({ data: { ...item, ...changed } });
+      onItemsChanged({ ...item, ...saved, ...changed });
     } catch (error: any) {
       toast.error(error?.message ?? "Item update failed");
     }
@@ -565,7 +592,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
     try {
       await Promise.all([...selected].map((id) => deleteItem({ data: { id } })));
       setSelected(new Set());
-      onItemsChanged();
+      [...selected].forEach((id) => onItemsChanged({ deletedId: id }));
       toast.success("Selected inventory items deleted");
     } catch (error: any) {
       toast.error(error?.message ?? "Bulk delete failed");
@@ -831,7 +858,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
                   <td>
                     <div className="app-cse-compact-months">
                       {months.map((value, m) => (
-                        <label key={m}><span>{"JAN,FEB,MAR,APR,MAY,JUN,JUL,AUG,SEP,OCT,NOV,DEC".split(",")[m]}</span><input disabled={!canEdit} type="number" min="0" value={value} onChange={(event) => saveMonthlyPlan(item.id, m, event.target.value)} /></label>
+                        <label key={m}><span>{"JAN,FEB,MAR,APR,MAY,JUN,JUL,AUG,SEP,OCT,NOV,DEC".split(",")[m]}</span><input disabled={!canEdit} type="number" min="0" defaultValue={value} onBlur={(event) => saveMonthlyPlan(item.id, m, event.target.value)} /></label>
                       ))}
                     </div>
                   </td>
@@ -953,7 +980,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
                   const code = item.barcode_value || item.qr_code_value || "";
                   const qrValue = item.qr_code_value || item.barcode_value || item.id;
                   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=96x96&format=svg&data=${encodeURIComponent(qrValue)}`;
-                  return <tr className={`app-cse-item ${selected.has(item.id) ? "is-selected" : ""}`} key={item.id || code} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}><td>{canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td><td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => saveItem(item, { barcode_value: event.target.value })} /></td><td><span className="app-cse-product">{isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}<button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={qrUrl} alt="" title={qrValue} loading="lazy" /></button><span><input disabled={!canEdit} defaultValue={item.name} onBlur={(event) => saveItem(item, { name: event.target.value })} /><small>{item.description || ""}</small></span></span></td><td><input disabled={!canEdit} defaultValue={item.unit} onBlur={(event) => saveItem(item, { unit: event.target.value })} /></td>{cells(months, price).map((value, cellIndex) => <td key={cellIndex}>{cellIndex % 5 < 3 ? <input disabled={!canEdit} type="number" min="0" value={value} onChange={(event) => saveMonthlyPlan(item.id, Math.floor(cellIndex / 5) * 3 + (cellIndex % 5), event.target.value)} /> : value}</td>)}<td>{totalQty}</td><td><input disabled={!canEdit} type="number" min="0" step=".01" defaultValue={price} onBlur={(event) => saveItem(item, { acquisition_cost: Number(event.target.value) || 0 })} /></td><td>{peso(totalQty * price)}</td></tr>;
+                  return <tr className={`app-cse-item ${selected.has(item.id) ? "is-selected" : ""}`} key={item.id || code} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}><td>{canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td><td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => saveItem(item, { barcode_value: event.target.value })} /></td><td><span className="app-cse-product">{isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}<button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={qrUrl} alt="" title={qrValue} loading="lazy" /></button><span><input disabled={!canEdit} defaultValue={item.name} onBlur={(event) => saveItem(item, { name: event.target.value })} /><small>{item.description || ""}</small></span></span></td><td><input disabled={!canEdit} defaultValue={item.unit} onBlur={(event) => saveItem(item, { unit: event.target.value })} /></td>{cells(months, price).map((value, cellIndex) => <td key={cellIndex}>{cellIndex % 5 < 3 ? <input disabled={!canEdit} type="number" min="0" defaultValue={value} onBlur={(event) => saveMonthlyPlan(item.id, Math.floor(cellIndex / 5) * 3 + (cellIndex % 5), event.target.value)} /> : value}</td>)}<td>{totalQty}</td><td><input disabled={!canEdit} type="number" min="0" step=".01" defaultValue={price} onBlur={(event) => saveItem(item, { acquisition_cost: Number(event.target.value) || 0 })} /></td><td>{peso(totalQty * price)}</td></tr>;
                 })
               ])}
               <tr className="app-cse-part"><td colSpan={27}>PART II. OTHER ITEMS NOT AVAILABLE AT PS-DBM BUT ARE REGULARLY PURCHASED FROM OTHER SOURCES</td></tr>
@@ -966,7 +993,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
                   const code = item.barcode_value || item.qr_code_value || "";
                   const qrValue = item.qr_code_value || item.barcode_value || item.id;
                   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=96x96&format=svg&data=${encodeURIComponent(qrValue)}`;
-                  return <tr className={`app-cse-item ${selected.has(item.id) ? "is-selected" : ""}`} key={item.id} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}><td>{canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td><td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => saveItem(item, { barcode_value: event.target.value })} /></td><td><span className="app-cse-product">{isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}<button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={qrUrl} alt="" title={qrValue} loading="lazy" /></button><span><input disabled={!canEdit} defaultValue={item.name} onBlur={(event) => saveItem(item, { name: event.target.value })} /><small>{item.description || ""}</small></span></span></td><td><input disabled={!canEdit} defaultValue={item.unit} onBlur={(event) => saveItem(item, { unit: event.target.value })} /></td>{cells(months, price).map((value, cellIndex) => <td key={cellIndex}>{cellIndex % 5 < 3 ? <input disabled={!canEdit} type="number" min="0" value={value} onChange={(event) => saveMonthlyPlan(item.id, Math.floor(cellIndex / 5) * 3 + (cellIndex % 5), event.target.value)} /> : value}</td>)}<td>{quantity}</td><td><input disabled={!canEdit} type="number" min="0" step=".01" defaultValue={price} onBlur={(event) => saveItem(item, { acquisition_cost: Number(event.target.value) || 0 })} /></td><td>{peso(quantity * price)}</td></tr>;
+                  return <tr className={`app-cse-item ${selected.has(item.id) ? "is-selected" : ""}`} key={item.id} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}><td>{canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td><td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => saveItem(item, { barcode_value: event.target.value })} /></td><td><span className="app-cse-product">{isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}<button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={qrUrl} alt="" title={qrValue} loading="lazy" /></button><span><input disabled={!canEdit} defaultValue={item.name} onBlur={(event) => saveItem(item, { name: event.target.value })} /><small>{item.description || ""}</small></span></span></td><td><input disabled={!canEdit} defaultValue={item.unit} onBlur={(event) => saveItem(item, { unit: event.target.value })} /></td>{cells(months, price).map((value, cellIndex) => <td key={cellIndex}>{cellIndex % 5 < 3 ? <input disabled={!canEdit} type="number" min="0" defaultValue={value} onBlur={(event) => saveMonthlyPlan(item.id, Math.floor(cellIndex / 5) * 3 + (cellIndex % 5), event.target.value)} /> : value}</td>)}<td>{quantity}</td><td><input disabled={!canEdit} type="number" min="0" step=".01" defaultValue={price} onBlur={(event) => saveItem(item, { acquisition_cost: Number(event.target.value) || 0 })} /></td><td>{peso(quantity * price)}</td></tr>;
                 })
               ])}
               <tr className="app-cse-grand"><td colSpan={26}>TOTAL APP-CSE REQUIREMENT (Part I + Part II)</td><td>{peso(part1Total + part2Total)}</td></tr>
@@ -1044,7 +1071,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
           editing={editItem}
           cats={cats || []}
           onClose={() => { setAddOpen(false); setEditItem(null); }}
-          onSaved={() => { setAddOpen(false); setEditItem(null); onItemsChanged(); }}
+          onSaved={(item: any) => { setAddOpen(false); setEditItem(null); onItemsChanged(item); }}
           onCategoryCreated={onCategoryCreated}
         />
       )}
