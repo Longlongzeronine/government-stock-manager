@@ -145,6 +145,7 @@ type RisFormDetails = {
   verification_published_at?: string | null;
   status?: string | null;
   created_at?: string | null;
+  fund_cluster?: string | null;
   lines?: Array<{
     id?: string;
     item_id: string;
@@ -626,7 +627,7 @@ function FormsFlow() {
         approvalStatus: status === "approved" ? "approved" : status === "rejected" ? "rejected" : "pending",
         issuedAt: form.verification_published_at || "",
       };
-      const fundCluster = extractFundCluster(transaction.remarks);
+      const fundCluster = extractFundCluster(transaction.remarks) || form.fund_cluster || "";
       if (fundCluster) setFormsFundCluster(fundCluster);
       const savedLines = form.lines?.length ? form.lines : [{
         id: transaction.id,

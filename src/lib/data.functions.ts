@@ -1268,19 +1268,37 @@ export const getRisFormDetails = createServerFn({ method: "GET" })
         return form || null;
       },
       async () => {
-        const filter = data.id
-          ? `id=eq.${encodeURIComponent(data.id)}`
-          : `ris_no=eq.${encodeURIComponent(data.ris_no || "")}`;
         const [form] = await sbSelect<any>(
           "ris_forms",
-          `select=id,ris_no,office,purpose,requested_by,approved_by,issued_by,received_by,approved_date,issued_date,verification_token,verification_code,verification_status,verification_published_at,status,created_at&${filter}&limit=1`,
+          data.id
+            ? `select=*&id=eq.${encodeURIComponent(data.id)}&limit=1`
+            : `select=*&ris_no=eq.${encodeURIComponent(data.ris_no || "")}&limit=1`,
         );
         if (!form) return null;
         const lines = await sbSelect<any>(
           "ris_items",
           `select=id,item_id,quantity,remarks,item:items(id,name,description,unit,stock_number)&ris_id=eq.${encodeURIComponent(form.id)}&order=created_at.asc&limit=1000`,
         );
-        return { ...form, lines };
+        return {
+          id: form.id,
+          ris_no: form.ris_no,
+          office: form.office,
+          purpose: form.purpose,
+          requested_by: form.requested_by,
+          approved_by: form.approved_by,
+          issued_by: form.issued_by,
+          received_by: form.received_by,
+          approved_date: form.approved_date ?? null,
+          issued_date: form.issued_date ?? null,
+          verification_token: form.verification_token ?? null,
+          verification_code: form.verification_code ?? null,
+          verification_status: form.verification_status ?? null,
+          verification_published_at: form.verification_published_at ?? null,
+          status: form.status,
+          created_at: form.created_at,
+          fund_cluster: form.fund_cluster ?? null,
+          lines,
+        };
       },
     );
   });
