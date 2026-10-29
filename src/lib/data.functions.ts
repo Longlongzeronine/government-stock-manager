@@ -1053,16 +1053,13 @@ export const createTransaction = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
     const quantity = Number(data.quantity);
-    const availableFromStockCard = (itemQuantity: number, movements: any[]) => {
-      const netMovement = movements
-        .filter((movement) => {
-          const source = String(movement.source_form_type || "").toUpperCase();
-          const reference = String(movement.remarks || "").split("|")[0].trim().toUpperCase();
-          return source === "IAR" || source === "RIS" || reference.startsWith("IAR ") || reference.startsWith("RIS ");
-        })
-        .reduce((sum, movement) => sum + (movement.type === "IN" ? Number(movement.quantity) : -Number(movement.quantity)), 0);
-      return Math.max(0, itemQuantity - netMovement) + netMovement;
-    };
+    const availableFromStockCard = (movements: any[]) => movements
+      .filter((movement) => {
+        const source = String(movement.source_form_type || "").toUpperCase();
+        const reference = String(movement.remarks || "").split("|")[0].trim().toUpperCase();
+        return source === "IAR" || source === "RIS" || reference.startsWith("IAR ") || reference.startsWith("RIS ");
+      })
+      .reduce((balance, movement) => balance + (movement.type === "IN" ? Number(movement.quantity) : -Number(movement.quantity)), 0);
     return withDbFallback(
       async (sql) => sql.begin(async (tx: any) => {
         const [item] = await tx`
@@ -1073,7 +1070,7 @@ export const createTransaction = createServerFn({ method: "POST" })
           ? await tx`SELECT type, quantity, source_form_type, remarks FROM transactions WHERE item_id = ${data.item_id}`
           : [];
         const available = data.source_form_type === "RIS"
-          ? availableFromStockCard(Number(item.quantity), stockCardTransactions)
+          ? availableFromStockCard(stockCardTransactions)
           : Number(item.quantity);
         if (data.type === "OUT" && available < quantity) {
           throw new Error(`Only ${available} units are available.`);
@@ -1107,7 +1104,7 @@ export const createTransaction = createServerFn({ method: "POST" })
             )
           : [];
         const available = data.source_form_type === "RIS"
-          ? availableFromStockCard(Number(item.quantity), stockCardTransactions)
+          ? availableFromStockCard(stockCardTransactions)
           : Number(item.quantity);
         if (data.type === "OUT" && available < quantity) {
           throw new Error(`Only ${available} units are available.`);

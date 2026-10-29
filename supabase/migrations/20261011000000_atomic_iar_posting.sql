@@ -139,7 +139,7 @@ begin
       nullif(payload->>'created_by_name',''), 'IAR', iar_row.id, line_remarks,
       nullif(line->>'product_description',''))
     returning * into tx_row;
-    update public.items set quantity = quantity + qty where id = item_uuid;
+    -- The transaction trigger updates the item balance once.
     insert into public.iar_items (iar_id, item_id, quantity, unit_cost, amount, remarks, transaction_id, product_description)
     values (iar_row.id, item_uuid, qty, cost, qty * cost, nullif(line->>'remarks',''), tx_row.id,
       nullif(line->>'product_description',''));
