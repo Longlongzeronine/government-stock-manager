@@ -1239,6 +1239,10 @@ function FormsFlow() {
                   rsmiFundCluster={rsmiFundCluster}
                   setRsmiFundCluster={setFormsFundCluster}
                   rsmiFundClusterOptions={iarFundClusterOptions.length ? iarFundClusterOptions : undefined}
+                  onClearIar={() => {
+                    setIar((current) => ({ ...current, supplier: "" }));
+                    setIarLines(Array.from({ length: 4 }, blankLine));
+                  }}
                   onSaveIar={saveIar}
                   onSaveRis={saveRis}
                   risValidationAttempted={risValidationAttempted}
@@ -1589,6 +1593,7 @@ function EntryPanel({
   rsmiFundCluster,
   setRsmiFundCluster,
   rsmiFundClusterOptions,
+  onClearIar,
   onSaveIar,
   onSaveRis,
   risValidationAttempted,
@@ -1620,6 +1625,7 @@ function EntryPanel({
   rsmiFundCluster: string;
   setRsmiFundCluster: (value: string) => void;
   rsmiFundClusterOptions?: readonly string[];
+  onClearIar: () => void;
   onSaveIar: () => void;
   onSaveRis: () => void;
   risValidationAttempted: boolean;
@@ -1677,6 +1683,14 @@ function EntryPanel({
             allowAddItem={canWrite}
           />
           <FlowActions>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={onClearIar}
+              className="flow-header-btn"
+            >
+              Clear
+            </button>
             <button
               disabled={!canWrite || saving}
               onClick={onSaveIar}
