@@ -386,23 +386,27 @@ function FormsFlow() {
     } catch { /* Browser storage may be unavailable. */ }
   }, [iar, iarLines, ris, risLines, propertyFlow, tab, selectedItemId, loadedRisId]);
 
-  // Poll like the Inventory page so on-hand quantities stay in sync with it.
+  // Refresh after form saves; avoid polling during editing so picker input and
+  // form state stay stable while user types.
   const { data: items = [] } = useQuery({
     queryKey: ["items"],
     queryFn: () => listItems() as Promise<Item[]>,
-    refetchInterval: 3000,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: transactions = [] } = useQuery({
     queryKey: ["transactions", "forms-flow"],
     queryFn: () => listTransactionsAsc() as Promise<Transaction[]>,
-    refetchInterval: 3000,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: iarForms = [] } = useQuery({
     queryKey: ["iar-forms"],
     queryFn: () => listIarForms() as Promise<IarFormRecord[]>,
-    refetchInterval: 3000,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   });
   const iarFundClusterOptions = useMemo(
     () => [...new Set([
@@ -4045,6 +4049,7 @@ function ItemLookup({
 }) {
   const listId = useRef(`item-lookup-${createId()}`).current;
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const isTypingRef = useRef(false);
   const selected = items.find((item) => item.id === value);
   const displayLabel = (item?: Item | null) => displayNameOnly ? item?.name || "" : itemLabel(item);
   const [text, setText] = useState(() => displayLabel(selected));
@@ -4052,9 +4057,9 @@ function ItemLookup({
   const [activeIndex, setActiveIndex] = useState(-1);
 
   useEffect(() => {
+    if (isTypingRef.current) return;
     if (value) {
-      const selectedItem = items.find((item) => item.id === value);
-      setText(displayNameOnly ? selectedItem?.name || "" : itemLabel(selectedItem));
+      setText(displayLabel(selected));
     }
   }, [items, value, displayNameOnly]);
 
@@ -4078,6 +4083,7 @@ function ItemLookup({
     setText(next);
     setActiveIndex(-1);
     setOpen(true);
+    isTypingRef.current = true;
     const normalized = next.trim().toLocaleLowerCase();
     const byLabel = items.filter((item) => itemLabel(item).toLocaleLowerCase() === normalized);
     const byCode = items.filter((item) =>
@@ -4094,6 +4100,7 @@ function ItemLookup({
     if (match) {
       setText(displayLabel(match));
       setOpen(false);
+      isTypingRef.current = false;
       onChange(match.id);
     } else if (!displayNameOnly) {
       onChange("");
@@ -4144,6 +4151,7 @@ function ItemLookup({
             event.preventDefault();
             const item = matches[activeIndex];
             setText(displayLabel(item));
+            isTypingRef.current = false;
             onChange(item.id);
             setOpen(false);
           }
@@ -4162,7 +4170,7 @@ function ItemLookup({
                   aria-selected={item.id === value}
                   className={`block w-full rounded px-2.5 py-2 text-left text-sm hover:bg-accent ${index === activeIndex ? "bg-accent" : ""}`}
                   onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => { setText(displayLabel(item)); onChange(item.id); setOpen(false); }}
+            onClick={() => { setText(displayLabel(item)); isTypingRef.current = false; onChange(item.id); setOpen(false); }}
                 >
                   <span className="block truncate">{item.name}</span>
                   {item.description && <span className="block truncate text-xs text-muted-foreground">{item.description}</span>}
