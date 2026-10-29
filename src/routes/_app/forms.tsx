@@ -4088,13 +4088,16 @@ function ItemLookup({
     const match = byLabel.length === 1 ? byLabel[0]
       : byCode.length === 1 ? byCode[0]
         : byName.length === 1 ? byName[0] : undefined;
-    // Clear stale selection when typed text has no unique match. Otherwise a
-    // visible unmatched name could silently post against the previous item id.
+    // Search-only pickers keep current selection while text is incomplete.
+    // Editable form rows clear stale ids so unmatched text cannot post against
+    // a previous item.
     if (match) {
       setText(displayLabel(match));
       setOpen(false);
+      onChange(match.id);
+    } else if (!displayNameOnly) {
+      onChange("");
     }
-    onChange(match?.id || "");
   }
 
   const words = text
