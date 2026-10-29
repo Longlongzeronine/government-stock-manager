@@ -1277,7 +1277,7 @@ export const getRisFormDetails = createServerFn({ method: "GET" })
         if (!form) return null;
         const lines = await sbSelect<any>(
           "ris_items",
-          `select=id,item_id,quantity,remarks,item:items(id,name,description,unit,stock_number)&ris_id=eq.${encodeURIComponent(form.id)}&order=created_at.asc&limit=1000`,
+          `select=id,item_id,quantity,remarks,item:items(id,name,description,unit)&ris_id=eq.${encodeURIComponent(form.id)}&order=created_at.asc&limit=1000`,
         );
         return {
           id: form.id,
