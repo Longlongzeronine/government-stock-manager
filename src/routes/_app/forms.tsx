@@ -1839,6 +1839,7 @@ function EntryPanel({
               onChange={setSelectedItemId}
               className="flow-input"
               displayNameOnly
+              searchOnly
               placeholder={
                 stockCardItems.length > 0
                   ? "Type any word from the item name or description"
@@ -2508,6 +2509,7 @@ function StockCardPaper({
                   items={items}
                   className="paper-inline-control strong"
                   displayNameOnly
+                  searchOnly
                   value={selectedItemId}
                   onChange={onSelectedItemId}
                   placeholder={
@@ -4037,6 +4039,7 @@ function ItemLookup({
   className,
   placeholder = "Type item name or description",
   displayNameOnly = false,
+  searchOnly = false,
 }: {
   items: Item[];
   value: string;
@@ -4046,6 +4049,7 @@ function ItemLookup({
   className: string;
   placeholder?: string;
   displayNameOnly?: boolean;
+  searchOnly?: boolean;
 }) {
   const listId = useRef(`item-lookup-${createId()}`).current;
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -4084,6 +4088,7 @@ function ItemLookup({
     setActiveIndex(-1);
     setOpen(true);
     isTypingRef.current = true;
+    if (searchOnly) return;
     const normalized = next.trim().toLocaleLowerCase();
     const byLabel = items.filter((item) => itemLabel(item).toLocaleLowerCase() === normalized);
     const byCode = items.filter((item) =>
@@ -4147,9 +4152,9 @@ function ItemLookup({
           } else if (event.key === "ArrowUp" && matches.length > 0) {
             event.preventDefault();
             setActiveIndex((index) => Math.max(index - 1, 0));
-          } else if (event.key === "Enter" && open && activeIndex >= 0 && matches[activeIndex]) {
+          } else if (event.key === "Enter" && open && (matches[activeIndex] || (searchOnly && matches.length === 1))) {
             event.preventDefault();
-            const item = matches[activeIndex];
+            const item = matches[activeIndex] || matches[0];
             setText(displayLabel(item));
             isTypingRef.current = false;
             onChange(item.id);
