@@ -1149,6 +1149,176 @@ export const listIarForms = createServerFn({ method: "GET" }).handler(
   },
 );
 
+export const getIarFormDetails = createServerFn({ method: "GET" })
+  .inputValidator((data: { id: string }) => data)
+  .handler(async ({ data }) => withDbFallback(
+    async (sql) => {
+      const [form] = await sql`
+        SELECT
+          f.*,
+          COALESCE(
+            json_agg(json_build_object(
+              'id', ii.id,
+              'item_id', ii.item_id,
+              'quantity', ii.quantity,
+              'unit_cost', ii.unit_cost,
+              'product_description', ii.product_description,
+              'remarks', ii.remarks,
+              'item', json_build_object(
+                'id', i.id,
+                'name', i.name,
+                'description', i.description,
+                'unit', i.unit,
+                'acquisition_cost', i.acquisition_cost
+              )
+            )) FILTER (WHERE ii.id IS NOT NULL),
+            '[]'::json
+          ) AS lines
+        FROM iar_forms f
+        LEFT JOIN iar_items ii ON ii.iar_id = f.id
+        LEFT JOIN items i ON i.id = ii.item_id
+        WHERE f.id = ${data.id}
+        GROUP BY f.id
+      `;
+      return form || null;
+    },
+    async () => {
+      const [form] = await sbSelect<any>(
+        "iar_forms",
+        `select=id,iar_no,supplier,invoice_no,accepted_by,form_data&id=eq.${encodeURIComponent(data.id)}&limit=1`,
+      );
+      if (!form) return null;
+      const lines = await sbSelect<any>(
+        "iar_items",
+        `select=id,item_id,quantity,unit_cost,product_description,remarks,item:items(id,name,description,unit,acquisition_cost)&iar_id=eq.${encodeURIComponent(data.id)}&order=created_at.asc&limit=1000`,
+      );
+      return { ...form, lines };
+    },
+  ));
+
+export const getRisFormDetails = createServerFn({ method: "GET" })
+  .inputValidator((data: { id?: string; ris_no?: string }) => data)
+  .handler(async ({ data }) => {
+    if (!data.id && !data.ris_no) throw new Error("RIS ID or number is required.");
+    return withDbFallback(
+      async (sql) => {
+        const [form] = data.id
+          ? await sql`
+              SELECT
+                r.id, r.ris_no, r.office, r.purpose,
+                r.requested_by, r.approved_by, r.issued_by, r.received_by,
+                to_char(r.approved_date, 'YYYY-MM-DD') AS approved_date,
+                to_char(r.issued_date, 'YYYY-MM-DD') AS issued_date,
+                r.verification_token, r.verification_code,
+                r.verification_status, r.verification_published_at,
+                r.status, r.created_at::text AS created_at,
+                COALESCE(
+                  json_agg(json_build_object(
+                    'id', ri.id,
+                    'item_id', ri.item_id,
+                    'quantity', ri.quantity,
+                    'remarks', ri.remarks,
+                    'item', json_build_object(
+                      'id', i.id,
+                      'name', i.name,
+                      'description', i.description,
+                      'unit', i.unit,
+                      'stock_number', i.stock_number
+                    )
+                  ) ORDER BY ri.created_at) FILTER (WHERE ri.id IS NOT NULL),
+                  '[]'::json
+                ) AS lines
+              FROM ris_forms r
+              LEFT JOIN ris_items ri ON ri.ris_id = r.id
+              LEFT JOIN items i ON i.id = ri.item_id
+              WHERE r.id = ${data.id}
+              GROUP BY r.id
+            `
+          : await sql`
+              SELECT
+                r.id, r.ris_no, r.office, r.purpose,
+                r.requested_by, r.approved_by, r.issued_by, r.received_by,
+                to_char(r.approved_date, 'YYYY-MM-DD') AS approved_date,
+                to_char(r.issued_date, 'YYYY-MM-DD') AS issued_date,
+                r.verification_token, r.verification_code,
+                r.verification_status, r.verification_published_at,
+                r.status, r.created_at::text AS created_at,
+                COALESCE(
+                  json_agg(json_build_object(
+                    'id', ri.id,
+                    'item_id', ri.item_id,
+                    'quantity', ri.quantity,
+                    'remarks', ri.remarks,
+                    'item', json_build_object(
+                      'id', i.id,
+                      'name', i.name,
+                      'description', i.description,
+                      'unit', i.unit,
+                      'stock_number', i.stock_number
+                    )
+                  ) ORDER BY ri.created_at) FILTER (WHERE ri.id IS NOT NULL),
+                  '[]'::json
+                ) AS lines
+              FROM ris_forms r
+              LEFT JOIN ris_items ri ON ri.ris_id = r.id
+              LEFT JOIN items i ON i.id = ri.item_id
+              WHERE r.ris_no = ${data.ris_no}
+              GROUP BY r.id
+            `;
+        return form || null;
+      },
+      async () => {
+        const filter = data.id
+          ? `id=eq.${encodeURIComponent(data.id)}`
+          : `ris_no=eq.${encodeURIComponent(data.ris_no || "")}`;
+        const [form] = await sbSelect<any>(
+          "ris_forms",
+          `select=id,ris_no,office,purpose,requested_by,approved_by,issued_by,received_by,approved_date,issued_date,verification_token,verification_code,verification_status,verification_published_at,status,created_at&${filter}&limit=1`,
+        );
+        if (!form) return null;
+        const lines = await sbSelect<any>(
+          "ris_items",
+          `select=id,item_id,quantity,remarks,item:items(id,name,description,unit,stock_number)&ris_id=eq.${encodeURIComponent(form.id)}&order=created_at.asc&limit=1000`,
+        );
+        return { ...form, lines };
+      },
+    );
+  });
+
+// Downloadable, read-only snapshot of data used by Forms Flow. Keep table names
+// static: local SQL uses these directly and hosted Supabase reads same allowlist.
+export const createFormsFlowBackup = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const tables = [
+      "categories",
+      "suppliers",
+      "items",
+      "transactions",
+      "iar_forms",
+      "iar_items",
+      "ris_forms",
+      "ris_items",
+      "form_personnel_memory",
+      "form_number_counters",
+    ] as const;
+
+    return withDbFallback(
+      async (sql) => Object.fromEntries(await Promise.all(
+        tables.map(async (table) => [
+          table,
+          await sql.unsafe(`SELECT * FROM public."${table}"`),
+        ] as const),
+      )),
+      async () => Object.fromEntries(await Promise.all(
+        tables.map(async (table) => [
+          table,
+          await sbSelect(table, "select=*&limit=10000"),
+        ] as const),
+      )),
+    );
+  },
+);
+
 export const createIarForm = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {

@@ -5,6 +5,7 @@ import { format } from "date-fns";
 import {
   Boxes,
   Building2,
+  Download,
   FileCheck2,
   FileSpreadsheet,
   FileText,
@@ -31,13 +32,16 @@ import {
   postIar,
   createIcsForm,
   createIcsItem,
+  createFormsFlowBackup,
   createParForm,
   createParItem,
   createRisForm,
   createRisItem,
   createTransaction,
   getNextRisNumberFromHistory,
+  getRisFormDetails,
   getRisFormStatus,
+  getIarFormDetails,
   listIarForms,
   listFormPersonnelMemory,
   listItems,
@@ -95,6 +99,59 @@ type IarFormRecord = {
   id: string;
   iar_no?: string | null;
   form_data?: { fund_cluster?: string | null } | null;
+};
+
+type IarFormDetails = IarFormRecord & {
+  supplier?: string | null;
+  invoice_no?: string | null;
+  accepted_by?: string | null;
+  form_data?: {
+    entity_name?: string | null;
+    fund_cluster?: string | null;
+    po_no_date?: string | null;
+    requisitioning_office?: string | null;
+    responsibility_center?: string | null;
+    iar_date?: string | null;
+    invoice_date?: string | null;
+    date_inspected?: string | null;
+    date_received?: string | null;
+    inspection_officer?: string | null;
+    receipt_description?: string | null;
+  } | null;
+  lines?: Array<{
+    id?: string;
+    item_id: string;
+    quantity: number | string;
+    unit_cost: number | string;
+    product_description?: string | null;
+    remarks?: string | null;
+  }>;
+};
+
+type RisFormDetails = {
+  id: string;
+  ris_no?: string | null;
+  office?: string | null;
+  purpose?: string | null;
+  requested_by?: string | null;
+  approved_by?: string | null;
+  issued_by?: string | null;
+  received_by?: string | null;
+  approved_date?: string | null;
+  issued_date?: string | null;
+  verification_token?: string | null;
+  verification_code?: string | null;
+  verification_status?: string | null;
+  verification_published_at?: string | null;
+  status?: string | null;
+  created_at?: string | null;
+  lines?: Array<{
+    id?: string;
+    item_id: string;
+    quantity: number | string;
+    remarks?: string | null;
+    item?: Pick<Item, "id" | "name" | "description" | "unit" | "stock_number"> | null;
+  }>;
 };
 
 type StockRow = Transaction & { balance: number };
@@ -210,6 +267,10 @@ function FormsFlow() {
   const [orientation, setOrientation] = useState<Orientation>("portrait");
   const [zoom, setZoom] = useState(1);
   const [selectedItemId, setSelectedItemId] = useState("");
+  const [loadingIarReceiptId, setLoadingIarReceiptId] = useState("");
+  const [loadingRisIssueId, setLoadingRisIssueId] = useState("");
+  const [loadedRisId, setLoadedRisId] = useState("");
+  const formPreviewRef = useRef<HTMLDivElement | null>(null);
   const [reportMonth, setReportMonth] = useState(today.slice(0, 7));
   const [rpciStartDate, setRpciStartDate] = useState(`${today.slice(0, 4)}-01-01`);
   const [rpciEndDate, setRpciEndDate] = useState(today);
@@ -300,6 +361,7 @@ function FormsFlow() {
         if (Array.isArray(draft.iarLines)) setIarLines(draft.iarLines);
         if (draft.ris) setRis(draft.ris);
         if (Array.isArray(draft.risLines)) setRisLines(draft.risLines);
+        if (draft.loadedRisId) setLoadedRisId(draft.loadedRisId);
         if (draft.propertyFlow) setPropertyFlow(draft.propertyFlow);
         if (draft.tab) setTab(draft.tab);
         if (draft.selectedItemId) setSelectedItemId(draft.selectedItemId);
@@ -318,10 +380,10 @@ function FormsFlow() {
     }
     try {
       sessionStorage.setItem("forms-flow-draft-v1", JSON.stringify({
-        iar, iarLines, ris, risLines, propertyFlow, tab, selectedItemId,
+        iar, iarLines, ris, risLines, propertyFlow, tab, selectedItemId, loadedRisId,
       }));
     } catch { /* Browser storage may be unavailable. */ }
-  }, [iar, iarLines, ris, risLines, propertyFlow, tab, selectedItemId]);
+  }, [iar, iarLines, ris, risLines, propertyFlow, tab, selectedItemId, loadedRisId]);
 
   // Poll like the Inventory page so on-hand quantities stay in sync with it.
   const { data: items = [] } = useQuery({
@@ -460,6 +522,142 @@ function FormsFlow() {
     () => getStockRows(selectedItem, transactions),
     [selectedItem, transactions],
   );
+  async function loadIarReceipt(transaction: Transaction) {
+    const reference = extractReference(transaction.remarks).replace(/^IAR\s*/i, "").trim();
+    const listedForm = iarForms.find((form) => form.id === transaction.source_form_id)
+      || iarForms.find((form) => String(form.iar_no || "").trim() === reference);
+    if (!listedForm?.id) {
+      toast.error("Could not find saved IAR for this receipt.");
+      return;
+    }
+
+    setLoadingIarReceiptId(transaction.id);
+    try {
+      const form = await getIarFormDetails({ data: { id: listedForm.id } }) as IarFormDetails | null;
+      if (!form) throw new Error("Saved IAR was not found.");
+      const details = form.form_data || {};
+      const nextIar: IarState = {
+        iarNo: form.iar_no || reference,
+        entityName: details.entity_name || FORM_DEFAULTS.entityName,
+        fundCluster: details.fund_cluster || FORM_DEFAULTS.fundCluster,
+        supplier: form.supplier || "",
+        poNoDate: details.po_no_date || "",
+        requisitioningOffice: details.requisitioning_office || "",
+        responsibilityCenter: details.responsibility_center || FORM_DEFAULTS.responsibilityCenter,
+        invoiceNo: form.invoice_no || "",
+        iarDate: details.iar_date || today,
+        invoiceDate: details.invoice_date || today,
+        dateInspected: details.date_inspected || today,
+        dateReceived: details.date_received || today,
+        inspectionOfficer: details.inspection_officer || FORM_DEFAULTS.inspectionOfficer,
+        acceptedBy: form.accepted_by || "",
+        receiptDescription: details.receipt_description || "",
+      };
+      const savedLines = form.lines?.length ? form.lines : [{
+        id: transaction.id,
+        item_id: transaction.item_id,
+        quantity: transaction.quantity,
+        unit_cost: extractUnitCost(transaction.remarks),
+        product_description: transaction.product_description || transaction.item?.description || "",
+        remarks: "",
+      }];
+      const lines: Line[] = savedLines.map((line) => ({
+        id: line.id || createId(),
+        item_id: line.item_id,
+        quantity: String(line.quantity),
+        unitCost: String(line.unit_cost),
+        remarks: line.remarks || "",
+        productDescription: line.product_description || "",
+      }));
+
+      setIarAndFundCluster(nextIar);
+      setIarLines(lines.length ? lines : [blankLine()]);
+      setLoadedRisId("");
+      setTab("iar");
+      requestAnimationFrame(() => {
+        formPreviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      toast.success(`Loaded saved IAR ${nextIar.iarNo}.`);
+    } catch (error) {
+      toast.error(`Could not load IAR: ${errorMessage(error)}`);
+    } finally {
+      setLoadingIarReceiptId("");
+    }
+  }
+  async function loadRisIssue(transaction: Transaction) {
+    const reference = extractReference(transaction.remarks).replace(/^RIS\s*/i, "").trim();
+    setLoadingRisIssueId(transaction.id);
+    try {
+      let form = await getRisFormDetails({
+        data: transaction.source_form_id
+          ? { id: transaction.source_form_id }
+          : { ris_no: reference },
+      }) as RisFormDetails | null;
+      if (!form && transaction.source_form_id) {
+        form = await getRisFormDetails({ data: { ris_no: reference } }) as RisFormDetails | null;
+      }
+      if (!form) throw new Error("Saved RIS was not found.");
+
+      const status = String(form.status || "pending").toLowerCase();
+      const verificationStatus = String(form.verification_status || "draft").toLowerCase();
+      const transactionDate = format(new Date(transaction.created_at), "yyyy-MM-dd");
+      const createdDate = form.created_at?.slice(0, 10) || transactionDate || today;
+      const nextRis: RisState = {
+        risNo: form.ris_no || reference,
+        office: form.office || "",
+        purpose: form.purpose || "",
+        requestedBy: form.requested_by || "",
+        approvedBy: form.approved_by || "",
+        issuedBy: form.issued_by || "",
+        receivedBy: form.received_by || "",
+        requestedDesignation: FORM_DEFAULTS.requestedDesignation,
+        approvedDesignation: FORM_DEFAULTS.approvedDesignation,
+        issuedDesignation: FORM_DEFAULTS.issuedDesignation,
+        receivedDesignation: FORM_DEFAULTS.receivedDesignation,
+        requestedDate: createdDate,
+        approvedDate: form.approved_date || createdDate,
+        issuedDate: form.issued_date || transactionDate || createdDate,
+        receivedDate: transactionDate || createdDate,
+        verificationToken: form.verification_token || "",
+        verificationCode: form.verification_code || "",
+        verificationStatus: verificationStatus === "verified"
+          ? "verified"
+          : verificationStatus === "issued" ? "issued" : "draft",
+        approvalStatus: status === "approved" ? "approved" : status === "rejected" ? "rejected" : "pending",
+        issuedAt: form.verification_published_at || "",
+      };
+      const fundCluster = extractFundCluster(transaction.remarks);
+      if (fundCluster) setFormsFundCluster(fundCluster);
+      const savedLines = form.lines?.length ? form.lines : [{
+        id: transaction.id,
+        item_id: transaction.item_id,
+        quantity: transaction.quantity,
+        remarks: transaction.remarks || "",
+        item: transaction.item,
+      }];
+      const lines: Line[] = savedLines.map((line) => ({
+        id: line.id || createId(),
+        item_id: line.item_id,
+        quantity: String(line.quantity),
+        unitCost: "",
+        remarks: line.remarks || "",
+        productDescription: line.item?.description || "",
+      }));
+
+      setRis(nextRis);
+      setRisLines(lines.length ? lines : [blankLine()]);
+      setLoadedRisId(form.id);
+      setTab("ris");
+      requestAnimationFrame(() => {
+        formPreviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      toast.success(`Loaded saved RIS ${nextRis.risNo}.`);
+    } catch (error) {
+      toast.error(`Could not load RIS: ${errorMessage(error)}`);
+    } finally {
+      setLoadingRisIssueId("");
+    }
+  }
   const rsmiRows = useMemo(
     () => getRsmiRows(transactions, reportMonth, activeFundCluster, iarForms),
     [transactions, reportMonth, activeFundCluster, iarForms],
@@ -591,6 +789,7 @@ function FormsFlow() {
       }));
       setRisLines([blankLine()]);
       setRisValidationAttempted(false);
+      setLoadedRisId("");
       toast.info(`New RIS ready: ${nextRisNo}. Add items and issue it.`);
       return;
     }
@@ -785,6 +984,7 @@ function FormsFlow() {
       });
       setIarLines(Array.from({ length: 4 }, blankLine));
     } else if (tab === "ris") {
+      setLoadedRisId("");
       const verification = createVerificationIdentity();
       const nextRisNo =
         (await reserveNextRisNumber(today)) || makeFormNumber("RIS", today);
@@ -1016,7 +1216,8 @@ function FormsFlow() {
                   inventoryItems={pickerItems}
                   risItems={acceptedStockItems}
                   stockCardItems={stockCardItems}
-                  canWrite={canWrite}
+                  canWrite={canWrite && !(tab === "ris" && Boolean(loadedRisId))}
+                  savedRisLoaded={tab === "ris" && Boolean(loadedRisId)}
                   saving={saving}
                   iar={iar}
                   setIar={setIarAndFundCluster}
@@ -1044,47 +1245,49 @@ function FormsFlow() {
                 />
               )}
 
-              <PaperPreview
-                tab={tab}
-                orientation={orientation}
-                zoom={zoom}
-                editable
-                inventoryItems={pickerItems}
-                risItems={acceptedStockItems}
-                stockCardItems={stockCardItems}
-                iar={iar}
-                setIar={setIarAndFundCluster}
-                iarLines={iarLines}
-                setIarLines={setIarLines}
-                ris={ris}
-                setRis={setRis}
-                risLines={risLines}
-                setRisLines={setRisLines}
-                selectedItem={selectedItem}
-                stockCardFundCluster={stockCardFundCluster}
-                setStockCardFundCluster={setFormsFundCluster}
-                risFundCluster={risFundCluster}
-                setRisFundCluster={setFormsFundCluster}
-                selectedItemId={selectedItemId}
-                setSelectedItemId={setSelectedItemId}
-                stockRows={stockRows}
-                reportMonth={reportMonth}
-                setReportMonth={setReportMonth}
-                rsmiRows={rsmiRows}
-                rpciStartDate={rpciStartDate}
-                setRpciStartDate={setRpciStartDate}
-                rpciEndDate={rpciEndDate}
-                setRpciEndDate={setRpciEndDate}
-                rsmiFundCluster={rsmiFundCluster}
-                setRsmiFundCluster={setFormsFundCluster}
-                rsmiFundClusterOptions={iarFundClusterOptions.length ? iarFundClusterOptions : undefined}
-                rpciFundCluster={rpciFundCluster}
-                setRpciFundCluster={setFormsFundCluster}
-                rpciRows={rpciRows}
-                rpciEntries={rpciEntries}
-                setRpciEntries={setRpciEntries}
-                personnelOptions={personnelOptions}
-              />
+              <div ref={formPreviewRef} className="scroll-mt-4">
+                <PaperPreview
+                  tab={tab}
+                  orientation={orientation}
+                  zoom={zoom}
+                  editable
+                  inventoryItems={pickerItems}
+                  risItems={acceptedStockItems}
+                  stockCardItems={stockCardItems}
+                  iar={iar}
+                  setIar={setIarAndFundCluster}
+                  iarLines={iarLines}
+                  setIarLines={setIarLines}
+                  ris={ris}
+                  setRis={setRis}
+                  risLines={risLines}
+                  setRisLines={setRisLines}
+                  selectedItem={selectedItem}
+                  stockCardFundCluster={stockCardFundCluster}
+                  setStockCardFundCluster={setFormsFundCluster}
+                  risFundCluster={risFundCluster}
+                  setRisFundCluster={setFormsFundCluster}
+                  selectedItemId={selectedItemId}
+                  setSelectedItemId={setSelectedItemId}
+                  stockRows={stockRows}
+                  reportMonth={reportMonth}
+                  setReportMonth={setReportMonth}
+                  rsmiRows={rsmiRows}
+                  rpciStartDate={rpciStartDate}
+                  setRpciStartDate={setRpciStartDate}
+                  rpciEndDate={rpciEndDate}
+                  setRpciEndDate={setRpciEndDate}
+                  rsmiFundCluster={rsmiFundCluster}
+                  setRsmiFundCluster={setFormsFundCluster}
+                  rsmiFundClusterOptions={iarFundClusterOptions.length ? iarFundClusterOptions : undefined}
+                  rpciFundCluster={rpciFundCluster}
+                  setRpciFundCluster={setFormsFundCluster}
+                  rpciRows={rpciRows}
+                  rpciEntries={rpciEntries}
+                  setRpciEntries={setRpciEntries}
+                  personnelOptions={personnelOptions}
+                />
+              </div>
             </div>
           </main>
 
@@ -1094,6 +1297,11 @@ function FormsFlow() {
             inventoryItems={flowItems}
             transactions={transactions}
             reportMonth={reportMonth}
+            onSelectIarReceipt={loadIarReceipt}
+            loadingIarReceiptId={loadingIarReceiptId}
+            onSelectRisIssue={loadRisIssue}
+            loadingRisIssueId={loadingRisIssueId}
+            onBackup={createFormsFlowBackup}
           />
         </div>
       </div>
@@ -1359,6 +1567,7 @@ function EntryPanel({
   risItems,
   stockCardItems,
   canWrite,
+  savedRisLoaded,
   saving,
   iar,
   setIar,
@@ -1389,6 +1598,7 @@ function EntryPanel({
   risItems: Item[];
   stockCardItems: Item[];
   canWrite: boolean;
+  savedRisLoaded: boolean;
   saving: boolean;
   iar: IarState;
   setIar: (state: IarState) => void;
@@ -1484,7 +1694,9 @@ function EntryPanel({
       <section className="rounded-lg border border-border bg-card">
         <FormTitle
           title="RIS Input"
-          subtitle="Issued items become Stock Card issue entries and RSMI rows."
+          subtitle={savedRisLoaded
+            ? "Saved RIS loaded for review. Use Cancel to start a new form."
+            : "Issued items become Stock Card issue entries and RSMI rows."}
         />
         <div className="space-y-4 p-4">
           <div className="grid gap-3 sm:grid-cols-2">
@@ -1579,6 +1791,8 @@ function EntryPanel({
               <Send className="h-4 w-4" />{" "}
               {saving
                 ? "Issuing..."
+                : savedRisLoaded
+                  ? "Saved RIS Loaded"
                 : ris.verificationStatus === "verified"
                   ? "RIS Verified"
                   : ris.verificationStatus === "issued"
@@ -3386,14 +3600,25 @@ function FlowSupportPanel({
   inventoryItems,
   transactions,
   reportMonth,
+  onSelectIarReceipt,
+  loadingIarReceiptId,
+  onSelectRisIssue,
+  loadingRisIssueId,
+  onBackup,
 }: {
   placement: "side" | "bottom";
   stats: FlowStats;
   inventoryItems: Item[];
   transactions: Transaction[];
   reportMonth: string;
+  onSelectIarReceipt: (transaction: Transaction) => Promise<void>;
+  loadingIarReceiptId: string;
+  onSelectRisIssue: (transaction: Transaction) => Promise<void>;
+  loadingRisIssueId: string;
+  onBackup: () => Promise<Record<string, unknown[]>>;
 }) {
   const isBottom = placement === "bottom";
+  const [backupBusy, setBackupBusy] = useState(false);
   const iarRows = transactions
     .filter((tx) => tx.type === "IN" && isIarTransaction(tx))
     .slice(-8)
@@ -3415,6 +3640,33 @@ function FlowSupportPanel({
     );
   }
 
+  async function downloadBackup() {
+    setBackupBusy(true);
+    try {
+      const tables = await onBackup();
+      const backup = {
+        format: "supplify-forms-flow-backup",
+        version: 1,
+        created_at: new Date().toISOString(),
+        tables,
+      };
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `forms-flow-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast.success("Forms Flow backup downloaded.");
+    } catch (error) {
+      toast.error(`Backup failed: ${errorMessage(error)}`);
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
   return (
     <aside className="space-y-4">
       <div className="flex items-center justify-between gap-3">
@@ -3422,7 +3674,18 @@ function FlowSupportPanel({
           <div className="text-sm font-semibold">Flow Summary</div>
           <div className="text-xs text-muted-foreground">Quick actions for this form dashboard</div>
         </div>
-        <SummaryActions onExport={exportSummary} onPrint={() => window.print()} />
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => void downloadBackup()}
+            disabled={backupBusy}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2.5 py-2 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+            title="Download Forms Flow data backup"
+          >
+            <Download className="h-3.5 w-3.5" /> {backupBusy ? "Backing up…" : "Backup"}
+          </button>
+          <SummaryActions onExport={exportSummary} onPrint={() => window.print()} />
+        </div>
       </div>
       <div
         className={`grid grid-cols-2 gap-3 ${isBottom ? "xl:grid-cols-4" : ""}`}
@@ -3437,11 +3700,17 @@ function FlowSupportPanel({
         <SupportTable
           title="Recent IAR Receipts"
           rows={iarRows}
+          onSelectRow={onSelectIarReceipt}
+          loadingRowId={loadingIarReceiptId}
+          actionLabel="Load IAR"
           empty="No IAR receipts posted yet."
         />
         <SupportTable
           title="Recent RIS Issues"
           rows={risRows}
+          onSelectRow={onSelectRisIssue}
+          loadingRowId={loadingRisIssueId}
+          actionLabel="Load RIS"
           empty="No RIS issues posted yet."
         />
 
@@ -3511,10 +3780,16 @@ function SupportCard({
 function SupportTable({
   title,
   rows,
+  onSelectRow,
+  loadingRowId,
+  actionLabel,
   empty,
 }: {
   title: string;
   rows: Transaction[];
+  onSelectRow?: (row: Transaction) => Promise<void>;
+  loadingRowId?: string;
+  actionLabel?: string;
   empty: string;
 }) {
   return (
@@ -3534,7 +3809,21 @@ function SupportTable({
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.id}>
+              <tr
+                key={row.id}
+                onClick={onSelectRow ? () => void onSelectRow(row) : undefined}
+                onKeyDown={onSelectRow ? (event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    void onSelectRow(row);
+                  }
+                } : undefined}
+                tabIndex={onSelectRow ? 0 : undefined}
+                role={onSelectRow ? "button" : undefined}
+                aria-label={onSelectRow ? `${actionLabel || "Open"} ${extractReference(row.remarks)} in form` : undefined}
+                aria-busy={loadingRowId === row.id}
+                className={onSelectRow ? "cursor-pointer hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary" : undefined}
+              >
                 <td>{extractReference(row.remarks)}</td>
                 <td>{row.item?.name || "-"}{row.product_description && <small className="block text-muted-foreground">{row.product_description}</small>}</td>
                 <td className="text-right tabular-nums">{row.quantity}</td>
