@@ -345,8 +345,11 @@ export async function ensureSchema() {
       quantity NUMERIC(12,2) NOT NULL,
       remarks TEXT DEFAULT NULL,
       transaction_id UUID DEFAULT NULL,
+      iar_item_id UUID REFERENCES iar_items(id),
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    ALTER TABLE ris_items ADD COLUMN IF NOT EXISTS iar_item_id UUID REFERENCES iar_items(id);
 
     CREATE TABLE IF NOT EXISTS form_number_counters (
       form_prefix TEXT NOT NULL,

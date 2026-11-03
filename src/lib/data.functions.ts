@@ -67,6 +67,51 @@ function isLocalDatabaseUnavailable(error: unknown) {
   );
 }
 
+function stockCardBalanceMap(movements: any[]) {
+  const balances = new Map<string, number>();
+  for (const movement of movements) {
+    const source = String(movement.source_form_type || "").toUpperCase();
+    const reference = String(movement.remarks || "").split("|")[0].trim().toUpperCase();
+    if (source !== "IAR" && source !== "RIS" && !reference.startsWith("IAR ") && !reference.startsWith("RIS ")) continue;
+    const itemId = String(movement.item_id || "");
+    if (!itemId) continue;
+    const type = String(movement.type || "").toUpperCase();
+    const sign = type === "IN" ? 1 : type === "OUT" ? -1 : 0;
+    balances.set(itemId, (balances.get(itemId) || 0) + sign * Number(movement.quantity || 0));
+  }
+  return balances;
+}
+
+function withStockCardQuantity(item: any, balances: Map<string, number>) {
+  return balances.has(String(item.id))
+    ? { ...item, stored_quantity: item.quantity, quantity: balances.get(String(item.id)) }
+    : item;
+}
+
+function buildPriceBalances(receipts: any[], issues: any[]) {
+  const lots = receipts.map((row) => ({
+    id: String(row.id), item_id: String(row.item_id), unit_cost: Number(row.unit_cost) || 0,
+    quantity: Number(row.quantity) || 0, created_at: String(row.created_at || ""), iar_no: String(row.iar_no || ""),
+  })).sort((a, b) => a.created_at.localeCompare(b.created_at));
+  for (const issue of [...issues].sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))) {
+    let remaining = Number(issue.quantity) || 0;
+    const matched = issue.iar_item_id ? lots.find((lot) => lot.id === String(issue.iar_item_id)) : null;
+    const targets = matched ? [matched] : lots.filter((lot) => lot.item_id === String(issue.item_id));
+    for (const lot of targets) {
+      const deducted = Math.min(lot.quantity, remaining);
+      lot.quantity -= deducted;
+      remaining -= deducted;
+      if (remaining <= 0) break;
+    }
+  }
+  return lots.filter((lot) => lot.quantity > 0).reduce((map, lot) => {
+    const rows = map.get(lot.item_id) || [];
+    rows.push({ id: lot.id, iar_no: lot.iar_no, unit_cost: lot.unit_cost, quantity: lot.quantity });
+    map.set(lot.item_id, rows);
+    return map;
+  }, new Map<string, { id: string; iar_no: string; unit_cost: number; quantity: number }[]>());
+}
+
 function cleanBarcode(row: any) {
   return row?.barcode_value && String(row.barcode_value) === String(row.id)
     ? null
@@ -240,8 +285,24 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
         LEFT JOIN suppliers s ON s.id = i.supplier_id
         ORDER BY i.sort_order ASC NULLS LAST, i.name ASC
       `;
-      return rows.map((r: any) => ({
+      const ledgerRows = await sql`
+        SELECT item_id,
+          SUM(CASE WHEN type = 'IN' THEN quantity WHEN type = 'OUT' THEN -quantity ELSE 0 END) AS balance
+        FROM transactions
+        WHERE upper(coalesce(source_form_type, '')) IN ('IAR', 'RIS')
+          OR upper(split_part(coalesce(remarks, ''), '|', 1)) LIKE 'IAR %'
+          OR upper(split_part(coalesce(remarks, ''), '|', 1)) LIKE 'RIS %'
+        GROUP BY item_id
+      `;
+      const receipts = await sql`SELECT ii.id, ii.item_id, ii.unit_cost, ii.quantity, ii.created_at, f.iar_no FROM iar_items ii JOIN iar_forms f ON f.id = ii.iar_id ORDER BY ii.created_at ASC`;
+      const issues = await sql`SELECT item_id, iar_item_id, quantity, created_at FROM ris_items ORDER BY created_at ASC`;
+      const prices = buildPriceBalances(receipts, issues);
+      const balances = new Map<string, number>(
+        ledgerRows.map((row: any) => [String(row.item_id), Number(row.balance) || 0]),
+      );
+      return rows.map((r: any) => withStockCardQuantity({
         ...r,
+        price_balances: prices.get(String(r.id)) || [],
         barcode_value: r.barcode_value && String(r.barcode_value) === String(r.id) ? null : r.barcode_value,
         category: r.category?.id
           ? { id: r.category.id, name: r.category.name }
@@ -249,7 +310,7 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
         supplier: r.supplier?.id
           ? { id: r.supplier.id, name: r.supplier.name }
           : null,
-      }));
+      }, balances));
     },
     async () => {
       const rows = await sbSelect(
@@ -257,37 +318,59 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
         "select=*,category:categories(id,name),supplier:suppliers(id,name)&order=name.asc&limit=2000",
       );
       const { numbered, missing } = assignMissingStockNumbers(rows);
+      let finalRows = numbered;
       if (missing.length > 0) {
         try {
           await sbRpc("ensure_stock_numbers", {
             p_item_ids: missing.map((item) => item.id),
           });
-          const refreshedRows = await sbSelect(
+          finalRows = await sbSelect(
             "items",
             "select=*,category:categories(id,name),supplier:suppliers(id,name)&order=name.asc&limit=2000",
           );
-          return refreshedRows.map((r: any) => withCategorySupplier(r));
         } catch (error) {
           // Older hosted projects may not have the repair RPC yet. Fall back
           // to writing the stable generated numbers directly below.
           console.warn("Stock number RPC unavailable; repairing item rows via REST:", error);
         }
       }
-      for (const item of missing) {
-        try {
-          await sbUpdate(
-            "items",
-            `id=eq.${encodeURIComponent(item.id)}`,
-            { stock_number: item.stock_number },
-            getRestWriteConfig(),
-          );
-        } catch (error) {
-          // Keep generated number visible in this response even if a hosted
-          // deployment has not granted the REST key permission to repair rows.
-          console.error(`Unable to save stock number for item ${item.id}:`, error);
+      if (missing.length > 0 && finalRows === numbered) {
+        for (const item of missing) {
+          try {
+            await sbUpdate(
+              "items",
+              `id=eq.${encodeURIComponent(item.id)}`,
+              { stock_number: item.stock_number },
+              getRestWriteConfig(),
+            );
+          } catch (error) {
+            // Keep generated number visible in this response even if a hosted
+            // deployment has not granted the REST key permission to repair rows.
+            console.error(`Unable to save stock number for item ${item.id}:`, error);
+          }
         }
       }
-      return numbered.map((r: any) => withCategorySupplier(r));
+      let balances = new Map<string, number>();
+      try {
+        const movements = await sbSelect<any>(
+          "transactions",
+          "select=item_id,type,quantity,source_form_type,remarks&limit=10000",
+        );
+        balances = stockCardBalanceMap(movements);
+      } catch (error) {
+        console.error("Unable to load stock card balances for inventory:", error);
+      }
+      let prices = new Map<string, { id: string; iar_no: string; unit_cost: number; quantity: number }[]>();
+      try {
+        const [receipts, issues] = await Promise.all([
+          sbSelect<any>("iar_items", "select=id,item_id,unit_cost,quantity,created_at,iar:iar_forms(iar_no)&order=created_at.asc&limit=10000"),
+          sbSelect<any>("ris_items", "select=item_id,iar_item_id,quantity,created_at&order=created_at.asc&limit=10000"),
+        ]);
+        prices = buildPriceBalances(receipts.map((row: any) => ({ ...row, iar_no: row.iar?.iar_no })), issues);
+      } catch (error) {
+        console.error("Unable to load inventory cost quantities:", error);
+      }
+      return finalRows.map((r: any) => withStockCardQuantity({ ...withCategorySupplier(r), price_balances: prices.get(String(r.id)) || [] }, balances));
     },
   ).catch((e: any) => {
     console.error("listItems error:", e);
@@ -1072,6 +1155,14 @@ export const createTransaction = createServerFn({ method: "POST" })
         const available = data.source_form_type === "RIS"
           ? availableFromStockCard(stockCardTransactions)
           : Number(item.quantity);
+        if (data.type === "OUT" && data.source_form_type === "RIS" && data.source_line_id) {
+          const receipts = await tx`SELECT ii.id, ii.item_id, ii.unit_cost, ii.quantity, ii.created_at, f.iar_no FROM iar_items ii JOIN iar_forms f ON f.id = ii.iar_id WHERE ii.item_id = ${data.item_id} ORDER BY ii.created_at ASC`;
+          const issues = await tx`SELECT item_id, iar_item_id, quantity, created_at FROM ris_items WHERE item_id = ${data.item_id} ORDER BY created_at ASC`;
+          const lot = buildPriceBalances(receipts, issues).get(String(data.item_id))?.find((row) => row.id === String(data.source_line_id));
+          if (!lot) throw new Error("Selected IAR price identity has no available quantity.");
+          const lotAvailable = Number(lot.quantity) || 0;
+          if (quantity > lotAvailable) throw new Error(`Only ${lotAvailable} units remain at selected unit price.`);
+        }
         if (data.type === "OUT" && available < quantity) {
           throw new Error(`Only ${available} units are available.`);
         }
@@ -1085,6 +1176,7 @@ export const createTransaction = createServerFn({ method: "POST" })
             remarks: data.remarks || null,
             source_form_type: data.source_form_type || null,
             source_form_id: data.source_form_id || null,
+            source_line_id: data.source_line_id || null,
           })}
           RETURNING *
         `;
@@ -1106,6 +1198,16 @@ export const createTransaction = createServerFn({ method: "POST" })
         const available = data.source_form_type === "RIS"
           ? availableFromStockCard(stockCardTransactions)
           : Number(item.quantity);
+        if (data.type === "OUT" && data.source_form_type === "RIS" && data.source_line_id) {
+          const [receipts, issues] = await Promise.all([
+            sbSelect<any>("iar_items", `select=id,item_id,unit_cost,quantity,created_at,iar:iar_forms(iar_no)&item_id=eq.${encodeURIComponent(data.item_id)}&order=created_at.asc&limit=10000`),
+            sbSelect<any>("ris_items", `select=item_id,iar_item_id,quantity,created_at&item_id=eq.${encodeURIComponent(data.item_id)}&order=created_at.asc&limit=10000`),
+          ]);
+          const lot = buildPriceBalances(receipts.map((row: any) => ({ ...row, iar_no: row.iar?.iar_no })), issues)
+            .get(String(data.item_id))?.find((row) => row.id === String(data.source_line_id));
+          const lotAvailable = Number(lot?.quantity) || 0;
+          if (quantity > lotAvailable) throw new Error(`Only ${lotAvailable} units remain at selected unit price.`);
+        }
         if (data.type === "OUT" && available < quantity) {
           throw new Error(`Only ${available} units are available.`);
         }
@@ -1118,6 +1220,7 @@ export const createTransaction = createServerFn({ method: "POST" })
           remarks: data.remarks || null,
           source_form_type: data.source_form_type || null,
           source_form_id: data.source_form_id || null,
+          source_line_id: data.source_line_id || null,
         }, getRestWriteConfig());
       },
     );
@@ -1382,6 +1485,29 @@ export const createIarItem = createServerFn({ method: "POST" })
     return row;
   });
 
+export const updateIarPriceLots = createServerFn({ method: "POST" })
+  .inputValidator((d: { item_id: string; lots: { id: string; unit_cost: number }[] }) => d)
+  .handler(async ({ data }) => withDbFallback(
+    async (sql) => sql.begin(async (tx: any) => {
+      const updated = [];
+      for (const lot of data.lots) {
+        const unitCost = Number(lot.unit_cost);
+        if (!Number.isFinite(unitCost) || unitCost < 0) throw new Error("Unit price must be zero or greater.");
+        const [row] = await tx`UPDATE iar_items SET unit_cost = ${unitCost}, amount = quantity * ${unitCost} WHERE id = ${lot.id} AND item_id = ${data.item_id} RETURNING id, unit_cost, amount`;
+        if (!row) throw new Error("IAR price identity was not found for this item.");
+        updated.push(row);
+      }
+      return updated;
+    }),
+    async () => Promise.all(data.lots.map(async (lot) => {
+      const unitCost = Number(lot.unit_cost);
+      if (!Number.isFinite(unitCost) || unitCost < 0) throw new Error("Unit price must be zero or greater.");
+      const [row] = await sbSelect<any>("iar_items", `select=quantity&id=eq.${encodeURIComponent(lot.id)}&item_id=eq.${encodeURIComponent(data.item_id)}&limit=1`);
+      if (!row) throw new Error("IAR price identity was not found for this item.");
+      return sbUpdate("iar_items", `id=eq.${encodeURIComponent(lot.id)}&item_id=eq.${encodeURIComponent(data.item_id)}`, { unit_cost: unitCost, amount: Number(row.quantity) * unitCost }, getRestWriteConfig());
+    })),
+  ));
+
 export const createRisForm = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
@@ -1623,6 +1749,7 @@ export const createRisItem = createServerFn({ method: "POST" })
         quantity: Number(data.quantity),
         remarks: data.remarks || null,
         transaction_id: data.transaction_id || null,
+        iar_item_id: data.iar_item_id || null,
     };
     return withDbFallback(
       async (sql) => {

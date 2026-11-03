@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
@@ -73,6 +74,7 @@ type Item = {
   quantity: number;
   unit: string;
   acquisition_cost?: number;
+  price_balances?: { id: string; iar_no: string; unit_cost: number; quantity: number }[];
   inventory_classification?:
     | "expendable_supply"
     | "semi_expendable_property"
@@ -164,6 +166,8 @@ type Line = {
   unitCost: string;
   remarks: string;
   productDescription?: string;
+  priceLotId?: string;
+  priceLotIds?: string[];
 };
 
 type IarState = {
@@ -815,26 +819,34 @@ function FormsFlow() {
     if (validLines.length === 0)
       return toast.error("Add at least one item to issue.");
 
-    // Repeated item IDs are valid separate RIS lines. Check their combined
-    // quantity against stock before creating the unique RIS header.
-    const requestedByItem = new Map<string, number>();
+    // Check repeated RIS lines against each selected IAR price identity.
+    const requestedByLot = new Map<string, { item: Item; quantity: number; available: number }>();
     for (const line of validLines) {
-      requestedByItem.set(
-        line.item_id,
-        (requestedByItem.get(line.item_id) || 0) + Number(line.quantity),
-      );
+      const item = acceptedStockItems.find((candidate: Item) => candidate.id === line.item_id);
+      const lots = selectedPriceLots(item, line);
+      if (item && lots.length) {
+        const costKey = Math.round(Number(lots[0].unit_cost) * 100);
+        const key = `${item.id}:${costKey}`;
+        const prev = requestedByLot.get(key);
+        requestedByLot.set(key, { item, quantity: (prev?.quantity || 0) + Number(line.quantity), available: lots.reduce((sum, lot) => sum + Number(lot.quantity || 0), 0) });
+      } else if (item) {
+        const key = `item:${item.id}`;
+        const prev = requestedByLot.get(key);
+        requestedByLot.set(key, { item, quantity: (prev?.quantity || 0) + Number(line.quantity), available: Number(item.quantity) || 0 });
+      }
     }
-    for (const [itemId, requestedQuantity] of requestedByItem) {
-      const item = acceptedStockItems.find((candidate: Item) => candidate.id === itemId);
-      if (!item) {
+    for (const line of validLines) {
+      if (!acceptedStockItems.some((candidate: Item) => candidate.id === line.item_id)) {
         return toast.error("RIS can only issue items that were accepted through IAR and still have stock.");
       }
+    }
+    for (const { item, quantity: requestedQuantity, available } of requestedByLot.values()) {
       if (Number(item.quantity) <= 0) {
         return toast.error(`${item.name} is out of stock.`);
       }
-      if (requestedQuantity > Number(item.quantity)) {
+      if (requestedQuantity > available) {
         return toast.error(
-          `${item.name} has only ${item.quantity} ${item.unit} available across all RIS rows.`,
+          `${item.name} has only ${available} ${item.unit} available at selected price.`,
         );
       }
     }
@@ -883,15 +895,23 @@ function FormsFlow() {
           (candidate: Item) => candidate.id === line.item_id,
         ) ?? items.find((candidate: Item) => candidate.id === line.item_id);
       try {
-        const tx = await createTransaction({ data: {
-          item_id: line.item_id,
-          type: "OUT",
-          quantity: Number(line.quantity),
-          staff_id: user?.id,
-          staff_name: userName,
-          source_form_type: "RIS",
-          source_form_id: risRecord.id,
-          remarks: [
+        const selectedLots = selectedPriceLots(item, line);
+        const lotsToIssue = selectedLots.length ? selectedLots : item?.price_balances?.length ? [item.price_balances[0]] : [null];
+        let remainingQty = Number(line.quantity);
+        for (const lot of lotsToIssue) {
+          if (remainingQty <= 0) break;
+          const issuedQty = lot ? Math.min(remainingQty, Number(lot.quantity) || 0) : remainingQty;
+          if (issuedQty <= 0) continue;
+          const tx = await createTransaction({ data: {
+            item_id: line.item_id,
+            type: "OUT",
+            quantity: issuedQty,
+            staff_id: user?.id,
+            staff_name: userName,
+            source_form_type: "RIS",
+            source_form_id: risRecord.id,
+            source_line_id: lot?.id || null,
+            remarks: [
             `RIS ${ris.risNo}`,
             `Fund Cluster: ${risFundCluster}`,
             `Office: ${ris.office}`,
@@ -901,15 +921,18 @@ function FormsFlow() {
           ]
             .filter(Boolean)
             .join(" | "),
-        } });
-
-        await createRisItem({ data: {
-        ris_id: risRecord.id,
-        item_id: line.item_id,
-        quantity: Number(line.quantity),
-        remarks: line.remarks || null,
-        transaction_id: tx.id,
-        } });
+          } });
+          await createRisItem({ data: {
+            ris_id: risRecord.id,
+            item_id: line.item_id,
+            quantity: issuedQty,
+            remarks: line.remarks || null,
+            transaction_id: tx.id,
+            iar_item_id: lot?.id || null,
+          } });
+          remainingQty -= issuedQty;
+        }
+        if (remainingQty > 0) throw new Error(`Selected price has only ${Number(line.quantity) - remainingQty} units available.`);
       } catch (error) {
         setSaving(false);
         return toast.error(errorMessage(error));
@@ -3448,7 +3471,14 @@ function LineEditor({
               (candidate) => candidate.id === line.item_id,
             );
             // Live on-hand quantity coming straight from Inventory.
-            const availableQty = item ? Number(item.quantity) || 0 : null;
+            const selectedLots = selectedPriceLots(item, line);
+            const selectedGroup = (selectedLots.length ? priceGroups(item).find((group) => group.lots.some((lot) => selectedLots.some((selected) => selected.id === lot.id))) : undefined)
+              || (checkStock ? priceGroups(item)[0] : undefined);
+            const availableQty = item
+              ? (checkStock && item.price_balances?.length
+                ? Number(selectedGroup?.quantity ?? 0)
+                : Number(item.quantity) || 0)
+              : null;
             const lineQty = Number(line.quantity) || 0;
             // IAR receives stock, so zero on-hand is valid before posting a
             // receipt. Only stock-consuming forms (RIS) should flag it.
@@ -3468,14 +3498,25 @@ function LineEditor({
                     value={line.item_id}
                     onChange={(itemId) => {
                       const selected = items.find((candidate) => candidate.id === itemId);
+                      const firstGroup = priceGroups(selected)[0];
                       updateLine(line.id, {
                         item_id: itemId,
+                        priceLotId: firstGroup?.lots[0]?.id || "",
+                        priceLotIds: firstGroup?.lots.map((lot) => lot.id) || [],
                         ...(showCost ? { unitCost: selected ? String(Number(selected.acquisition_cost || 0)) : "" } : {}),
                         ...(showProductDescription ? { productDescription: selected?.description || "" } : {}),
                       });
                     }}
                     onAddMissingItem={allowAddItem ? (name, description) => setItemToAdd({ lineId: line.id, name, description }) : undefined}
                     productDescription={line.productDescription || ""}
+                    pricePicker={checkStock}
+                    onSelectPrice={checkStock ? (itemId, lots, unitCost) => updateLine(line.id, {
+                      item_id: itemId,
+                      priceLotId: lots[0]?.id || "",
+                      priceLotIds: lots.map((lot) => lot.id),
+                      unitCost: String(unitCost),
+                      quantity: "",
+                    }) : undefined}
                     placeholder="Type item name or description"
                   />
                 </td>
@@ -4040,6 +4081,8 @@ function ItemLookup({
   placeholder = "Type item name or description",
   displayNameOnly = false,
   searchOnly = false,
+  pricePicker = false,
+  onSelectPrice,
 }: {
   items: Item[];
   value: string;
@@ -4050,15 +4093,32 @@ function ItemLookup({
   placeholder?: string;
   displayNameOnly?: boolean;
   searchOnly?: boolean;
+  pricePicker?: boolean;
+  onSelectPrice?: (itemId: string, lots: NonNullable<Item["price_balances"]>, unitCost: number) => void;
 }) {
   const listId = useRef(`item-lookup-${createId()}`).current;
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const popupRef = useRef<HTMLDivElement | null>(null);
   const isTypingRef = useRef(false);
   const selected = items.find((item) => item.id === value);
   const displayLabel = (item?: Item | null) => displayNameOnly ? item?.name || "" : itemLabel(item);
   const [text, setText] = useState(() => displayLabel(selected));
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [popupPosition, setPopupPosition] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
+
+  const updatePopupPosition = () => {
+    const rect = inputRef.current?.getBoundingClientRect();
+    if (!rect || typeof window === "undefined") return;
+    const roomBelow = window.innerHeight - rect.bottom - 8;
+    const openBelow = roomBelow >= 180;
+    const maxHeight = Math.max(120, Math.min(360, openBelow ? roomBelow : rect.top - 16, window.innerHeight - 24));
+    const top = openBelow ? rect.bottom + 4 : Math.max(8, rect.top - maxHeight - 4);
+    const width = Math.min(Math.max(rect.width, pricePicker ? 360 : 260), window.innerWidth - 16);
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    setPopupPosition({ top, left, width, maxHeight });
+  };
 
   useEffect(() => {
     if (isTypingRef.current) return;
@@ -4070,7 +4130,8 @@ function ItemLookup({
   useEffect(() => {
     if (!open) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (!rootRef.current?.contains(target) && !popupRef.current?.contains(target)) setOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
@@ -4082,6 +4143,18 @@ function ItemLookup({
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    updatePopupPosition();
+    const onScrollOrResize = () => updatePopupPosition();
+    window.addEventListener("resize", onScrollOrResize);
+    window.addEventListener("scroll", onScrollOrResize, true);
+    return () => {
+      window.removeEventListener("resize", onScrollOrResize);
+      window.removeEventListener("scroll", onScrollOrResize, true);
+    };
+  }, [open, text, items, pricePicker]);
 
   function handleText(next: string) {
     setText(next);
@@ -4102,7 +4175,7 @@ function ItemLookup({
     // Search-only pickers keep current selection while text is incomplete.
     // Editable form rows clear stale ids so unmatched text cannot post against
     // a previous item.
-    if (match) {
+    if (match && !pricePicker) {
       setText(displayLabel(match));
       setOpen(false);
       isTypingRef.current = false;
@@ -4135,6 +4208,7 @@ function ItemLookup({
   return (
     <div ref={rootRef} className="relative min-w-0">
       <input
+        ref={inputRef}
         className={className}
         value={text}
         placeholder={placeholder}
@@ -4163,26 +4237,37 @@ function ItemLookup({
         }}
         autoComplete="off"
       />
-      {open && text.trim() && (matches.length > 0 || showAddItem) && (
-        <div id={listId} className="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-md border border-border bg-popover text-popover-foreground shadow-lg">
+      {open && text.trim() && (matches.length > 0 || showAddItem) && popupPosition && typeof document !== "undefined" && createPortal(
+        <div ref={popupRef} id={listId} className="fixed overflow-y-auto rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-2xl ring-1 ring-black/10" style={{ top: popupPosition.top, left: popupPosition.left, width: popupPosition.width, maxHeight: popupPosition.maxHeight, zIndex: 10000 }}>
           {matches.length > 0 ? (
             <div role="listbox" aria-label="Matching inventory items" className="p-1">
               {matches.map((item, index) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  role="option"
-                  aria-selected={item.id === value}
-                  className={`block w-full rounded px-2.5 py-2 text-left text-sm hover:bg-accent ${index === activeIndex ? "bg-accent" : ""}`}
-                  onMouseDown={(event) => event.preventDefault()}
-            onClick={() => { setText(displayLabel(item)); isTypingRef.current = false; onChange(item.id); setOpen(false); }}
-                >
-                  <span className="block truncate">{item.name}</span>
-                  {item.description && <span className="block truncate text-xs text-muted-foreground">{item.description}</span>}
-                  <span className="block truncate text-[11px] text-muted-foreground">
-                    Stock {item.stock_number || "unassigned"} · {item.unit} · {peso(Number(item.acquisition_cost || 0))}
-                  </span>
-                </button>
+                <div key={item.id} role="option" aria-selected={item.id === value} className={`rounded px-2.5 py-2 text-left text-sm ${index === activeIndex ? "bg-accent" : ""}`}>
+                  <button
+                    type="button"
+                    className="block w-full text-left"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => { setText(displayLabel(item)); isTypingRef.current = false; onChange(item.id); setOpen(false); }}
+                  >
+                    <span className="block truncate font-medium">{item.name}</span>
+                    {item.description && <span className="block truncate text-xs text-muted-foreground">{item.description}</span>}
+                    <span className="block truncate text-[11px] text-muted-foreground">Stock {item.stock_number || "unassigned"} · {item.unit} · {item.price_balances?.length ? `${item.price_balances.length} price identities` : peso(Number(item.acquisition_cost || 0))}</span>
+                  </button>
+                  {pricePicker && item.price_balances?.length ? (
+                    <div className="mt-2 space-y-1 border-t border-border pt-2" aria-label={`Available prices for ${item.name}`}>
+                      {priceGroups(item).map((group) => (
+                        <button key={Math.round(group.unit_cost * 100)} type="button" className="flex min-h-11 w-full items-center justify-between gap-4 rounded-md border border-border/70 px-3 py-2 text-left text-sm hover:bg-accent" onMouseDown={(event) => event.preventDefault()} onClick={() => {
+                          setText(displayLabel(item));
+                          isTypingRef.current = false;
+                          onSelectPrice?.(item.id, group.lots, group.unit_cost);
+                          setOpen(false);
+                        }}>
+                          <span>₱ {peso(group.unit_cost)}</span><strong>{group.quantity} {item.unit} available</strong>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               ))}
             </div>
           ) : (
@@ -4200,7 +4285,8 @@ function ItemLookup({
               </button>
             </div>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
@@ -4380,6 +4466,28 @@ function itemSearchText(item: Item): string {
   ]
     .join(" ")
     .toLocaleLowerCase();
+}
+
+function priceGroups(item?: Item | null) {
+  const grouped = new Map<number, { unit_cost: number; quantity: number; lots: NonNullable<Item["price_balances"]> }>();
+  for (const lot of item?.price_balances || []) {
+    const costKey = Math.round(Number(lot.unit_cost) * 100);
+    const group = grouped.get(costKey) || { unit_cost: costKey / 100, quantity: 0, lots: [] };
+    group.quantity += Number(lot.quantity) || 0;
+    group.lots.push(lot);
+    grouped.set(costKey, group);
+  }
+  return [...grouped.values()];
+}
+
+function selectedPriceLots(item?: Item | null, line?: Line) {
+  const availableLots = item?.price_balances || [];
+  const explicitlySelected = line?.priceLotIds?.length
+    ? availableLots.filter((lot) => line.priceLotIds!.includes(lot.id))
+    : [];
+  if (explicitlySelected.length) return explicitlySelected;
+  const seed = availableLots.find((lot) => lot.id === line?.priceLotId) || availableLots[0];
+  return seed ? availableLots.filter((lot) => Math.round(Number(lot.unit_cost) * 100) === Math.round(Number(seed.unit_cost) * 100)) : [];
 }
 
 function itemLabel(item?: Item | null) {

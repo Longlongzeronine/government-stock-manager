@@ -450,7 +450,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [layoutOpen]);
-  const monthsFor = (item: any) => monthlyPlan[item.id] || ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].map((month, index) => Number(item[`${month}_quantity`] ?? (index === 0 ? item.quantity : 0)) || 0);
+  const monthsFor = (item: any) => monthlyPlan[item.id] || ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].map((month, index) => Number(item[`${month}_quantity`] ?? (index === 0 ? item.stored_quantity ?? item.quantity : 0)) || 0);
   const isNewItem = (item: any) => !!item?.created_at && !seenNewIds.has(item.id) && Date.now() - new Date(item.created_at).getTime() < NEW_ITEM_WINDOW_MS;
   // Part I = items with barcode_value (PS-DBM catalog items from XLSX import)
   const part1Items = (items as any[]).filter((item: any) => item.barcode_value);
@@ -886,7 +886,10 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
   const easyCard = (item: any, rowIndex: number) => {
     const months = monthsFor(item);
     const price = Number(item.acquisition_cost || 0);
-    const totalQty = months.reduce((sum, q) => sum + q, 0);
+    const plannedQty = months.reduce((sum, q) => sum + q, 0);
+    const totalQty = item.price_balances?.length
+      ? item.price_balances.reduce((sum: number, lot: any) => sum + Number(lot.quantity || 0), 0)
+      : Number(item.quantity ?? plannedQty) || 0;
     const code = item.barcode_value || item.qr_code_value || "";
     const qrValue = item.qr_code_value || item.barcode_value || item.id;
     return (
@@ -902,8 +905,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
         <dl className="app-cse-easy-card-meta">
           <div><dt>Unit</dt><dd>{item.unit || "—"}</dd></div>
           <div><dt>Total Qty</dt><dd>{totalQty}</dd></div>
-          <div><dt>Unit Price</dt><dd>₱ {peso(price)}</dd></div>
-          <div><dt>Total Amount</dt><dd>₱ {peso(totalQty * price)}</dd></div>
+          {!item.price_balances?.length && <div><dt>Unit Price</dt><dd>₱ {peso(price)}</dd></div>}
         </dl>
         {canEdit && (
           <div className="app-cse-easy-card-actions">
@@ -1068,6 +1070,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
       )}
       {(addOpen || editItem) && (
         <ItemDialog
+          key={editItem?.id || "new-item"}
           editing={editItem}
           cats={cats || []}
           onClose={() => { setAddOpen(false); setEditItem(null); }}

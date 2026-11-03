@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { createCategory, createItem, updateItem } from "@/lib/data.functions";
+import { createCategory, createItem, updateIarPriceLots, updateItem } from "@/lib/data.functions";
 import { classifyInventoryItem } from "@/lib/item-classification";
 
 const ITEM_MONTH_KEYS = [
@@ -40,6 +40,7 @@ export function ItemDialog({
     reorder_level: editing?.reorder_level ?? 10,
     ...Object.fromEntries(ITEM_MONTH_KEYS.map((key) => [key, Number(editing?.[key] ?? 0)])),
   }));
+  const [priceLots, setPriceLots] = useState<any[]>(() => groupEditablePriceLots(editing?.price_balances || []));
   const [localCats, setLocalCats] = useState<any[]>(() => cats || []);
   const [saving, setSaving] = useState(false);
   const [addingCategory, setAddingCategory] = useState(false);
@@ -94,6 +95,16 @@ export function ItemDialog({
       let savedItem: any;
       if (editing) {
         savedItem = await updateItem({ data: { ...payload, id: editing.id } });
+        if (priceLots.length) {
+          await updateIarPriceLots({ data: {
+            item_id: editing.id,
+            lots: priceLots.flatMap((group) => group.ids.map((id: string) => ({ id, unit_cost: Number(group.unit_cost) }))),
+          } });
+          savedItem = { ...savedItem, price_balances: priceLots.flatMap((group) => group.ids.map((id: string) => {
+            const original = editing.price_balances.find((lot: any) => lot.id === id);
+            return { ...original, unit_cost: Number(group.unit_cost) };
+          })) };
+        }
       } else {
         savedItem = await createItem({ data: payload });
         if (savedItem?.legacySchemaUsed) {
@@ -128,9 +139,9 @@ export function ItemDialog({
           <Field label="Product Description" full>
             <textarea className="dlg-input min-h-20" placeholder="Optional size, brand, model, or other distinguishing details" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
           </Field>
-          <Field label="Unit Price">
+          {priceLots.length === 0 && <Field label="Unit Price">
             <input type="number" min={0} step="0.01" className="dlg-input" value={form.acquisition_cost} onChange={(event) => setForm({ ...form, acquisition_cost: event.target.value as any })} />
-          </Field>
+          </Field>}
           <Field label="Item Type">
             <select className="dlg-input" value={form.item_type} onChange={(event) => setForm({ ...form, item_type: event.target.value })}>
               <option value="supply">Supply (Expendable)</option>
@@ -161,6 +172,19 @@ export function ItemDialog({
             )}
           </Field>
         </div>
+        {editing && priceLots.length > 0 && (
+          <section className="space-y-3 border-t border-border pt-5">
+            <div className="space-y-1"><h3 className="text-sm font-semibold">Prices and available quantities</h3><p className="text-xs leading-5 text-muted-foreground">Matching prices are grouped. Quantity reflects remaining stock after RIS issues.</p></div>
+            <div className="max-h-64 space-y-3 overflow-y-auto rounded-lg border border-border bg-muted/10 p-3">
+              {priceLots.map((group, index) => (
+                <div key={`${Math.round(Number(group.unit_cost) * 100)}-${index}`} className="grid grid-cols-1 items-center gap-4 rounded-lg border border-border/70 bg-card p-4 sm:grid-cols-[minmax(0,1fr)_180px]">
+                  <div className="space-y-1"><span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Available quantity</span><div className="text-base font-semibold tabular-nums">{group.quantity} <span className="text-sm font-normal text-muted-foreground">{editing.unit}</span></div></div>
+                  <Field label="Unit price"><input type="number" min={0} step="0.01" className="dlg-input" value={group.unit_cost} onChange={(event) => setPriceLots((current) => current.map((entry) => entry === group ? { ...entry, unit_cost: event.target.value } : entry))} /></Field>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" onClick={onClose} className="rounded-md border border-input px-4 py-2 text-sm">Cancel</button>
           <button disabled={saving} className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
@@ -169,6 +193,19 @@ export function ItemDialog({
       </form>
     </div>
   );
+}
+
+function groupEditablePriceLots(lots: any[]) {
+  const grouped = new Map<number, { ids: string[]; unit_cost: string; quantity: number }>();
+  for (const lot of lots) {
+    const cost = Number(lot.unit_cost) || 0;
+    const key = Math.round(cost * 100);
+    const group = grouped.get(key) || { ids: [], unit_cost: cost.toFixed(2), quantity: 0 };
+    group.ids.push(String(lot.id));
+    group.quantity += Number(lot.quantity) || 0;
+    grouped.set(key, group);
+  }
+  return [...grouped.values()];
 }
 
 function classificationLabel(item: { inventory_classification?: string; semi_expendable_tier?: string | null }) {
