@@ -139,7 +139,7 @@ export function ItemDialog({
           <Field label="Product Description" full>
             <textarea className="dlg-input min-h-20" placeholder="Optional size, brand, model, or other distinguishing details" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
           </Field>
-          {priceLots.length === 0 && <Field label="Unit Price">
+          {!editing && <Field label="Unit Price">
             <input type="number" min={0} step="0.01" className="dlg-input" value={form.acquisition_cost} onChange={(event) => setForm({ ...form, acquisition_cost: event.target.value as any })} />
           </Field>}
           <Field label="Item Type">
@@ -172,11 +172,13 @@ export function ItemDialog({
             )}
           </Field>
         </div>
-        {editing && priceLots.length > 0 && (
+        {editing && (
           <section className="space-y-3 border-t border-border pt-5">
             <div className="space-y-1"><h3 className="text-sm font-semibold">Prices and available quantities</h3><p className="text-xs leading-5 text-muted-foreground">Matching prices are grouped. Quantity reflects remaining stock after RIS issues.</p></div>
             <div className="max-h-64 space-y-3 overflow-y-auto rounded-lg border border-border bg-muted/10 p-3">
-              {priceLots.map((group, index) => (
+              {priceLots.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-border bg-card px-4 py-6 text-center text-sm text-muted-foreground">No remaining IAR price lots for this item.</p>
+              ) : priceLots.map((group, index) => (
                 <div key={`${Math.round(Number(group.unit_cost) * 100)}-${index}`} className="grid grid-cols-1 items-center gap-4 rounded-lg border border-border/70 bg-card p-4 sm:grid-cols-[minmax(0,1fr)_180px]">
                   <div className="space-y-1"><span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Available quantity</span><div className="text-base font-semibold tabular-nums">{group.quantity} <span className="text-sm font-normal text-muted-foreground">{editing.unit}</span></div></div>
                   <Field label="Unit price"><input type="number" min={0} step="0.01" className="dlg-input" value={group.unit_cost} onChange={(event) => setPriceLots((current) => current.map((entry) => entry === group ? { ...entry, unit_cost: event.target.value } : entry))} /></Field>
