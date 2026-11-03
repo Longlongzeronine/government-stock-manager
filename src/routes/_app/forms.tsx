@@ -928,7 +928,6 @@ function FormsFlow() {
             quantity: issuedQty,
             remarks: line.remarks || null,
             transaction_id: tx.id,
-            iar_item_id: lot?.id || null,
           } });
           remainingQty -= issuedQty;
         }

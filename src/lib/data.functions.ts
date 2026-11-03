@@ -95,7 +95,7 @@ function buildPriceBalances(receipts: any[], issues: any[]) {
   })).sort((a, b) => a.created_at.localeCompare(b.created_at));
   for (const issue of [...issues].sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))) {
     let remaining = Number(issue.quantity) || 0;
-    const matched = issue.iar_item_id ? lots.find((lot) => lot.id === String(issue.iar_item_id)) : null;
+    const matched = issue.source_line_id ? lots.find((lot) => lot.id === String(issue.source_line_id)) : null;
     const targets = matched ? [matched] : lots.filter((lot) => lot.item_id === String(issue.item_id));
     for (const lot of targets) {
       const deducted = Math.min(lot.quantity, remaining);
@@ -295,7 +295,7 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
         GROUP BY item_id
       `;
       const receipts = await sql`SELECT ii.id, ii.item_id, ii.unit_cost, ii.quantity, ii.created_at, f.iar_no FROM iar_items ii JOIN iar_forms f ON f.id = ii.iar_id ORDER BY ii.created_at ASC`;
-      const issues = await sql`SELECT item_id, iar_item_id, quantity, created_at FROM ris_items ORDER BY created_at ASC`;
+      const issues = await sql`SELECT item_id, source_line_id, quantity, created_at FROM transactions WHERE type = 'OUT' ORDER BY created_at ASC`;
       const prices = buildPriceBalances(receipts, issues);
       const balances = new Map<string, number>(
         ledgerRows.map((row: any) => [String(row.item_id), Number(row.balance) || 0]),
@@ -364,7 +364,7 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
       try {
         const [receipts, issues] = await Promise.all([
           sbSelect<any>("iar_items", "select=id,item_id,unit_cost,quantity,created_at,iar:iar_forms(iar_no)&order=created_at.asc&limit=10000"),
-          sbSelect<any>("ris_items", "select=item_id,iar_item_id,quantity,created_at&order=created_at.asc&limit=10000"),
+          sbSelect<any>("transactions", "select=item_id,source_line_id,quantity,created_at&type=eq.OUT&order=created_at.asc&limit=10000"),
         ]);
         prices = buildPriceBalances(receipts.map((row: any) => ({ ...row, iar_no: row.iar?.iar_no })), issues);
       } catch (error) {
@@ -1157,7 +1157,7 @@ export const createTransaction = createServerFn({ method: "POST" })
           : Number(item.quantity);
         if (data.type === "OUT" && data.source_form_type === "RIS" && data.source_line_id) {
           const receipts = await tx`SELECT ii.id, ii.item_id, ii.unit_cost, ii.quantity, ii.created_at, f.iar_no FROM iar_items ii JOIN iar_forms f ON f.id = ii.iar_id WHERE ii.item_id = ${data.item_id} ORDER BY ii.created_at ASC`;
-          const issues = await tx`SELECT item_id, iar_item_id, quantity, created_at FROM ris_items WHERE item_id = ${data.item_id} ORDER BY created_at ASC`;
+          const issues = await tx`SELECT item_id, source_line_id, quantity, created_at FROM transactions WHERE item_id = ${data.item_id} AND type = 'OUT' ORDER BY created_at ASC`;
           const lot = buildPriceBalances(receipts, issues).get(String(data.item_id))?.find((row) => row.id === String(data.source_line_id));
           if (!lot) throw new Error("Selected IAR price identity has no available quantity.");
           const lotAvailable = Number(lot.quantity) || 0;
@@ -1201,7 +1201,7 @@ export const createTransaction = createServerFn({ method: "POST" })
         if (data.type === "OUT" && data.source_form_type === "RIS" && data.source_line_id) {
           const [receipts, issues] = await Promise.all([
             sbSelect<any>("iar_items", `select=id,item_id,unit_cost,quantity,created_at,iar:iar_forms(iar_no)&item_id=eq.${encodeURIComponent(data.item_id)}&order=created_at.asc&limit=10000`),
-            sbSelect<any>("ris_items", `select=item_id,iar_item_id,quantity,created_at&item_id=eq.${encodeURIComponent(data.item_id)}&order=created_at.asc&limit=10000`),
+            sbSelect<any>("transactions", `select=item_id,source_line_id,quantity,created_at&item_id=eq.${encodeURIComponent(data.item_id)}&type=eq.OUT&order=created_at.asc&limit=10000`),
           ]);
           const lot = buildPriceBalances(receipts.map((row: any) => ({ ...row, iar_no: row.iar?.iar_no })), issues)
             .get(String(data.item_id))?.find((row) => row.id === String(data.source_line_id));
@@ -1749,7 +1749,6 @@ export const createRisItem = createServerFn({ method: "POST" })
         quantity: Number(data.quantity),
         remarks: data.remarks || null,
         transaction_id: data.transaction_id || null,
-        iar_item_id: data.iar_item_id || null,
     };
     return withDbFallback(
       async (sql) => {
