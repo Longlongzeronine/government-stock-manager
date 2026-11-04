@@ -38,9 +38,11 @@ function assertRole(role: string): asserts role is Role {
 }
 
 function getSupabaseConfig() {
-  const workerEnv = (globalThis as typeof globalThis & {
-    __WORKER_ENV__?: Record<string, unknown>;
-  }).__WORKER_ENV__;
+  const workerEnv = (
+    globalThis as typeof globalThis & {
+      __WORKER_ENV__?: Record<string, unknown>;
+    }
+  ).__WORKER_ENV__;
   const envValue = (name: string) => {
     const value = workerEnv?.[name];
     return typeof value === "string" ? value.trim() : "";
@@ -64,18 +66,18 @@ function getSupabaseConfig() {
 async function getAdminClient(accessToken: string) {
   const { createClient } = await import("@supabase/supabase-js");
   const { url, anonKey } = getSupabaseConfig();
-  const workerEnv = (globalThis as typeof globalThis & {
-    __WORKER_ENV__?: Record<string, unknown>;
-  }).__WORKER_ENV__;
+  const workerEnv = (
+    globalThis as typeof globalThis & {
+      __WORKER_ENV__?: Record<string, unknown>;
+    }
+  ).__WORKER_ENV__;
   const envValue = (name: string) => {
     const value = workerEnv?.[name];
     return typeof value === "string" ? value.trim() : "";
   };
   const serviceKey =
     envValue("SUPABASE_SERVICE_ROLE_KEY") ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    envValue("VITE_SUPABASE_SERVICE_ROLE_KEY") ||
-    import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY;
+    process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!serviceKey) throw new Error("SUPABASE_SERVICE_ROLE_KEY missing");
 
@@ -83,7 +85,8 @@ async function getAdminClient(accessToken: string) {
     global: { headers: { Authorization: `Bearer ${accessToken}` } },
   });
   const adminClient = createClient(url, serviceKey);
-  const { data: auth, error: authError } = await userClient.auth.getUser(accessToken);
+  const { data: auth, error: authError } =
+    await userClient.auth.getUser(accessToken);
   if (authError || !auth.user) throw new Error("Unauthorized");
 
   const { data: roleRows, error: roleError } = await adminClient
@@ -106,7 +109,9 @@ export const listAdminUsers = createServerFn({ method: "POST" })
     const adminClient = createClient(url, anonKey, {
       global: { headers: { Authorization: `Bearer ${data.accessToken}` } },
     });
-    const { data: auth, error: authError } = await adminClient.auth.getUser(data.accessToken);
+    const { data: auth, error: authError } = await adminClient.auth.getUser(
+      data.accessToken,
+    );
     if (authError || !auth.user) throw new Error("Unauthorized");
     const { data: ownRoles, error: ownRolesError } = await adminClient
       .from("user_roles")
@@ -116,12 +121,20 @@ export const listAdminUsers = createServerFn({ method: "POST" })
     if (!ownRoles?.some((row) => row.role === "admin")) {
       throw new Error("Admin access required");
     }
-    const [{ data: profiles, error: profilesError }, { data: roleRows, error: rolesError }] = await Promise.all([
-      adminClient.from("profiles").select("id, full_name, email, created_at, status").limit(5000),
+    const [
+      { data: profiles, error: profilesError },
+      { data: roleRows, error: rolesError },
+    ] = await Promise.all([
+      adminClient
+        .from("profiles")
+        .select("id, full_name, email, created_at, status")
+        .limit(5000),
       adminClient.from("user_roles").select("user_id, role").limit(5000),
     ]);
-    if (profilesError) throw new Error(`Could not load user profiles: ${profilesError.message}`);
-    if (rolesError) throw new Error(`Could not load user roles: ${rolesError.message}`);
+    if (profilesError)
+      throw new Error(`Could not load user profiles: ${profilesError.message}`);
+    if (rolesError)
+      throw new Error(`Could not load user roles: ${rolesError.message}`);
 
     const roleById = new Map<string, Role>();
     (roleRows ?? []).forEach((row: { user_id: string; role: Role }) => {
@@ -148,7 +161,10 @@ export const createAdminUser = createServerFn({ method: "POST" })
       email: data.email.trim().toLowerCase(),
       password: data.password,
       email_confirm: true,
-      user_metadata: { full_name: data.fullName.trim(), requested_role: data.role },
+      user_metadata: {
+        full_name: data.fullName.trim(),
+        requested_role: data.role,
+      },
     });
     if (error) throw new Error(error.message);
     if (!created.user) throw new Error("User creation failed");
@@ -159,7 +175,10 @@ export const createAdminUser = createServerFn({ method: "POST" })
       full_name: data.fullName.trim(),
       status: "active",
     });
-    await adminClient.from("user_roles").delete().eq("user_id", created.user.id);
+    await adminClient
+      .from("user_roles")
+      .delete()
+      .eq("user_id", created.user.id);
     const { error: roleError } = await adminClient
       .from("user_roles")
       .insert({ user_id: created.user.id, role: data.role });
@@ -183,7 +202,8 @@ export const setUserRole = createServerFn({ method: "POST" })
 export const resetUserPassword = createServerFn({ method: "POST" })
   .inputValidator((d: PasswordRequest) => d)
   .handler(async ({ data }) => {
-    if (data.password.length < 6) throw new Error("Password must be at least 6 characters");
+    if (data.password.length < 6)
+      throw new Error("Password must be at least 6 characters");
     const adminClient = await getAdminClient(data.accessToken);
     const { error } = await adminClient.auth.admin.updateUserById(data.userId, {
       password: data.password,

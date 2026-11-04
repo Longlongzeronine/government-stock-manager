@@ -102,8 +102,8 @@ Set runtime secrets on the Worker once (and again when rotating them):
 
 ```bash
 npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
-npx wrangler secret put DEVELOPER_MODE_USERNAME
-npx wrangler secret put DEVELOPER_MODE_PASSWORD
+npx wrangler secret put DEVELOPER_USERNAME
+npx wrangler secret put DEVELOPER_PASSWORD
 npx wrangler secret put DEVELOPER_SESSION_SECRET
 ```
 
@@ -112,6 +112,16 @@ secrets; `.env` is local-only and is not uploaded by `npm run deploy`. The
 Supabase URL and publishable key are already configured as non-secret Worker
 variables in `wrangler.jsonc`. Add `LOVABLE_API_KEY` as a Worker secret only if
 using the hosted AI provider.
+
+Apply database migrations to the linked Supabase project before deploying:
+
+```bash
+npx supabase db push
+```
+
+`npm run deploy` publishes the Worker but does not apply database migrations.
+If Supabase CLI is not linked, run pending SQL files from `supabase/migrations`
+in the project's SQL Editor first.
 
 For local Cloudflare preview, put the same runtime secrets in the ignored
 `dist/server/.dev.vars` file after building. Never put service-role or

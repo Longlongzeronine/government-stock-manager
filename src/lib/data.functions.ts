@@ -319,6 +319,7 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
       );
       const { numbered, missing } = assignMissingStockNumbers(rows);
       let finalRows = numbered;
+      let stockNumberColumnMissing = false;
       if (missing.length > 0) {
         try {
           await sbRpc("ensure_stock_numbers", {
@@ -331,10 +332,13 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
         } catch (error) {
           // Older hosted projects may not have the repair RPC yet. Fall back
           // to writing the stable generated numbers directly below.
-          console.warn("Stock number RPC unavailable; repairing item rows via REST:", error);
+          stockNumberColumnMissing = missingItemColumn(error) === "stock_number";
+          if (!stockNumberColumnMissing) {
+            console.warn("Stock number RPC unavailable; repairing item rows via REST:", error);
+          }
         }
       }
-      if (missing.length > 0 && finalRows === numbered) {
+      if (missing.length > 0 && finalRows === numbered && !stockNumberColumnMissing) {
         for (const item of missing) {
           try {
             await sbUpdate(
@@ -346,6 +350,11 @@ export const listItems = createServerFn({ method: "GET" }).handler(async () => {
           } catch (error) {
             // Keep generated number visible in this response even if a hosted
             // deployment has not granted the REST key permission to repair rows.
+            if (missingItemColumn(error) === "stock_number") {
+              stockNumberColumnMissing = true;
+              console.warn("Hosted items schema lacks stock_number; generated values are response-only until migrations apply.");
+              break;
+            }
             console.error(`Unable to save stock number for item ${item.id}:`, error);
           }
         }
@@ -602,10 +611,135 @@ export const createItem = createServerFn({ method: "POST" })
     );
   });
 
+async function importItemsHosted(items: any[]) {
+  if (!Array.isArray(items) || items.length > 5000) {
+    throw new Error("Import must contain at most 5,000 rows.");
+  }
+  const existing = await sbSelect<any>(
+    "items",
+    "select=id,name,description,barcode_value,stock_number,sort_order&order=name.asc&limit=10000",
+  );
+  const names = new Map<string, { id: string | null; barcode: string | null; description: string | null }>();
+  const codes = new Map<string, { id: string | null; name: string; description: string | null }>();
+  for (const item of existing) {
+    const nameKey = String(item.name || "").trim().toLowerCase();
+    const barcode = String(item.barcode_value || "").trim();
+    if (!names.has(nameKey)) names.set(nameKey, { id: item.id, barcode: barcode || null, description: item.description || null });
+    if (barcode && !codes.has(barcode.toLowerCase())) codes.set(barcode.toLowerCase(), { id: item.id, name: String(item.name).trim(), description: item.description || null });
+  }
+  let added = 0;
+  let skipped = 0;
+  let updated = 0;
+  let nextSort = existing.reduce((max, item) => Math.max(max, Number(item.sort_order) || 0), 0) + 1;
+  let nextStock = existing.reduce((max, item) => {
+    const value = String(item.stock_number || "").trim();
+    return /^\d+$/.test(value) ? Math.max(max, Number(value)) : max;
+  }, 0) + 1;
+  const optionalColumns = new Set([...itemMonthlyQuantityFields, "stock_number"]);
+  const isUuidCode = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+
+  const importPayload = (item: any, name: string, barcode: string | null, categoryId: string | null, description: string | null) => ({
+    name,
+    description: item.description ? String(item.description).trim() : description,
+    category_id: categoryId,
+    item_type: item.item_type || "supply",
+    quantity: Number(item.quantity) || 0,
+    unit: normalizeUnit(item.unit, name),
+    reorder_level: Number(item.reorder_level) || 10,
+    acquisition_cost: Number(item.acquisition_cost) || 0,
+    barcode_value: barcode,
+    jan_quantity: Number(item.jan_quantity) || 0,
+    feb_quantity: Number(item.feb_quantity) || 0,
+    mar_quantity: Number(item.mar_quantity) || 0,
+    apr_quantity: Number(item.apr_quantity) || 0,
+    may_quantity: Number(item.may_quantity) || 0,
+    jun_quantity: Number(item.jun_quantity) || 0,
+    jul_quantity: Number(item.jul_quantity) || 0,
+    aug_quantity: Number(item.aug_quantity) || 0,
+    sep_quantity: Number(item.sep_quantity) || 0,
+    oct_quantity: Number(item.oct_quantity) || 0,
+    nov_quantity: Number(item.nov_quantity) || 0,
+    dec_quantity: Number(item.dec_quantity) || 0,
+  });
+
+  const save = async (payload: Record<string, unknown>, id?: string) => {
+    let record = { ...payload };
+    for (;;) {
+      try {
+        if (id) {
+          await sbUpdate("items", `id=eq.${encodeURIComponent(id)}`, record, getRestWriteConfig());
+        } else {
+          await sbInsert("items", record, getRestWriteConfig());
+        }
+        return;
+      } catch (error) {
+        const column = missingItemColumn(error);
+        if (!column || !optionalColumns.has(column)) throw error;
+        record = omitUnsupportedItemColumn(record, column);
+      }
+    }
+  };
+
+  for (const item of items) {
+    const name = String(item?.name || "").trim();
+    const barcode = String(item?.barcode_value || "").trim();
+    const nameKey = name.toLowerCase();
+    const codeKey = barcode.toLowerCase();
+    if (!name) {
+      skipped += 1;
+      continue;
+    }
+
+    let categoryId: string | null = null;
+    const categoryName = String(item.category_name || "").trim();
+    if (categoryName) categoryId = await resolveHostedCategoryId(null, categoryName);
+
+    if (codeKey) {
+      const existingByCode = codes.get(codeKey);
+      if (existingByCode?.id) {
+        await save(importPayload(item, name, barcode, categoryId, existingByCode.description), existingByCode.id);
+        updated += 1;
+        continue;
+      }
+      if (existingByCode) {
+        skipped += 1;
+        continue;
+      }
+    } else {
+      const existingMatch = names.get(nameKey);
+      if (existingMatch) {
+        if (existingMatch.id && (!existingMatch.barcode || isUuidCode(existingMatch.barcode))) {
+          await save(importPayload(item, name, null, categoryId, existingMatch.description), existingMatch.id);
+          updated += 1;
+        } else {
+          skipped += 1;
+        }
+        continue;
+      }
+    }
+
+    const payload = importPayload(item, name, barcode || null, categoryId, null);
+    await save({ ...payload, stock_number: String(nextStock).padStart(3, "0"), sort_order: nextSort });
+    nextStock += 1;
+    nextSort += 1;
+    if (!names.has(nameKey)) names.set(nameKey, { id: null, barcode: barcode || null, description: item.description || null });
+    if (codeKey) codes.set(codeKey, { id: null, name, description: item.description || null });
+    added += 1;
+  }
+
+  for (const item of existing) {
+    const barcode = String(item.barcode_value || "");
+    if (barcode && barcode === String(item.id) && isUuidCode(barcode)) {
+      await sbUpdate("items", `id=eq.${encodeURIComponent(item.id)}`, { barcode_value: null }, getRestWriteConfig());
+    }
+  }
+  return { added, skipped, updated };
+}
+
 export const importItems = createServerFn({ method: "POST" })
   .inputValidator((d: { items: any[] }) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
+    return withDbFallback(async (sql) => {
     const existing = await sql`SELECT id, name, barcode_value FROM items ORDER BY (barcode_value IS NOT NULL) DESC, name ASC`;
     const names = new Map<string, { id: string | null; barcode: string | null; description: string | null }>();
     const codes = new Map<string, { id: string | null; name: string; description: string | null }>();
@@ -710,6 +844,7 @@ export const importItems = createServerFn({ method: "POST" })
         AND barcode_value ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     `;
     return { added, skipped, updated };
+    }, async () => importItemsHosted(data.items));
   });
 
 export const updateItem = createServerFn({ method: "POST" })
@@ -966,21 +1101,40 @@ export const createCategory = createServerFn({ method: "POST" })
 export const updateCategory = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [row] = await sql`
-      UPDATE categories SET ${sql({ name: data.name, description: data.description ?? null })}
-      WHERE id = ${data.id}
-      RETURNING *
-    `;
-    return row;
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`
+          UPDATE categories SET ${sql({ name: data.name, description: data.description ?? null })}
+          WHERE id = ${data.id}
+          RETURNING *
+        `;
+        return row;
+      },
+      async () => {
+        const [row] = await sbUpdate(
+          "categories",
+          `id=eq.${encodeURIComponent(data.id)}`,
+          { name: data.name, description: data.description ?? null },
+          getRestWriteConfig(),
+        );
+        return row;
+      },
+    );
   });
 
 export const deleteCategory = createServerFn({ method: "POST" })
   .inputValidator((d: { id: string }) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    await sql`DELETE FROM categories WHERE id = ${data.id}`;
-    return { ok: true };
+    return withDbFallback(
+      async (sql) => {
+        await sql`DELETE FROM categories WHERE id = ${data.id}`;
+        return { ok: true };
+      },
+      async () => {
+        await sbDelete("categories", `id=eq.${encodeURIComponent(data.id)}`, getRestWriteConfig());
+        return { ok: true };
+      },
+    );
   });
 
 // ============================================
@@ -1000,42 +1154,62 @@ export const listSuppliers = createServerFn({ method: "GET" }).handler(
 export const createSupplier = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [row] = await sql`
-      INSERT INTO suppliers ${sql({
-        name: data.name,
-        contact: data.contact || null,
-        address: data.address || null,
-        notes: data.notes || null,
-      })}
-      RETURNING *
-    `;
-    return row;
+    const payload = {
+      name: data.name,
+      contact: data.contact || null,
+      address: data.address || null,
+      notes: data.notes || null,
+    };
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`INSERT INTO suppliers ${sql(payload)} RETURNING *`;
+        return row;
+      },
+      async () => sbInsert("suppliers", payload, getRestWriteConfig()),
+    );
   });
 
 export const updateSupplier = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [row] = await sql`
-      UPDATE suppliers SET ${sql({
-        name: data.name,
-        contact: data.contact ?? null,
-        address: data.address ?? null,
-        notes: data.notes ?? null,
-      })}
-      WHERE id = ${data.id}
-      RETURNING *
-    `;
-    return row;
+    const payload = {
+      name: data.name,
+      contact: data.contact ?? null,
+      address: data.address ?? null,
+      notes: data.notes ?? null,
+    };
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`
+          UPDATE suppliers SET ${sql(payload)} WHERE id = ${data.id} RETURNING *
+        `;
+        return row;
+      },
+      async () => {
+        const [row] = await sbUpdate(
+          "suppliers",
+          `id=eq.${encodeURIComponent(data.id)}`,
+          payload,
+          getRestWriteConfig(),
+        );
+        return row;
+      },
+    );
   });
 
 export const deleteSupplier = createServerFn({ method: "POST" })
   .inputValidator((d: { id: string }) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    await sql`DELETE FROM suppliers WHERE id = ${data.id}`;
-    return { ok: true };
+    return withDbFallback(
+      async (sql) => {
+        await sql`DELETE FROM suppliers WHERE id = ${data.id}`;
+        return { ok: true };
+      },
+      async () => {
+        await sbDelete("suppliers", `id=eq.${encodeURIComponent(data.id)}`, getRestWriteConfig());
+        return { ok: true };
+      },
+    );
   });
 
 export const listTransactions = createServerFn({ method: "GET" })
@@ -1449,40 +1623,44 @@ export const createFormsFlowBackup = createServerFn({ method: "GET" }).handler(
 export const createIarForm = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [row] = await sql`
-      INSERT INTO iar_forms ${sql({
-        iar_no: data.iar_no,
-        supplier: data.supplier || null,
-        invoice_no: data.invoice_no || null,
-        accepted_by: data.accepted_by || null,
-        created_by: data.created_by || null,
-        created_by_name: data.created_by_name || null,
-      })}
-      RETURNING *
-    `;
-    return row;
+    const payload = {
+      iar_no: data.iar_no,
+      supplier: data.supplier || null,
+      invoice_no: data.invoice_no || null,
+      accepted_by: data.accepted_by || null,
+      created_by: data.created_by || null,
+      created_by_name: data.created_by_name || null,
+    };
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`INSERT INTO iar_forms ${sql(payload)} RETURNING *`;
+        return row;
+      },
+      async () => sbInsert("iar_forms", payload, getRestWriteConfig()),
+    );
   });
 
 export const createIarItem = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [row] = await sql`
-      INSERT INTO iar_items ${sql({
-        iar_id: data.iar_id,
-        item_id: data.item_id,
-        quantity: Number(data.quantity),
-        unit_cost: Number(data.unit_cost || 0),
-        amount:
-          Number(data.amount) ||
-          Number(data.quantity) * Number(data.unit_cost || 0),
-        remarks: data.remarks || null,
-        transaction_id: data.transaction_id || null,
-      })}
-      RETURNING *
-    `;
-    return row;
+    const payload = {
+      iar_id: data.iar_id,
+      item_id: data.item_id,
+      quantity: Number(data.quantity),
+      unit_cost: Number(data.unit_cost || 0),
+      amount:
+        Number(data.amount) ||
+        Number(data.quantity) * Number(data.unit_cost || 0),
+      remarks: data.remarks || null,
+      transaction_id: data.transaction_id || null,
+    };
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`INSERT INTO iar_items ${sql(payload)} RETURNING *`;
+        return row;
+      },
+      async () => sbInsert("iar_items", payload, getRestWriteConfig()),
+    );
   });
 
 export const updateIarPriceLots = createServerFn({ method: "POST" })
@@ -1762,8 +1940,8 @@ export const createRisItem = createServerFn({ method: "POST" })
 export const getRisVerification = createServerFn({ method: "GET" })
   .inputValidator((d: { token: string }) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [form] = await sql`
+    return withDbFallback(async (sql) => {
+      const [form] = await sql`
       SELECT
         r.verification_code,
         r.ris_no,
@@ -1796,17 +1974,26 @@ export const getRisVerification = createServerFn({ method: "GET" })
       GROUP BY r.id
       LIMIT 1
     `;
-    return form || null;
+      return form || null;
+    }, async () => {
+      const result = await sbRpc<any>("verify_ris", { p_token: data.token });
+      return (Array.isArray(result) ? result[0] : result) || null;
+    });
   });
 
 export const listFormPersonnelMemory = createServerFn({ method: "GET" }).handler(
   async () => {
-    const sql = await getDb();
-    return await sql`
-      SELECT role, person_name, last_used_at
-      FROM form_personnel_memory
-      ORDER BY last_used_at DESC
-    `;
+    return withDbFallback(
+      async (sql) => sql`
+        SELECT role, person_name, last_used_at
+        FROM form_personnel_memory
+        ORDER BY last_used_at DESC
+      `,
+      async () => sbSelect(
+        "form_personnel_memory",
+        "select=role,person_name,last_used_at&order=last_used_at.desc&limit=2000",
+      ),
+    );
   },
 );
 
@@ -1815,19 +2002,43 @@ export const rememberFormPersonnel = createServerFn({ method: "POST" })
     (d: { role: string; person_name: string; created_by?: string }) => d,
   )
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [row] = await sql`
-      INSERT INTO form_personnel_memory (
-        role, person_name, created_by, last_used_at
-      )
-      VALUES (
-        ${data.role}, ${data.person_name.trim()}, ${data.created_by || null}, now()
-      )
-      ON CONFLICT (role, person_name)
-      DO UPDATE SET last_used_at = now(), created_by = EXCLUDED.created_by
-      RETURNING *
-    `;
-    return row;
+    const personName = data.person_name.trim();
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`
+          INSERT INTO form_personnel_memory (
+            role, person_name, created_by, last_used_at
+          )
+          VALUES (
+            ${data.role}, ${personName}, ${data.created_by || null}, now()
+          )
+          ON CONFLICT (role, person_name)
+          DO UPDATE SET last_used_at = now(), created_by = EXCLUDED.created_by
+          RETURNING *
+        `;
+        return row;
+      },
+      async () => {
+        const [existing] = await sbSelect<any>(
+          "form_personnel_memory",
+          `select=id&role=eq.${encodeURIComponent(data.role)}&person_name=eq.${encodeURIComponent(personName)}&limit=1`,
+        );
+        if (existing) {
+          const [row] = await sbUpdate(
+            "form_personnel_memory",
+            `id=eq.${encodeURIComponent(existing.id)}`,
+            { last_used_at: new Date().toISOString(), created_by: data.created_by || null },
+            getRestWriteConfig(),
+          );
+          return row;
+        }
+        return sbInsert("form_personnel_memory", {
+          role: data.role,
+          person_name: personName,
+          created_by: data.created_by || null,
+        }, getRestWriteConfig());
+      },
+    );
   });
 
 export const reserveNextFormNumber = createServerFn({ method: "POST" })
@@ -1937,71 +2148,79 @@ export const getNextRisNumberFromHistory = createServerFn({ method: "GET" })
 export const createIcsForm = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [row] = await sql`
-      INSERT INTO ics_forms ${sql({
+    const payload = {
         ics_no: data.ics_no,
         ris_id: data.ris_id || null,
         custodian_name: data.custodian_name || null,
         office: data.office || null,
         created_by: data.created_by || null,
         created_by_name: data.created_by_name || null,
-      })}
-      RETURNING *
-    `;
-    return row;
+    };
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`INSERT INTO ics_forms ${sql(payload)} RETURNING *`;
+        return row;
+      },
+      async () => sbInsert("ics_forms", payload, getRestWriteConfig()),
+    );
   });
 
 export const createIcsItem = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [row] = await sql`
-      INSERT INTO ics_items ${sql({
+    const payload = {
         ics_id: data.ics_id,
         item_id: data.item_id,
         quantity: Number(data.quantity),
         unit_cost: Number(data.unit_cost || 0),
         remarks: data.remarks || null,
-      })}
-      RETURNING *
-    `;
-    return row;
+    };
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`INSERT INTO ics_items ${sql(payload)} RETURNING *`;
+        return row;
+      },
+      async () => sbInsert("ics_items", payload, getRestWriteConfig()),
+    );
   });
 
 export const createParForm = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [row] = await sql`
-      INSERT INTO par_forms ${sql({
+    const payload = {
         par_no: data.par_no,
         ris_id: data.ris_id || null,
         accountable_person: data.accountable_person || null,
         office: data.office || null,
         created_by: data.created_by || null,
         created_by_name: data.created_by_name || null,
-      })}
-      RETURNING *
-    `;
-    return row;
+    };
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`INSERT INTO par_forms ${sql(payload)} RETURNING *`;
+        return row;
+      },
+      async () => sbInsert("par_forms", payload, getRestWriteConfig()),
+    );
   });
 
 export const createParItem = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
-    const sql = await getDb();
-    const [row] = await sql`
-      INSERT INTO par_items ${sql({
+    const payload = {
         par_id: data.par_id,
         item_id: data.item_id,
         quantity: Number(data.quantity),
         unit_cost: Number(data.unit_cost || 0),
         remarks: data.remarks || null,
-      })}
-      RETURNING *
-    `;
-    return row;
+    };
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`INSERT INTO par_items ${sql(payload)} RETURNING *`;
+        return row;
+      },
+      async () => sbInsert("par_items", payload, getRestWriteConfig()),
+    );
   });
 
 // ============================================
@@ -2011,24 +2230,49 @@ export const createParItem = createServerFn({ method: "POST" })
 export const getInventorySnapshot = createServerFn({ method: "GET" }).handler(
   async () => {
     try {
-      const sql = await getDb();
-      const items = await sql`
-      SELECT i.name, i.quantity, i.unit, i.reorder_level,
-        c.name AS category_name,
-        s.name AS supplier_name
-      FROM items i
-      LEFT JOIN categories c ON c.id = i.category_id
-      LEFT JOIN suppliers s ON s.id = i.supplier_id
-      ORDER BY i.quantity ASC
-    `;
-      const txs = await sql`
-      SELECT t.type, t.quantity, t.created_at,
-        i.name AS item_name
-      FROM transactions t
-      LEFT JOIN items i ON i.id = t.item_id
-      ORDER BY t.created_at DESC
-      LIMIT 100
-    `;
+      const { items, txs } = await withDbFallback(
+        async (sql) => {
+          const items = await sql`
+            SELECT i.name, i.quantity, i.unit, i.reorder_level,
+              c.name AS category_name, s.name AS supplier_name
+            FROM items i
+            LEFT JOIN categories c ON c.id = i.category_id
+            LEFT JOIN suppliers s ON s.id = i.supplier_id
+            ORDER BY i.quantity ASC
+          `;
+          const txs = await sql`
+            SELECT t.type, t.quantity, t.created_at, i.name AS item_name
+            FROM transactions t
+            LEFT JOIN items i ON i.id = t.item_id
+            ORDER BY t.created_at DESC
+            LIMIT 100
+          `;
+          return { items, txs };
+        },
+        async () => {
+          const [items, txs] = await Promise.all([
+            sbSelect<any>(
+              "items",
+              "select=name,quantity,unit,reorder_level,category:categories(name),supplier:suppliers(name)&order=quantity.asc&limit=5000",
+            ),
+            sbSelect<any>(
+              "transactions",
+              "select=type,quantity,created_at,item:items(name)&order=created_at.desc&limit=100",
+            ),
+          ]);
+          return {
+            items: items.map((item: any) => ({
+              ...item,
+              category_name: item.category?.name,
+              supplier_name: item.supplier?.name,
+            })),
+            txs: txs.map((transaction: any) => ({
+              ...transaction,
+              item_name: transaction.item?.name,
+            })),
+          };
+        },
+      );
 
       const low = items
         .filter((i: any) => Number(i.quantity) <= Number(i.reorder_level))
