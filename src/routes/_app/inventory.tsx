@@ -45,6 +45,12 @@ function Inventory() {
   const [scannerOpen, setScannerOpen] = useState(false);
 
   useEffect(() => {
+    // Inventory should open at its page heading, not at a previously restored
+    // scroll offset that hides the title and form toolbar.
+    window.scrollTo({ top: 0, left: 0 });
+  }, []);
+
+  useEffect(() => {
     if (!searchParams.add || !isAdmin) return;
     setEditing(null);
     setOpen(true);
@@ -936,7 +942,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
   };
 
   return (
-    <main className="app-cse-shell">
+    <main className="app-cse-shell" data-ui-build="feature-neil">
       {layout === "template" && (
       <section className="app-cse-sheet app-cse-template">
         <header className="app-cse-template-header">

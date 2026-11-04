@@ -84,8 +84,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [developerUsername, setDeveloperUsername] = useState<string | null>(null);
 
   useEffect(() => {
+    let authStateChanged = false;
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
+      authStateChanged = true;
       setSession(s);
+      setLoading(false);
       if (s?.user) {
         setDeveloperUsername(null);
         void signOutDeveloper();
@@ -94,13 +97,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setRole(null);
       }
     });
-    Promise.all([supabase.auth.getSession(), getDeveloperSession()]).then(([{ data }, developerSession]) => {
+    void supabase.auth.getSession().then(({ data }) => {
+      if (authStateChanged) return;
       setSession(data.session);
       if (data.session?.user) loadRole(data.session.user.id);
-      setDeveloperUsername(data.session ? null : developerSession?.username ?? null);
-      if (data.session && developerSession) void signOutDeveloper();
+
+      if (data.session) {
+        setDeveloperUsername(null);
+        setLoading(false);
+        void getDeveloperSession().then((developerSession) => {
+          if (developerSession) void signOutDeveloper();
+        }).catch(() => undefined);
+        return;
+      }
+
+      // Bound the separate developer-cookie request so an unavailable server
+      // function cannot leave the app stuck on its loading screen.
+      const lookupTimeout = new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), 5000);
+      });
+      void Promise.race([getDeveloperSession(), lookupTimeout]).then((developerSession) => {
+        if (authStateChanged) return;
+        setDeveloperUsername(developerSession?.username ?? null);
+        setLoading(false);
+      }).catch(() => {
+        if (!authStateChanged) {
+          setDeveloperUsername(null);
+          setLoading(false);
+        }
+      });
+    }).catch(() => {
+      if (!authStateChanged) setSession(null);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    });
     return () => sub.subscription.unsubscribe();
   }, []);
 
