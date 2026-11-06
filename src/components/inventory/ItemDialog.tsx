@@ -17,6 +17,7 @@ type ItemDialogProps = {
   onCategoryCreated?: () => void;
   initialName?: string;
   initialDescription?: string;
+  propertyFlow?: "supplies" | "semi-expendable" | "ppe";
 };
 
 export function ItemDialog({
@@ -27,6 +28,7 @@ export function ItemDialog({
   onCategoryCreated,
   initialName = "",
   initialDescription = "",
+  propertyFlow,
 }: ItemDialogProps) {
   const [form, setForm] = useState<any>(() => ({
     barcode_value: editing?.barcode_value ?? "",
@@ -34,8 +36,8 @@ export function ItemDialog({
     description: editing?.description ?? initialDescription,
     category_id: editing?.category_id ?? "",
     supplier_id: editing?.supplier_id ?? "",
-    item_type: editing?.item_type ?? "supply",
-    acquisition_cost: editing?.acquisition_cost ?? 0,
+    item_type: editing?.item_type ?? (propertyFlow === "supplies" ? "supply" : "material"),
+    acquisition_cost: editing?.acquisition_cost ?? (propertyFlow === "supplies" ? 0 : propertyFlow === "ppe" ? 50000 : 10000),
     unit: editing?.unit ?? "pieces",
     reorder_level: editing?.reorder_level ?? 10,
     ...Object.fromEntries(ITEM_MONTH_KEYS.map((key) => [key, Number(editing?.[key] ?? 0)])),
@@ -122,7 +124,8 @@ export function ItemDialog({
 
   return (
     <div className="fixed inset-0 z-[60] grid place-items-center bg-foreground/30 p-4 backdrop-blur-sm">
-      <form onSubmit={save} className="max-h-[90dvh] w-full max-w-2xl space-y-4 overflow-y-auto rounded-lg border border-border bg-card p-4 sm:p-6">
+      <form onSubmit={save} className="flex flex-col w-full min-h-full max-h-[90dvh] max-w-2xl rounded-lg border border-border bg-card p-4 sm:p-6">
+        <div className="overflow-y-auto flex-1 space-y-4">
         <h2 className="text-xl">{editing ? "Edit item" : "Add new item"}</h2>
         <p className="text-xs text-muted-foreground">Fields match the APP-CSE 2026 template columns.</p>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -139,16 +142,28 @@ export function ItemDialog({
           <Field label="Product Description" full>
             <textarea className="dlg-input min-h-20" placeholder="Optional size, brand, model, or other distinguishing details" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
           </Field>
-          {!editing && <Field label="Unit Price">
-            <input type="number" min={0} step="0.01" className="dlg-input" value={form.acquisition_cost} onChange={(event) => setForm({ ...form, acquisition_cost: event.target.value as any })} />
-          </Field>}
-          <Field label="Item Type">
-            <select className="dlg-input" value={form.item_type} onChange={(event) => setForm({ ...form, item_type: event.target.value })}>
-              <option value="supply">Supply (Expendable)</option>
-              <option value="material">Material (Semi-Expendable / PPE)</option>
+          <Field label="Item Type" full>
+            <select className="dlg-input" value={form.item_type} onChange={(event) => {
+              const val = event.target.value;
+              setForm((current: any) => ({
+                ...current,
+                item_type: val,
+                // Set default acquisition cost based on type so classification trigger works
+                acquisition_cost: val === "supply" ? 0 : val === "material" && current.item_type !== val ? 10000 : current.acquisition_cost,
+              }));
+            }}>
+              {propertyFlow === "supplies" || !propertyFlow ? (
+                <option value="supply">Supplies & Materials</option>
+              ) : null}
+              {propertyFlow === "semi-expendable" || !propertyFlow ? (
+                <option value="material">Semi-Expendable Property</option>
+              ) : null}
+              {propertyFlow === "ppe" || !propertyFlow ? (
+                <option value="material">Property, Plant & Equipment</option>
+              ) : null}
             </select>
           </Field>
-          <Field label="Classification">
+          <Field label="Classification" full>
             <div className="dlg-input flex items-center justify-between gap-2">
               <span className="font-medium">{classificationLabel(dialogClassification)}</span>
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Auto from type &amp; cost</span>
@@ -187,6 +202,7 @@ export function ItemDialog({
             </div>
           </section>
         )}
+        </div>
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" onClick={onClose} className="rounded-md border border-input px-4 py-2 text-sm">Cancel</button>
           <button disabled={saving} className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
