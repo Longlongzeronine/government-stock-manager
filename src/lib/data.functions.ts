@@ -1479,6 +1479,26 @@ export const getIarFormDetails = createServerFn({ method: "GET" })
     },
   ));
 
+// Newest non-empty line remark recorded on an IAR receipt, per item. RIS reads
+// this so the receiving remark carries over to the issue slip.
+export const listIarLineRemarks = createServerFn({ method: "GET" }).handler(
+  async () => {
+    return withDbFallback(
+      async (sql) => await sql`
+        SELECT DISTINCT ON (ii.item_id)
+          ii.item_id, ii.remarks, ii.created_at
+        FROM iar_items ii
+        WHERE nullif(btrim(coalesce(ii.remarks, '')), '') IS NOT NULL
+        ORDER BY ii.item_id, ii.created_at DESC
+      `,
+      async () => await sbSelect(
+        "iar_items",
+        "select=item_id,remarks,created_at&remarks=not.is.null&order=created_at.desc&limit=5000",
+      ),
+    ).catch(() => []);
+  },
+);
+
 export const getRisFormDetails = createServerFn({ method: "GET" })
   .inputValidator((data: { id?: string; ris_no?: string }) => data)
   .handler(async ({ data }) => {
