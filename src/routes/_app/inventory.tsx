@@ -891,7 +891,6 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
   // ── Easy view: friendly grouped cards — search, totals, and quick edit/delete. ──
   const easyCard = (item: any, rowIndex: number) => {
     const months = monthsFor(item);
-    const price = Number(item.acquisition_cost || 0);
     const plannedQty = months.reduce((sum, q) => sum + q, 0);
     const totalQty = item.price_balances?.length
       ? item.price_balances.reduce((sum: number, lot: any) => sum + Number(lot.quantity || 0), 0)
@@ -911,7 +910,6 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
         <dl className="app-cse-easy-card-meta">
           <div><dt>Unit</dt><dd>{item.unit || "—"}</dd></div>
           <div><dt>Total Qty</dt><dd>{totalQty}</dd></div>
-          {!item.price_balances?.length && <div><dt>Unit Price</dt><dd>₱ {peso(price)}</dd></div>}
         </dl>
         {canEdit && (
           <div className="app-cse-easy-card-actions">
