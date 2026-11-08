@@ -874,7 +874,7 @@ function FormsFlow() {
       poNoDate: "",
       invoiceNo: "",
     });
-    setIarLines([blankLine()]);
+    setIarLines(Array.from({ length: 4 }, blankLine));
     setTab(propertyFlow === "supplies" ? "stock-card" : "iar");
   }
 
@@ -1161,7 +1161,7 @@ function FormsFlow() {
         acceptedBy: FORM_DEFAULTS.custodian,
         receiptDescription: "",
       });
-      setIarLines([blankLine()]);
+      setIarLines(Array.from({ length: 4 }, blankLine));
     } else if (tab === "ris") {
       setLoadedRisId("");
       const verification = createVerificationIdentity();
@@ -1405,7 +1405,7 @@ function FormsFlow() {
                   rsmiFundClusterOptions={iarFundClusterOptions.length ? iarFundClusterOptions : undefined}
                   onClearIar={() => {
                     setIar((current) => ({ ...current, supplier: "" }));
-                    setIarLines([blankLine()]);
+                    setIarLines(Array.from({ length: 4 }, blankLine));
                     setIarValidationAttempted(false);
                   }}
                   onSaveIar={saveIar}
@@ -1515,7 +1515,7 @@ function FormsFlow() {
                     rsmiFundClusterOptions={iarFundClusterOptions.length ? iarFundClusterOptions : undefined}
                     onClearIar={() => {
                       setIar((current) => ({ ...current, supplier: "" }));
-                      setIarLines([blankLine()]);
+                      setIarLines(Array.from({ length: 4 }, blankLine));
                       setIarValidationAttempted(false);
                     }}
                     onSaveIar={saveIar}
@@ -1714,10 +1714,11 @@ function FoundationStepper({
   const stages = isSemiExpendable
     ? [
         { label: "IAR", detail: "Inspection and acceptance", tab: "iar" as const, icon: PackageCheck },
-        { label: "Semi-Expendable Property Card", detail: "Individual property ledger", tab: "stock-card" as const, icon: FileSpreadsheet },
+        { label: "SPC", detail: "Semi-expendable property card", tab: "stock-card" as const, icon: FileSpreadsheet },
         { label: "RIS", detail: "Property issuance request", tab: "ris" as const, icon: Send },
         { label: "ICS", detail: "Inventory Custodian Slip", tab: "ics" as const, icon: FileCheck2 },
-        { label: "Registry & Reports", detail: "Semi-expendable monitoring", icon: FileSpreadsheet },
+        { label: "RSPI", detail: "Registry of Semi-Expendable Property Issued", icon: FileSpreadsheet },
+        { label: "RegSPI", detail: "Registry of Semi-Expendable Property", icon: FileSpreadsheet },
       ]
     : [
         { label: "IAR", detail: "Inspection and acceptance", tab: "iar" as const, icon: PackageCheck },
@@ -1729,7 +1730,7 @@ function FoundationStepper({
 
   return (
     <section className="rounded-xl border border-border bg-card p-2 shadow-sm">
-      <div className="grid gap-2 lg:grid-cols-5">
+      <div className="grid gap-2 lg:grid-cols-6">
         {stages.map((stage) => {
           const Icon = stage.icon;
           const isActive = stage.tab === active;
@@ -1757,13 +1758,6 @@ function FoundationStepper({
               )}
               <span className="min-w-0">
                 <span className="block text-sm font-semibold">{stage.label}</span>
-                <span
-                  className={`block truncate text-xs ${
-                    isActive ? "text-primary-foreground/75" : "text-muted-foreground"
-                  }`}
-                >
-                  {stage.detail}
-                </span>
               </span>
             </button>
           );
@@ -1831,11 +1825,6 @@ function WorkflowStepper({
             </span>
             <span className="min-w-0">
               <span className="block text-sm font-semibold">{step.label}</span>
-              <span
-                className={`block truncate text-xs ${isActive ? "text-primary-foreground/75" : "text-muted-foreground"}`}
-              >
-                {step.detail}
-              </span>
             </span>
           </button>
         );
@@ -1941,62 +1930,57 @@ function EntryPanel({
         <FlowOptionsRow
           title="IAR Input"
           subtitle="Accepted deliveries become Stock Card receipt entries."
-          noSubtitlePx
           options={
             <div className="flow-options-form-inner">
-              <div className="form-grid-2">
-                <FlowField label="IAR No.">
-                  <input
-                    className="flow-input"
-                    placeholder="e.g. IAR-2026-07-10-143005123"
-                    value={iar.iarNo}
-                    onChange={(e) => setIar({ ...iar, iarNo: e.target.value })}
-                  />
-                </FlowField>
-                <FlowField label="Supplier">
-                  <input
-                    className={`flow-input ${iarValidationAttempted && !iar.supplier.trim() ? "border-red-500 ring-1 ring-red-500 focus:border-red-500 focus:ring-red-500" : ""}`}
-                    placeholder="e.g. Davao Citihardware Inc."
-                    value={iar.supplier}
-                    required
-                    aria-invalid={Boolean(iarValidationAttempted && !iar.supplier.trim())}
-                    onChange={(e) => setIar({ ...iar, supplier: e.target.value })}
-                  />
-                </FlowField>
-                <FlowField label="Invoice / DR No.">
-                  <input
-                    className={`flow-input ${iarValidationAttempted && !iar.invoiceNo.trim() ? "border-red-500 ring-1 ring-red-500 focus:border-red-500 focus:ring-red-500" : ""}`}
-                    placeholder="e.g. 250876 / DR-0001"
-                    value={iar.invoiceNo}
-                    required
-                    aria-invalid={Boolean(iarValidationAttempted && !iar.invoiceNo.trim())}
-                    onChange={(e) => setIar({ ...iar, invoiceNo: e.target.value })}
-                  />
-                </FlowField>
-                <FlowField label="Accepted By">
-                  <PersonnelInput
-                    className="flow-input"
-                    placeholder={FORM_DEFAULTS.custodian}
-                    value={iar.acceptedBy}
-                    options={personnelOptions.iar_accepted_by}
-                    onChange={(value) => setIar({ ...iar, acceptedBy: value })}
-                  />
-                </FlowField>
-              </div>
+              <FlowField label="IAR No.">
+                <input
+                  className="flow-input"
+                  placeholder="e.g. IAR-2026-07-10-143005123"
+                  value={iar.iarNo}
+                  onChange={(e) => setIar({ ...iar, iarNo: e.target.value })}
+                />
+              </FlowField>
+              <FlowField label="Supplier">
+                <input
+                  className={`flow-input ${iarValidationAttempted && !iar.supplier.trim() ? "border-red-500 ring-1 ring-red-500 focus:border-red-500 focus:ring-red-500" : ""}`}
+                  placeholder="e.g. Davao Citihardware Inc."
+                  value={iar.supplier}
+                  required
+                  aria-invalid={Boolean(iarValidationAttempted && !iar.supplier.trim())}
+                  onChange={(e) => setIar({ ...iar, supplier: e.target.value })}
+                />
+              </FlowField>
+              <FlowField label="Invoice / DR No.">
+                <input
+                  className={`flow-input ${iarValidationAttempted && !iar.invoiceNo.trim() ? "border-red-500 ring-1 ring-red-500 focus:border-red-500 focus:ring-red-500" : ""}`}
+                  placeholder="e.g. 250876 / DR-0001"
+                  value={iar.invoiceNo}
+                  required
+                  aria-invalid={Boolean(iarValidationAttempted && !iar.invoiceNo.trim())}
+                  onChange={(e) => setIar({ ...iar, invoiceNo: e.target.value })}
+                />
+              </FlowField>
+              <FlowField label="Accepted By">
+                <PersonnelInput
+                  className="flow-input"
+                  placeholder={FORM_DEFAULTS.custodian}
+                  value={iar.acceptedBy}
+                  options={personnelOptions.iar_accepted_by}
+                  onChange={(value) => setIar({ ...iar, acceptedBy: value })}
+                />
+              </FlowField>
             </div>
           }
         />
-        <div className="mt-4 mb-4">
-          <LineEditor
-            items={inventoryItems}
-            lines={iarLines}
-            onLines={setIarLines}
-            showCost
-            showProductDescription
-            allowAddItem={canWrite}
-            propertyFlow={propertyFlow}
-          />
-        </div>
+        <LineEditor
+          items={inventoryItems}
+          lines={iarLines}
+          onLines={setIarLines}
+          showCost
+          showProductDescription
+          allowAddItem={canWrite}
+          propertyFlow={propertyFlow}
+        />
         <FlowActions>
           <button
             type="button"
@@ -2026,10 +2010,8 @@ function EntryPanel({
           subtitle={savedRisLoaded
             ? "Saved RIS loaded for review. Use Cancel to start a new form."
             : "Issued items become Stock Card issue entries and RSMI rows."}
-          noSubtitlePx
           options={
             <div className="flow-options-form-inner">
-              <div className="form-grid-2">
             <FlowField label="RIS No.">
               <input
                 className={`flow-input ${risValidationAttempted && !ris.risNo.trim() ? "border-red-500 ring-1 ring-red-500 focus:border-red-500 focus:ring-red-500" : ""}`}
@@ -2104,20 +2086,17 @@ function EntryPanel({
                 onChange={(value) => setRis({ ...ris, receivedBy: value })}
               />
             </FlowField>
-              </div>
           </div>
           }
         />
-        <div className="mt-4 mb-4">
-          <LineEditor
-            items={risItems}
-            lines={risLines}
-            onLines={setRisLines}
-            checkStock
-            remarksByItem={risRemarksByItem}
-            emptyMessage="Post an IAR receipt first before issuing items through RIS."
-          />
-        </div>
+        <LineEditor
+          items={risItems}
+          lines={risLines}
+          onLines={setRisLines}
+          checkStock
+          remarksByItem={risRemarksByItem}
+          emptyMessage="Post an IAR receipt first before issuing items through RIS."
+        />
         <FlowActions>
           <button
             disabled={!canWrite || saving}
@@ -4768,17 +4747,9 @@ function SignatureBlock({
   );
 }
 
-function FormTitle({
-  title,
-  subtitle,
-  noPx = false,
-}: {
-  title: string;
-  subtitle: string;
-  noPx?: boolean;
-}) {
+function FormTitle({ title, subtitle }: { title: string; subtitle: string }) {
   return (
-    <div className={`border-b border-border py-3${noPx ? "" : " px-4"}`}>
+    <div className="border-b border-border px-4 py-3">
       <h2 className="text-lg font-semibold">{title}</h2>
       <p className="text-sm text-muted-foreground">{subtitle}</p>
     </div>
@@ -4790,17 +4761,15 @@ function FlowOptionsRow({
   subtitle,
   options,
   maxPerRow = 3,
-  noSubtitlePx = false,
 }: {
   title: string;
   subtitle: string;
   options: React.ReactNode;
   maxPerRow?: number;
-  noSubtitlePx?: boolean;
 }) {
   return (
     <div className="space-y-4">
-      <FormTitle title={title} subtitle={subtitle} noPx={noSubtitlePx} />
+      <FormTitle title={title} subtitle={subtitle} />
       <div className="flow-options-form">
         <div className="flow-options-form-inner">{options}</div>
       </div>
@@ -5988,4 +5957,3 @@ const flowStyles = `
   .paper-cell-control,.paper-meta-control,.paper-inline-control{appearance:none!important}
 }
 `;
-
