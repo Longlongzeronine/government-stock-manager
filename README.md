@@ -88,8 +88,44 @@ npm run build
 ### Deploy to Cloudflare Workers
 
 ```bash
-npx wrangler deploy
+npm run deploy
 ```
+
+This is a **Workers** app, not a static Pages site. The build emits a Worker
+(`dist/server/index.js`) plus the browser assets (`dist/client`). Deploy both
+through the generated Wrangler config. In Cloudflare, use a Workers project
+with `npm run deploy` as its deploy command; do not point Pages at `dist/client`
+or upload that folder as a static site. That drops SSR and TanStack Start server
+functions, which makes routes and app actions disappear.
+
+Set runtime secrets on the Worker once (and again when rotating them):
+
+```bash
+npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+npx wrangler secret put DEVELOPER_USERNAME
+npx wrangler secret put DEVELOPER_PASSWORD
+npx wrangler secret put DEVELOPER_SESSION_SECRET
+```
+
+Paste each value when Wrangler prompts. These values must be Cloudflare Worker
+secrets; `.env` is local-only and is not uploaded by `npm run deploy`. The
+Supabase URL and publishable key are already configured as non-secret Worker
+variables in `wrangler.jsonc`. Add `LOVABLE_API_KEY` as a Worker secret only if
+using the hosted AI provider.
+
+Apply database migrations to the linked Supabase project before deploying:
+
+```bash
+npx supabase db push
+```
+
+`npm run deploy` publishes the Worker but does not apply database migrations.
+If Supabase CLI is not linked, run pending SQL files from `supabase/migrations`
+in the project's SQL Editor first.
+
+For local Cloudflare preview, put the same runtime secrets in the ignored
+`dist/server/.dev.vars` file after building. Never put service-role or
+developer credentials in `wrangler.jsonc` or any `VITE_*` variable.
 
 ---
 

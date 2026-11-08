@@ -21,6 +21,7 @@ import { Route as AppRisHistoryRouteImport } from './routes/_app/ris-history'
 import { Route as AppRequisitionsRouteImport } from './routes/_app/requisitions'
 import { Route as AppInventoryRouteImport } from './routes/_app/inventory'
 import { Route as AppFormsRouteImport } from './routes/_app/forms'
+import { Route as AppDeveloperRouteImport } from './routes/_app/developer'
 import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
 import { Route as AppCategoriesRouteImport } from './routes/_app/categories'
 import { Route as AppAuditRouteImport } from './routes/_app/audit'
@@ -87,6 +88,11 @@ const AppFormsRoute = AppFormsRouteImport.update({
   path: '/forms',
   getParentRoute: () => AppRoute,
 } as any)
+const AppDeveloperRoute = AppDeveloperRouteImport.update({
+  id: '/developer',
+  path: '/developer',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppDashboardRoute = AppDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
@@ -127,6 +133,7 @@ export interface FileRoutesByFullPath {
   '/audit': typeof AppAuditRoute
   '/categories': typeof AppCategoriesRoute
   '/dashboard': typeof AppDashboardRoute
+  '/developer': typeof AppDeveloperRoute
   '/forms': typeof AppFormsRoute
   '/inventory': typeof AppInventoryRoute
   '/requisitions': typeof AppRequisitionsRoute
@@ -146,6 +153,7 @@ export interface FileRoutesByTo {
   '/audit': typeof AppAuditRoute
   '/categories': typeof AppCategoriesRoute
   '/dashboard': typeof AppDashboardRoute
+  '/developer': typeof AppDeveloperRoute
   '/forms': typeof AppFormsRoute
   '/inventory': typeof AppInventoryRoute
   '/requisitions': typeof AppRequisitionsRoute
@@ -167,6 +175,7 @@ export interface FileRoutesById {
   '/_app/audit': typeof AppAuditRoute
   '/_app/categories': typeof AppCategoriesRoute
   '/_app/dashboard': typeof AppDashboardRoute
+  '/_app/developer': typeof AppDeveloperRoute
   '/_app/forms': typeof AppFormsRoute
   '/_app/inventory': typeof AppInventoryRoute
   '/_app/requisitions': typeof AppRequisitionsRoute
@@ -188,6 +197,7 @@ export interface FileRouteTypes {
     | '/audit'
     | '/categories'
     | '/dashboard'
+    | '/developer'
     | '/forms'
     | '/inventory'
     | '/requisitions'
@@ -207,6 +217,7 @@ export interface FileRouteTypes {
     | '/audit'
     | '/categories'
     | '/dashboard'
+    | '/developer'
     | '/forms'
     | '/inventory'
     | '/requisitions'
@@ -227,6 +238,7 @@ export interface FileRouteTypes {
     | '/_app/audit'
     | '/_app/categories'
     | '/_app/dashboard'
+    | '/_app/developer'
     | '/_app/forms'
     | '/_app/inventory'
     | '/_app/requisitions'
@@ -331,6 +343,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppFormsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/developer': {
+      id: '/_app/developer'
+      path: '/developer'
+      fullPath: '/developer'
+      preLoaderRoute: typeof AppDeveloperRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/dashboard': {
       id: '/_app/dashboard'
       path: '/dashboard'
@@ -382,6 +401,7 @@ interface AppRouteChildren {
   AppAuditRoute: typeof AppAuditRoute
   AppCategoriesRoute: typeof AppCategoriesRoute
   AppDashboardRoute: typeof AppDashboardRoute
+  AppDeveloperRoute: typeof AppDeveloperRoute
   AppFormsRoute: typeof AppFormsRoute
   AppInventoryRoute: typeof AppInventoryRoute
   AppRequisitionsRoute: typeof AppRequisitionsRoute
@@ -399,6 +419,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAuditRoute: AppAuditRoute,
   AppCategoriesRoute: AppCategoriesRoute,
   AppDashboardRoute: AppDashboardRoute,
+  AppDeveloperRoute: AppDeveloperRoute,
   AppFormsRoute: AppFormsRoute,
   AppInventoryRoute: AppInventoryRoute,
   AppRequisitionsRoute: AppRequisitionsRoute,

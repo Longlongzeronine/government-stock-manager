@@ -1,6 +1,11 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase, type AppRole } from "@/integrations/supabase/client";
+import {
+  getDeveloperSession,
+  signInDeveloper,
+  signOutDeveloper,
+} from "@/lib/developer-auth.functions";
 
 interface AuthCtx {
   user: User | null;
@@ -13,6 +18,9 @@ interface AuthCtx {
   isAdmin: boolean;
   isStaff: boolean;
   canWrite: boolean;
+  developerMode: boolean;
+  developerUsername: string | null;
+  signInAsDeveloper: (username: string, password: string) => Promise<{ error: string | null }>;
 }
 
 const Ctx = createContext<AuthCtx | undefined>(undefined);
@@ -73,19 +81,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
   const [loading, setLoading] = useState(true);
+  const [developerUsername, setDeveloperUsername] = useState<string | null>(null);
 
   useEffect(() => {
+    let authStateChanged = false;
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
+      authStateChanged = true;
       setSession(s);
+      setLoading(false);
       if (s?.user) {
+        setDeveloperUsername(null);
+        void signOutDeveloper();
         setTimeout(() => loadRole(s.user.id), 0);
       } else {
         setRole(null);
       }
     });
-    supabase.auth.getSession().then(({ data }) => {
+    void supabase.auth.getSession().then(({ data }) => {
+      if (authStateChanged) return;
       setSession(data.session);
       if (data.session?.user) loadRole(data.session.user.id);
+
+      if (data.session) {
+        setDeveloperUsername(null);
+        setLoading(false);
+        void getDeveloperSession().then((developerSession) => {
+          if (developerSession) void signOutDeveloper();
+        }).catch(() => undefined);
+        return;
+      }
+
+      // Bound the separate developer-cookie request so an unavailable server
+      // function cannot leave the app stuck on its loading screen.
+      const lookupTimeout = new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), 5000);
+      });
+      void Promise.race([getDeveloperSession(), lookupTimeout]).then((developerSession) => {
+        if (authStateChanged) return;
+        setDeveloperUsername(developerSession?.username ?? null);
+        setLoading(false);
+      }).catch(() => {
+        if (!authStateChanged) {
+          setDeveloperUsername(null);
+          setLoading(false);
+        }
+      });
+    }).catch(() => {
+      if (!authStateChanged) setSession(null);
       setLoading(false);
     });
     return () => sub.subscription.unsubscribe();
@@ -102,14 +144,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setRole((top as any).role as AppRole);
   }
 
+  const developerMode = developerUsername !== null && session === null;
   const value: AuthCtx = {
     user: session?.user ?? null,
     session,
     role,
     loading,
-    isAdmin: role === "admin",
+    isAdmin: role === "admin" || developerMode,
     isStaff: role === "staff",
-    canWrite: role === "admin" || role === "staff",
+    canWrite: developerMode || role === "admin" || role === "staff",
+    developerMode,
+    developerUsername,
+    signInAsDeveloper: async (username, password) => {
+      try {
+        const result = await signInDeveloper({ data: { username, password } });
+        if (result.error) return { error: result.error };
+        await supabase.auth.signOut();
+        setRole(null);
+        setDeveloperUsername(result.username ?? username);
+        return { error: null };
+      } catch (error: any) {
+        return { error: error?.message ?? "Developer sign in failed." };
+      }
+    },
     signIn: async (email, password) => {
       const key = `signin:${normalizeEmail(email)}`;
       const rateLimit = checkRateLimit(key);
@@ -149,6 +206,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               return { error: "Your account request has been declined. Contact an administrator." };
             }
           }
+
+          await signOutDeveloper();
+          setDeveloperUsername(null);
 
           return { error: null };
         } catch (err: any) {
@@ -206,7 +266,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
     },
     signOut: async () => {
-      await supabase.auth.signOut();
+      await Promise.all([supabase.auth.signOut(), signOutDeveloper()]);
+      setDeveloperUsername(null);
     },
   };
 

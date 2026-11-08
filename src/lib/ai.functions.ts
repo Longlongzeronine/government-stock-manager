@@ -32,6 +32,38 @@ interface InventorySnapshot {
   }>;
 }
 
+function serverEnv(name: string): string {
+  const runtime = globalThis as typeof globalThis & {
+    __WORKER_ENV__?: Record<string, unknown>;
+    process?: { env?: Record<string, string | undefined> };
+  };
+  const workerValue = runtime.__WORKER_ENV__?.[name];
+  if (typeof workerValue === "string" && workerValue.trim()) {
+    return workerValue.trim();
+  }
+  return runtime.process?.env?.[name]?.trim() ?? "";
+}
+
+function validateMessages(value: unknown): Msg[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 30) {
+    throw new Error("Send between 1 and 30 chat messages.");
+  }
+
+  return value.map((message): Msg => {
+    if (
+      !message ||
+      typeof message !== "object" ||
+      !["user", "assistant"].includes((message as Msg).role) ||
+      typeof (message as Msg).content !== "string" ||
+      !(message as Msg).content.trim() ||
+      (message as Msg).content.length > 8_000
+    ) {
+      throw new Error("Chat messages must have a valid role and non-empty text under 8,000 characters.");
+    }
+    return { role: (message as Msg).role, content: (message as Msg).content.trim() };
+  });
+}
+
 function offlineInventoryReply(snapshot: InventorySnapshot | null, latestQuestion: string) {
   if (!snapshot) {
     return "Assistant is running in offline mode, but inventory data is unavailable. Check Supabase configuration.";
@@ -72,9 +104,14 @@ function offlineInventoryReply(snapshot: InventorySnapshot | null, latestQuestio
 }
 
 export const askAssistant = createServerFn({ method: "POST" })
-  .inputValidator((d: { messages: Msg[] }) => d)
+  .inputValidator((d: unknown) => {
+    if (!d || typeof d !== "object" || !("messages" in d)) {
+      throw new Error("Chat messages are required.");
+    }
+    return { messages: validateMessages((d as { messages: unknown }).messages) };
+  })
   .handler(async ({ data }) => {
-    const apiKey = process.env.LOVABLE_API_KEY;
+    const apiKey = serverEnv("LOVABLE_API_KEY");
     let snap: InventorySnapshot | null = null;
     let context = "";
     try {
@@ -103,7 +140,10 @@ export const askAssistant = createServerFn({ method: "POST" })
         },
         body: JSON.stringify({
           model: "google/gemini-3-flash-preview",
-          messages: [{ role: "system", content: systemPrompt }, ...data.messages],
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...data.messages.filter((message) => message.role !== "system"),
+          ],
         }),
       });
 

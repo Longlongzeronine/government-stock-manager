@@ -1,14 +1,17 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { listItems, listCategories, listSuppliers, createItem, updateItem, updateItemMonthlyQuantity, deleteItem, importItems, createCategory } from "@/lib/data.functions";
+import { listItems, listCategories, listSuppliers, updateItem, updateItemMonthlyQuantity, deleteItem, importItems } from "@/lib/data.functions";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { StatusBadge } from "@/components/common/StatusBadge";
+import { ItemDialog } from "@/components/inventory/ItemDialog";
 import { MobileCard, MobileCardRow } from "@/components/common/MobileCard";
 import { ChevronDown, Plus, ScanLine, Search, Pencil, Trash2, Download, FileText, FileSpreadsheet, Clipboard, Printer, Loader2, LayoutGrid, Check, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { exportCSV, exportPDF, exportXLSX, exportAppCseXlsx, exportAppCsePdf } from "@/lib/export";
+import { detectAppCseLayout, parseAppCseRows, validateAppCseLayout, MONTH_LABELS, MONTH_QUANTITY_COLUMNS } from "@/lib/appcse-sheet";
+import { classifyInventoryItem } from "@/lib/item-classification";
 import { format } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
 import QRCode from "qrcode";
@@ -42,6 +45,12 @@ function Inventory() {
   const [scannerOpen, setScannerOpen] = useState(false);
 
   useEffect(() => {
+    // Inventory should open at its page heading, not at a previously restored
+    // scroll offset that hides the title and form toolbar.
+    window.scrollTo({ top: 0, left: 0 });
+  }, []);
+
+  useEffect(() => {
     if (!searchParams.add || !isAdmin) return;
     setEditing(null);
     setOpen(true);
@@ -51,24 +60,50 @@ function Inventory() {
   const { data: items = [] } = useQuery({
     queryKey: ["items"],
     queryFn: () => listItems(),
-    refetchInterval: 3000,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   });
   const { data: cats = [] } = useQuery({
     queryKey: ["categories"],
     queryFn: () => listCategories(),
-    refetchInterval: 3000,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
   });
   const { data: sups = [] } = useQuery({
     queryKey: ["suppliers"],
     queryFn: () => listSuppliers(),
-    refetchInterval: 3000,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
   });
+
+  function updateItemsCache(change?: any) {
+    if (!change) {
+      void qc.invalidateQueries({ queryKey: ["items"] });
+      return;
+    }
+    qc.setQueryData<any[]>(["items"], (current = []) => {
+      if (change.deletedId) return current.filter((item) => item.id !== change.deletedId);
+      const saved = change;
+      const existing = current.find((item) => item.id === saved.id);
+      const category = saved.category
+        ?? (saved.category_id ? cats.find((item: any) => item.id === saved.category_id) : null)
+        ?? (existing?.category_id === saved.category_id ? existing.category : null);
+      const supplier = saved.supplier
+        ?? (saved.supplier_id ? sups.find((item: any) => item.id === saved.supplier_id) : null)
+        ?? (existing?.supplier_id === saved.supplier_id ? existing.supplier : null);
+      const merged = { ...existing, ...saved, category, supplier };
+      return existing
+        ? current.map((item) => item.id === merged.id ? merged : item)
+        : [merged, ...current];
+    });
+  }
 
   const filtered = useMemo(() => {
     return items.filter((i: any) => {
       if (search && !i.name.toLowerCase().includes(search.toLowerCase())) return false;
       if (catFilter && i.category_id !== catFilter) return false;
-      if (typeFilter && i.item_type !== typeFilter) return false;
+      const classification = i.inventory_classification || classifyInventoryItem(i.item_type, i.acquisition_cost).inventory_classification;
+      if (typeFilter && classification !== typeFilter) return false;
       return true;
     });
   }, [items, search, catFilter, typeFilter]);
@@ -113,16 +148,15 @@ function Inventory() {
         cats={cats}
         sups={sups}
         canEdit={isAdmin}
-        onItemsChanged={() => qc.invalidateQueries({ queryKey: ["items"] })}
+        onItemsChanged={updateItemsCache}
         onCategoryCreated={() => qc.invalidateQueries({ queryKey: ["categories"] })}
       />
       {open && (
         <ItemDialog
           editing={editing}
           cats={cats}
-          sups={sups}
           onClose={() => setOpen(false)}
-          onSaved={() => { setOpen(false); qc.invalidateQueries({ queryKey: ["items"] }); }}
+          onSaved={(item: any) => { setOpen(false); updateItemsCache(item); }}
           onCategoryCreated={() => qc.invalidateQueries({ queryKey: ["categories"] })}
         />
       )}
@@ -194,8 +228,9 @@ function Inventory() {
           <div className="flex gap-1 bg-muted/50 rounded-lg p-0.5 border border-border">
             {[
               { label: "All", value: "" },
-              { label: "Supplies", value: "supply" },
-              { label: "Materials", value: "material" },
+              { label: "Supplies", value: "expendable_supply" },
+              { label: "Semi-Expendable", value: "semi_expendable_property" },
+              { label: "PPE", value: "ppe" },
             ].map((t) => (
               <button
                 key={t.value}
@@ -360,7 +395,6 @@ function Inventory() {
         <ItemDialog
           editing={editing}
           cats={cats}
-          sups={sups}
           onClose={() => setOpen(false)}
           onSaved={() => { setOpen(false); qc.invalidateQueries({ queryKey: ["items"] }); }}
         />
@@ -397,9 +431,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const importInput = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
-  const [layout, setLayout] = useState<"template" | "compact" | "easy">(() => {
-    try { const saved = typeof window !== "undefined" ? window.localStorage.getItem("app-cse-layout") : null; if (saved === "compact") return "compact"; if (saved === "simple" || saved === "easy") return "easy"; return "template"; } catch { return "template"; }
-  });
+  const [layout, setLayout] = useState<"template" | "compact" | "easy">("easy");
   const [layoutOpen, setLayoutOpen] = useState(false);
   const layoutWrapRef = useRef<HTMLDivElement | null>(null);
   const chooseLayout = (next: "template" | "compact" | "easy") => {
@@ -424,7 +456,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [layoutOpen]);
-  const monthsFor = (item: any) => monthlyPlan[item.id] || ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].map((month, index) => Number(item[`${month}_quantity`] ?? (index === 0 ? item.quantity : 0)) || 0);
+  const monthsFor = (item: any) => monthlyPlan[item.id] || ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].map((month, index) => Number(item[`${month}_quantity`] ?? (index === 0 ? item.stored_quantity ?? item.quantity : 0)) || 0);
   const isNewItem = (item: any) => !!item?.created_at && !seenNewIds.has(item.id) && Date.now() - new Date(item.created_at).getTime() < NEW_ITEM_WINDOW_MS;
   // Part I = items with barcode_value (PS-DBM catalog items from XLSX import)
   const part1Items = (items as any[]).filter((item: any) => item.barcode_value);
@@ -463,7 +495,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
     if (!confirm(`Permanently delete "${item.name}" from the plan? This cannot be undone.`)) return;
     try {
       await deleteItem({ data: { id: item.id } });
-      onItemsChanged();
+      onItemsChanged({ deletedId: item.id });
       setSelected((current) => { const next = new Set(current); next.delete(item.id); return next; });
       toast.success("Item deleted");
     } catch (error: any) {
@@ -532,16 +564,18 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
     const next = { ...monthlyPlan, [id]: current.map((month, monthIndex) => monthIndex === index ? Math.max(0, Number(value) || 0) : month) };
     setMonthlyPlan(next);
     try {
-      await updateItemMonthlyQuantity({ data: { id, month: index, quantity: next[id][index] } });
-      onItemsChanged();
+      const saved = await updateItemMonthlyQuantity({ data: { id, month: index, quantity: next[id][index] } });
+      onItemsChanged({ ...item, ...saved, [`${["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"][index]}_quantity`]: next[id][index] });
     } catch (error: any) {
       toast.error(error?.message ?? "Monthly quantity update failed");
     }
   };
   const saveItem = async (item: any, changes: Record<string, unknown>) => {
+    const changed = Object.fromEntries(Object.entries(changes).filter(([key, value]) => String(item[key] ?? "") !== String(value ?? "")));
+    if (!Object.keys(changed).length) return;
     try {
-      await updateItem({ data: { ...item, ...changes } });
-      onItemsChanged();
+      const saved = await updateItem({ data: { ...item, ...changed } });
+      onItemsChanged({ ...item, ...saved, ...changed });
     } catch (error: any) {
       toast.error(error?.message ?? "Item update failed");
     }
@@ -564,7 +598,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
     try {
       await Promise.all([...selected].map((id) => deleteItem({ data: { id } })));
       setSelected(new Set());
-      onItemsChanged();
+      [...selected].forEach((id) => onItemsChanged({ deletedId: id }));
       toast.success("Selected inventory items deleted");
     } catch (error: any) {
       toast.error(error?.message ?? "Bulk delete failed");
@@ -577,221 +611,126 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
     try {
       const XLSX = await import("xlsx");
       const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as any[][];
-      const toNumber = (value: unknown) => {
-        if (typeof value === "number") return value || 0;
-        const s = String(value ?? "").replace(/[^\d.,-]/g, "").replace(/,/g, "");
-        return Number(s) || 0;
-      };
-      const toStr = (v: unknown) => String(v ?? "").trim();
-      // ── Step 1: Find the sub-header row that contains month names ──
-      const MONTH_PATTERNS = [/^jan/i, /^feb/i, /^mar/i, /^apr/i, /^may/i, /^jun/i, /^jul/i, /^aug/i, /^sep/i, /^oct/i, /^nov/i, /^dec/i, /^january/i, /^february/i, /^march/i, /^april/i, /^june/i, /^july/i, /^august/i, /^september/i, /^october/i, /^november/i, /^december/i];
-      const monthColNames = ["jan_quantity", "feb_quantity", "mar_quantity", "apr_quantity", "may_quantity", "jun_quantity", "jul_quantity", "aug_quantity", "sep_quantity", "oct_quantity", "nov_quantity", "dec_quantity"];
-      let subHeaderRow = -1;
-      const monthIndices: number[] = [];
-      for (let r = 0; r < rows.length; r++) {
-        const row = rows[r];
-        const found: number[] = [];
-        for (let c = 0; c < row.length; c++) {
-          const cell = toStr(row[c]);
-          if (MONTH_PATTERNS.some((p) => p.test(cell))) {
-            found.push(c);
-          }
-        }
-        if (found.length >= 6) { // At least 6 month names found
-          subHeaderRow = r;
-          // Map each month to its column index
-          // Map month columns - use simple substring matching for full names like "April", "May", "June"
-          const monthNames = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
-          for (let c = 0; c < row.length; c++) {
-            const cell = toStr(row[c]).toLowerCase().trim();
-            // Try exact match first
-            const exactIdx = monthNames.findIndex((m) => cell === m);
-            if (exactIdx >= 0) { monthIndices[exactIdx] = c; continue; }
-            // Try full name match: "january" -> 0, "february" -> 1, etc.
-            const fullIdx = monthNames.findIndex((m) => cell.startsWith(m));
-            if (fullIdx >= 0) { monthIndices[fullIdx] = c; continue; }
-          }
+      // Prefer a sheet named like the APP-CSE form, otherwise use the first sheet.
+      let sheetName = workbook.SheetNames[0];
+      for (const name of workbook.SheetNames) {
+        if (/app\s*-?\s*cse/i.test(name)) {
+          sheetName = name;
           break;
         }
       }
-      if (subHeaderRow < 0) throw new Error("Could not find monthly columns (Jan–Dec) in the XLSX. Make sure you are importing the APP-CSE Template 2026.");
-      // ── Step 2: Find the main header row (row before sub-header with "item" / "unit") ──
-      let headerRow = -1;
-      for (let r = subHeaderRow - 1; r >= Math.max(0, subHeaderRow - 5); r--) {
-        const row = rows[r];
-        const text = row.map(toStr).join(" ").toLowerCase();
-        if (/item|specification|description/.test(text) && /unit/.test(text)) {
-          headerRow = r;
-          break;
-        }
-      }
-      // ── Step 3: Determine fixed column positions from the SUB-HEADER row ──
-      // APP-CSE Template sub-header: Col 0=#, Col 1=Code, Col 2=Item Name, Col 3=Unit, then months
-      // IMPORTANT: Use sub-header row, NOT the main header (which has "Item & Specifications" merged across cols 0-2)
-      const subHdrCells = rows[subHeaderRow].map(toStr);
+      const sheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(sheet, {
+        header: 1,
+        defval: "",
+        blankrows: true,
+      }) as unknown[][];
+      const merges = ((sheet["!merges"] as any[]) || []).map((range) => ({
+        s: { r: range.s.r, c: range.s.c },
+        e: { r: range.e.r, c: range.e.c },
+      }));
 
-      // Find code column: search for "code" or "barcode" in sub-header, else default to col 1
-      let codeCol = 1;
-      for (let c = 0; c < subHdrCells.length; c++) {
-        if (/code|barcode|sku|ps-dbm|psdbm/i.test(subHdrCells[c])) { codeCol = c; break; }
-      }
-      // Find name column: search for "item" or "description" or "specification" in sub-header, else default to col 2
-      let nameCol = 2;
-      for (let c = 0; c < subHdrCells.length; c++) {
-        if (/item|description|product|name|specification/i.test(subHdrCells[c])) { nameCol = c; break; }
-      }
-      // Find unit column: search for "unit" in sub-header, else default to col 3
-      let unitCol = 3;
-      for (let c = 0; c < subHdrCells.length; c++) {
-        if (/^unit/i.test(subHdrCells[c])) { unitCol = c; break; }
-      }
-      // Find price column: search for "unit price" or "cost" in the MAIN header row
-      // ("Unit Price as of May 14, 2025" lives in the main header, not the sub-header)
-      let priceCol = -1;
-      const mainHdrCells = headerRow >= 0 ? rows[headerRow].map(toStr) : subHdrCells;
-      for (let c = 0; c < mainHdrCells.length; c++) {
-        if (/unit\s*price|acquisition.*cost|^cost$/i.test(mainHdrCells[c])) { priceCol = c; break; }
-      }
-      // ── Step 4: Detect category / section header rows ──
-      const isCategoryRow = (row: any[]): string | null => {
-        // Deduplicate — merged cells may fill the same value across all columns
-        const uniqueValues = Array.from(new Set(row.map((cell) => toStr(cell)).filter(Boolean)));
-        // Category rows typically have 1-2 unique values (category name + maybe a number)
-        if (uniqueValues.length === 0 || uniqueValues.length > 3) return null;
-        const fullText = row.map(toStr).join(" ");
-        // Check if the row contains a PART I / PART II header
-        if (/part\s+[ivx]/i.test(fullText)) return null;
-        // Check for section names — allow parentheses, quotes, commas, periods
-        const text = uniqueValues.find((cell) => {
-          const s = toStr(cell);
-          // Must be at least 4 chars (allows short section headers like "FILMS")
-          if (s.length < 4) return false;
-          // Skip if it looks like a product row (has a product code)
-          if (/^[A-Z0-9]{2,15}[-][A-Z0-9]{2,10}/.test(s)) return false;
-          // Skip if it's just a number or short code
-          if (/^\d+$/.test(s)) return false;
-          // Skip if it looks like a summary/total row
-          if (/^(a\.\s+total|b\.\s+additional|c\.\s+additional|d\.\s+grand|e\.\s+approved|total|grand\s+total|we\s+hereby|consistent\s+with)/i.test(s)) return false;
-          // Skip rows that are just form field labels or signature-block text
-          if (/^(date\s+prepared|department|bureau|office\s*:|region|organization|contact|position|address|e-?mail|telephone|mobile\s+nos|agency|fund|prepared\s+by|prepared,|approved\s+by|approved,|supply\s+officer|accountant|funds\s+available|certified\s+funds|head\s+of|en[grs]+\.)/i.test(s)) return false;
-          // Allow all-caps section names with punctuation
-          if (/^[A-Z][A-Z\s,&\-\(\)\"\.\/]+$/.test(s)) return true;
-          // Allow mixed-case section names like "Software (Note:"
-          if (/^[A-Z][A-Za-z\s,\-]+(\([^)]*\))?\s*(Note:)?/i.test(s) && !/^[a-z]/.test(s)) return true;
-          return false;
+      // ── Detect the layout from header names / structure (no fixed column indexes) ──
+      const layout = detectAppCseLayout({ name: sheetName, rows, merges });
+      console.log(
+        `[APP-CSE Import] Sheet "${sheetName}" has ${rows.length} rows. ` +
+          `Header row ${layout.headerRow + 1}, month row ${layout.monthRow + 1}, first data row ${layout.firstDataRow + 1}.`,
+        {
+          months: layout.monthColumns
+            .map(
+              (col, month) =>
+                `${MONTH_LABELS[month]}=${col >= 0 ? col + 1 : "?"}`,
+            )
+            .join(" "),
+          monthsInferred: layout.monthsInferred,
+          columns: Object.fromEntries(
+            Object.entries(layout.columns).map(([key, col]) => [
+              key,
+              (col as number) + 1,
+            ]),
+          ),
+        },
+      );
+      for (const header of layout.headersUsed)
+        console.log(
+          `[APP-CSE Import] Header row ${header.row + 1}:`,
+          header.cells,
+        );
+      layout.warnings.forEach((warning) =>
+        console.warn(`[APP-CSE Import] ${warning}`),
+      );
+
+      // ── Validate before importing so the error names the missing column ──
+      const validation = validateAppCseLayout(layout, {
+        requiredColumns: ["name"],
+      });
+      console.info(
+        `[APP-CSE Import] Detected columns: ${validation.detected.join("; ")}`,
+      );
+      if (!validation.ok) {
+        console.error("[APP-CSE Import] Validation failed", {
+          errors: validation.errors,
+          detected: validation.detected,
+          headers: layout.headersUsed.map(
+            (header) => `row ${header.row + 1}: ${header.cells.join(" | ")}`,
+          ),
         });
-        if (!text) return null;
-        // Keep only the first line of a merged cell (e.g. "MOTOR VEHICLE (Note:...)\nPlease refer to the Budget Circular...") and strip "(Note: ...)"
-        const cleaned = toStr(text).split(/\r?\n/)[0].replace(/\(Note:[^)]*\)/gi, "").trim();
-        return cleaned || null;
-      };
-      // ── Step 5: Known form-field / non-product patterns to skip ──
-      const SKIP_NAMES = /^(date\s+prepared|department|bureau|office\s*:|region|organization|contact|position|address|e-?mail|telephone|mobile\s+nos|agency|fund|prepared\s+by|approved|supply\s+officer|accountant|property|total\s+amount|grand\s+total|a\.\s+total|b\.\s+additional|c\.\s+additional|d\.\s+grand|e\.\s+approved|we\s+hereby|part\s+[ivx]|monthly\s+quantity|unit\s+of\s+measure|unit\s+price|for\s+the\s+year|as\s+of|item\s*&|introduction|reminder|note:|annual\s+procurement|common-use|ps-dbm|head\s+of|prepared,|certified,|consistent\s+with|please\s+refer|please\s+indicate|note\s*\:|in\s+figures)/i;
-      const isUuid = (c: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(c);
-      const isDateSerial = (c: string) => /^\d{4,6}$/.test(c) && Number(c) > 30000 && Number(c) < 60000;
-      // ── Step 6: Parse data rows ──
-      let currentCategory = "";
-      let inPart2 = false; // track whether we're in PART II section
-      const imported: any[] = [];
-      const startRow = subHeaderRow + 1;
-      for (let r = startRow; r < rows.length; r++) {
-        const row = rows[r];
-        const fullText = row.map(toStr).join(" ");
-        // Skip completely empty rows
-        if (!fullText.trim()) continue;
-        // Check for PART I / PART II section markers
-        // IMPORTANT: Check PART II FIRST to avoid partial match
-        // Use \b word boundary to avoid issues with merged cells or leading whitespace
-        // \bPART\s+II\b matches PART II but NOT PART III (the \b after II prevents this)
-        if (/\bPART\s+II\b/i.test(fullText)) {
-          inPart2 = true;
-          currentCategory = "PART II - OTHER ITEMS";
-          continue;
-        }
-        if (/\bPART\s+I(?!I)/i.test(fullText)) {
-          inPart2 = false;
-          currentCategory = "";
-          continue;
-        }
-        // Detect category/section header rows
-        const cat = isCategoryRow(row);
-        if (cat) { currentCategory = cat; continue; }
-        // Read item fields by fixed column positions
-        // ── Determine name, code, unit from detected columns ──
-        let name = toStr(row[nameCol]);
-        // Fallback: if name is just a number or short number, scan for a proper text name
-        if (!name || /^\d+$/.test(name) || name.length < 2) {
-          // Try columns that might have the item name (skip col 0=#, col 1=code, look at wider columns)
-          for (let c = 0; c < Math.min(row.length, 10); c++) {
-            const cell = toStr(row[c]);
-            if (cell.length >= 4 && !/^\d+$/.test(cell) && !/^[A-Z0-9]{2,15}[-][A-Z0-9]{2,10}/.test(cell) && !SKIP_NAMES.test(cell)) {
-              // Only if it's not already used as code or category
-              if (c !== codeCol) { name = cell; break; }
-            }
-          }
-        }
-        const rawCode = toStr(row[codeCol]);
-        const unit = toStr(row[unitCol]) || "pcs";
-        // Skip non-product rows
-        if (!name || name.length < 2) continue;
-        // Excel date serials (e.g. 45891 in the "Date Prepared:" footer) are not items
-        if (isDateSerial(name)) continue;
-        if (SKIP_NAMES.test(name)) continue;
-        // A code column holding a form label (e.g. "Date Prepared:") is a footer row, not an item
-        if (SKIP_NAMES.test(rawCode)) continue;
-        if (isUuid(rawCode) || isDateSerial(rawCode)) continue;
-        // Detect and skip summary/calculation rows
-        if (/^(A\.|B\.|C\.|D\.|E\.)\s+/i.test(name)) continue;
-        if (/^(total|grand\s+total|approved\s+budget)/i.test(name)) continue;
-        // Read monthly quantities from the detected month columns
-        const monthly: Record<string, number> = {};
-        for (let m = 0; m < 12; m++) {
-          const colIdx = monthIndices[m];
-          monthly[monthColNames[m]] = colIdx != null ? toNumber(row[colIdx]) : 0;
-        }
-        // Try to read unit price from the detected price column
-        const price = priceCol >= 0 ? toNumber(row[priceCol]) : 0;
-        // Compute total quantity from monthly values
-        const totalQty = Object.values(monthly).reduce((s, v) => s + v, 0);
-        // For Part II items, keep the code in description but NOT as barcode_value
-        // so they display in Part II (custom items) rather than Part I (PS-DBM catalog)
-        const hasValidCode = rawCode && !isUuid(rawCode) && !isDateSerial(rawCode);
-        if (inPart2 && hasValidCode) {
-          // Store template code as part of description for Part II items
-          const desc = `[${rawCode}] ${name}`;
-          const item = {
-            name,
-            barcode_value: null,
-            description: desc,
-            unit,
-            quantity: totalQty,
-            acquisition_cost: price,
-            category_name: currentCategory || "OTHER ITEMS",
-            ...monthly,
-          };
-          imported.push(item);
-        } else {
-          const item = {
-            name,
-            barcode_value: hasValidCode ? rawCode : null,
-            unit,
-            quantity: totalQty,
-            acquisition_cost: price,
-            category_name: currentCategory || (inPart2 ? "OTHER ITEMS" : "PS-DBM SUPPLIES"),
-            ...monthly,
-          };
-          imported.push(item);
-        }
+        throw new Error(validation.errors.join(" "));
       }
-      if (!imported.length) throw new Error("No product rows found. Use a sheet with Item and Unit columns.");
-      const part1Count = imported.filter((i) => i.barcode_value).length;
-      const part2Count = imported.filter((i) => !i.barcode_value).length;
-      console.log(`[APP-CSE Import] Parsed ${imported.length} items total: ${part1Count} Part I (${imported.filter((i) => i.barcode_value).length} with barcode), ${part2Count} Part II (${imported.filter((i) => !i.barcode_value).length} without barcode)`);
+      validation.warnings.forEach((warning) =>
+        console.warn(`[APP-CSE Import] ${warning}`),
+      );
+
+      // ── Parse the item rows using the detected layout ──
+      const parsed = parseAppCseRows(rows, layout);
+      console.info(
+        `[APP-CSE Import] Parsed ${parsed.items.length} items (Part I ${parsed.partOne}, Part II ${parsed.partTwo}); ` +
+          `${parsed.skipped} non-item row(s) skipped, ${parsed.duplicates} duplicate row(s) ignored.`,
+      );
+      parsed.warnings.forEach((warning) =>
+        console.warn(`[APP-CSE Import] ${warning}`),
+      );
+      if (parsed.items.length && layout.monthColumns.every((col) => col < 0)) {
+        console.warn(
+          "[APP-CSE Import] No monthly (Jan-Dec) columns were detected; only the total quantity was imported.",
+        );
+      }
+      if (!parsed.items.length) {
+        throw new Error(
+          `No inventory rows were found below the header (row ${layout.firstDataRow + 1}) in sheet "${sheetName}". ` +
+            `Detected columns: ${validation.detected.join("; ")}.`,
+        );
+      }
+
+      const imported = parsed.items.map((item) => ({
+        name: item.name,
+        description: item.description,
+        barcode_value: item.code || null,
+        unit: item.unit,
+        quantity: item.quantity,
+        acquisition_cost: item.acquisition_cost,
+        category_name: item.category,
+        ...Object.fromEntries(
+          MONTH_QUANTITY_COLUMNS.map((column, month) => [
+            column,
+            item.monthly[month],
+          ]),
+        ),
+      }));
+
       const result = await importItems({ data: { items: imported } });
       onItemsChanged();
-      toast.success(`Import complete: ${result.added} added, ${result.updated || 0} updated, ${result.skipped} skipped (${part1Count} Part I, ${part2Count} Part II)`);
+      const summary = [
+        `${result.added} added`,
+        `${result.updated || 0} updated`,
+        `${result.skipped} skipped`,
+        `${parsed.partOne} Part I / ${parsed.partTwo} Part II`,
+      ];
+      if (parsed.duplicates)
+        summary.push(
+          `${parsed.duplicates} duplicate row(s) in the file ignored`,
+        );
+      toast.success(`Import complete: ${summary.join(", ")}`);
     } catch (error: any) {
       toast.error(error?.message ?? "XLSX import failed");
     } finally {
@@ -925,7 +864,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
                   <td>
                     <div className="app-cse-compact-months">
                       {months.map((value, m) => (
-                        <label key={m}><span>{"JAN,FEB,MAR,APR,MAY,JUN,JUL,AUG,SEP,OCT,NOV,DEC".split(",")[m]}</span><input disabled={!canEdit} type="number" min="0" value={value} onChange={(event) => saveMonthlyPlan(item.id, m, event.target.value)} /></label>
+                        <label key={m}><span>{"JAN,FEB,MAR,APR,MAY,JUN,JUL,AUG,SEP,OCT,NOV,DEC".split(",")[m]}</span><input disabled={!canEdit} type="number" min="0" defaultValue={value} onBlur={(event) => saveMonthlyPlan(item.id, m, event.target.value)} /></label>
                       ))}
                     </div>
                   </td>
@@ -952,8 +891,10 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
   // ── Easy view: friendly grouped cards — search, totals, and quick edit/delete. ──
   const easyCard = (item: any, rowIndex: number) => {
     const months = monthsFor(item);
-    const price = Number(item.acquisition_cost || 0);
-    const totalQty = months.reduce((sum, q) => sum + q, 0);
+    const plannedQty = months.reduce((sum, q) => sum + q, 0);
+    const totalQty = item.price_balances?.length
+      ? item.price_balances.reduce((sum: number, lot: any) => sum + Number(lot.quantity || 0), 0)
+      : Number(item.quantity ?? plannedQty) || 0;
     const code = item.barcode_value || item.qr_code_value || "";
     const qrValue = item.qr_code_value || item.barcode_value || item.id;
     return (
@@ -969,8 +910,6 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
         <dl className="app-cse-easy-card-meta">
           <div><dt>Unit</dt><dd>{item.unit || "—"}</dd></div>
           <div><dt>Total Qty</dt><dd>{totalQty}</dd></div>
-          <div><dt>Unit Price</dt><dd>₱ {peso(price)}</dd></div>
-          <div><dt>Total Amount</dt><dd>₱ {peso(totalQty * price)}</dd></div>
         </dl>
         {canEdit && (
           <div className="app-cse-easy-card-actions">
@@ -1001,7 +940,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
   };
 
   return (
-    <main className="app-cse-shell">
+    <main className="app-cse-shell" data-ui-build="feature-neil">
       {layout === "template" && (
       <section className="app-cse-sheet app-cse-template">
         <header className="app-cse-template-header">
@@ -1047,7 +986,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
                   const code = item.barcode_value || item.qr_code_value || "";
                   const qrValue = item.qr_code_value || item.barcode_value || item.id;
                   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=96x96&format=svg&data=${encodeURIComponent(qrValue)}`;
-                  return <tr className={`app-cse-item ${selected.has(item.id) ? "is-selected" : ""}`} key={item.id || code} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}><td>{canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td><td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => saveItem(item, { barcode_value: event.target.value })} /></td><td><span className="app-cse-product">{isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}<button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={qrUrl} alt="" title={qrValue} loading="lazy" /></button><span><input disabled={!canEdit} defaultValue={item.name} onBlur={(event) => saveItem(item, { name: event.target.value })} /><small>{item.description || ""}</small></span></span></td><td><input disabled={!canEdit} defaultValue={item.unit} onBlur={(event) => saveItem(item, { unit: event.target.value })} /></td>{cells(months, price).map((value, cellIndex) => <td key={cellIndex}>{cellIndex % 5 < 3 ? <input disabled={!canEdit} type="number" min="0" value={value} onChange={(event) => saveMonthlyPlan(item.id, Math.floor(cellIndex / 5) * 3 + (cellIndex % 5), event.target.value)} /> : value}</td>)}<td>{totalQty}</td><td><input disabled={!canEdit} type="number" min="0" step=".01" defaultValue={price} onBlur={(event) => saveItem(item, { acquisition_cost: Number(event.target.value) || 0 })} /></td><td>{peso(totalQty * price)}</td></tr>;
+                  return <tr className={`app-cse-item ${selected.has(item.id) ? "is-selected" : ""}`} key={item.id || code} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}><td>{canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td><td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => saveItem(item, { barcode_value: event.target.value })} /></td><td><span className="app-cse-product">{isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}<button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={qrUrl} alt="" title={qrValue} loading="lazy" /></button><span><input disabled={!canEdit} defaultValue={item.name} onBlur={(event) => saveItem(item, { name: event.target.value })} /><small>{item.description || ""}</small></span></span></td><td><input disabled={!canEdit} defaultValue={item.unit} onBlur={(event) => saveItem(item, { unit: event.target.value })} /></td>{cells(months, price).map((value, cellIndex) => <td key={cellIndex}>{cellIndex % 5 < 3 ? <input disabled={!canEdit} type="number" min="0" defaultValue={value} onBlur={(event) => saveMonthlyPlan(item.id, Math.floor(cellIndex / 5) * 3 + (cellIndex % 5), event.target.value)} /> : value}</td>)}<td>{totalQty}</td><td><input disabled={!canEdit} type="number" min="0" step=".01" defaultValue={price} onBlur={(event) => saveItem(item, { acquisition_cost: Number(event.target.value) || 0 })} /></td><td>{peso(totalQty * price)}</td></tr>;
                 })
               ])}
               <tr className="app-cse-part"><td colSpan={27}>PART II. OTHER ITEMS NOT AVAILABLE AT PS-DBM BUT ARE REGULARLY PURCHASED FROM OTHER SOURCES</td></tr>
@@ -1060,7 +999,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
                   const code = item.barcode_value || item.qr_code_value || "";
                   const qrValue = item.qr_code_value || item.barcode_value || item.id;
                   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=96x96&format=svg&data=${encodeURIComponent(qrValue)}`;
-                  return <tr className={`app-cse-item ${selected.has(item.id) ? "is-selected" : ""}`} key={item.id} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}><td>{canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td><td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => saveItem(item, { barcode_value: event.target.value })} /></td><td><span className="app-cse-product">{isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}<button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={qrUrl} alt="" title={qrValue} loading="lazy" /></button><span><input disabled={!canEdit} defaultValue={item.name} onBlur={(event) => saveItem(item, { name: event.target.value })} /><small>{item.description || ""}</small></span></span></td><td><input disabled={!canEdit} defaultValue={item.unit} onBlur={(event) => saveItem(item, { unit: event.target.value })} /></td>{cells(months, price).map((value, cellIndex) => <td key={cellIndex}>{cellIndex % 5 < 3 ? <input disabled={!canEdit} type="number" min="0" value={value} onChange={(event) => saveMonthlyPlan(item.id, Math.floor(cellIndex / 5) * 3 + (cellIndex % 5), event.target.value)} /> : value}</td>)}<td>{quantity}</td><td><input disabled={!canEdit} type="number" min="0" step=".01" defaultValue={price} onBlur={(event) => saveItem(item, { acquisition_cost: Number(event.target.value) || 0 })} /></td><td>{peso(quantity * price)}</td></tr>;
+                  return <tr className={`app-cse-item ${selected.has(item.id) ? "is-selected" : ""}`} key={item.id} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}><td>{canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td><td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => saveItem(item, { barcode_value: event.target.value })} /></td><td><span className="app-cse-product">{isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}<button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={qrUrl} alt="" title={qrValue} loading="lazy" /></button><span><input disabled={!canEdit} defaultValue={item.name} onBlur={(event) => saveItem(item, { name: event.target.value })} /><small>{item.description || ""}</small></span></span></td><td><input disabled={!canEdit} defaultValue={item.unit} onBlur={(event) => saveItem(item, { unit: event.target.value })} /></td>{cells(months, price).map((value, cellIndex) => <td key={cellIndex}>{cellIndex % 5 < 3 ? <input disabled={!canEdit} type="number" min="0" defaultValue={value} onBlur={(event) => saveMonthlyPlan(item.id, Math.floor(cellIndex / 5) * 3 + (cellIndex % 5), event.target.value)} /> : value}</td>)}<td>{quantity}</td><td><input disabled={!canEdit} type="number" min="0" step=".01" defaultValue={price} onBlur={(event) => saveItem(item, { acquisition_cost: Number(event.target.value) || 0 })} /></td><td>{peso(quantity * price)}</td></tr>;
                 })
               ])}
               <tr className="app-cse-grand"><td colSpan={26}>TOTAL APP-CSE REQUIREMENT (Part I + Part II)</td><td>{peso(part1Total + part2Total)}</td></tr>
@@ -1135,11 +1074,11 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
       )}
       {(addOpen || editItem) && (
         <ItemDialog
+          key={editItem?.id || "new-item"}
           editing={editItem}
           cats={cats || []}
-          sups={sups || []}
           onClose={() => { setAddOpen(false); setEditItem(null); }}
-          onSaved={() => { setAddOpen(false); setEditItem(null); onItemsChanged(); }}
+          onSaved={(item: any) => { setAddOpen(false); setEditItem(null); onItemsChanged(item); }}
           onCategoryCreated={onCategoryCreated}
         />
       )}
@@ -1291,160 +1230,6 @@ function classificationLabel(item: any) {
 
 function money(value: number) {
   return new Intl.NumberFormat("en-PH", { style: "currency", currency: "PHP" }).format(value || 0);
-}
-
-const ITEM_MONTH_KEYS = ["jan_quantity", "feb_quantity", "mar_quantity", "apr_quantity", "may_quantity", "jun_quantity", "jul_quantity", "aug_quantity", "sep_quantity", "oct_quantity", "nov_quantity", "dec_quantity"] as const;
-const ITEM_MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-function ItemDialog({ editing, cats, onClose, onSaved, onCategoryCreated }: any) {
-  const [form, setForm] = useState<any>(() => ({
-    barcode_value: editing?.barcode_value ?? "",
-    name: editing?.name ?? "",
-    description: editing?.description ?? "",
-    category_id: editing?.category_id ?? "",
-    supplier_id: editing?.supplier_id ?? "",
-    item_type: editing?.item_type ?? "supply",
-    acquisition_cost: editing?.acquisition_cost ?? 0,
-    unit: editing?.unit ?? "pieces",
-    reorder_level: editing?.reorder_level ?? 10,
-    ...Object.fromEntries(ITEM_MONTH_KEYS.map((key) => [key, Number(editing?.[key] ?? 0)])),
-  }));
-  const [localCats, setLocalCats] = useState<any[]>(() => cats || []);
-  const [saving, setSaving] = useState(false);
-  const [addingCategory, setAddingCategory] = useState(false);
-  const [newCategory, setNewCategory] = useState("");
-  const [creatingCategory, setCreatingCategory] = useState(false);
-
-  const monthTotal = ITEM_MONTH_KEYS.reduce((sum, key) => sum + (Number(form[key]) || 0), 0);
-
-  async function createCategoryInline() {
-    const name = newCategory.trim();
-    if (!name) return;
-    setCreatingCategory(true);
-    try {
-      const created = await createCategory({ data: { name } });
-      if (!created) return;
-      setLocalCats((prev) => [created, ...prev.filter((c: any) => c.id !== created.id)]);
-      setForm((current: any) => ({ ...current, category_id: created.id }));
-      setNewCategory("");
-      setAddingCategory(false);
-      onCategoryCreated?.();
-      toast.success(`Category "${name}" created`);
-    } catch (e: any) {
-      toast.error(e?.message ?? "Failed to create category");
-    } finally {
-      setCreatingCategory(false);
-    }
-  }
-
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-    const payload = {
-      barcode_value: form.barcode_value?.trim() || null,
-      name: form.name,
-      description: form.description || null,
-      category_id: form.category_id || null,
-      supplier_id: form.supplier_id || null,
-      item_type: form.item_type || "supply",
-      acquisition_cost: Number(form.acquisition_cost) || 0,
-      unit: form.unit,
-      reorder_level: Number(form.reorder_level) || 10,
-      quantity: monthTotal,
-      ...Object.fromEntries(ITEM_MONTH_KEYS.map((key) => [key, Number(form[key]) || 0])),
-    };
-    try {
-      if (editing) {
-        await updateItem({ data: { ...payload, id: editing.id } });
-      } else {
-        await createItem({ data: payload });
-      }
-      setSaving(false);
-      toast.success(editing ? "Item updated" : "Item created");
-      onSaved();
-    } catch (e: any) {
-      setSaving(false);
-      toast.error(e?.message ?? "Save failed");
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 bg-foreground/30 backdrop-blur-sm grid place-items-center z-50 p-4">
-      <form onSubmit={save} className="bg-card border border-border rounded-lg w-full max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-        <h2 className="text-xl">{editing ? "Edit item" : "Add new item"}</h2>
-        <p className="text-xs text-muted-foreground">Fields match the APP-CSE 2026 template columns.</p>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Code">
-            <input className="dlg-input" placeholder="PS-DBM code (e.g. 1234-5678)" value={form.barcode_value} onChange={(e) => setForm({ ...form, barcode_value: e.target.value })} />
-          </Field>
-          <Field label="Unit of Measure">
-            <input className="dlg-input" list="item-unit-options" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} />
-            <datalist id="item-unit-options"><option value="pieces" /><option value="gallon" /><option value="bottle" /><option value="pack" /><option value="box" /><option value="ream" /><option value="roll" /><option value="set" /><option value="unit" /><option value="ticket" /></datalist>
-          </Field>
-          <Field label="Item &amp; Specifications" full>
-            <input className="dlg-input" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          </Field>
-          <Field label="Unit Price">
-            <input type="number" min={0} step="0.01" className="dlg-input" value={form.acquisition_cost} onChange={(e) => setForm({ ...form, acquisition_cost: e.target.value as any })} />
-          </Field>
-          <Field label="Category">
-            {addingCategory ? (
-              <div className="flex gap-2">
-                <input
-                  className="dlg-input"
-                  placeholder="New category name"
-                  value={newCategory}
-                  autoFocus
-                  onChange={(e) => setNewCategory(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); createCategoryInline(); } }}
-                />
-                <button type="button" disabled={creatingCategory || !newCategory.trim()} onClick={createCategoryInline} className="px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium whitespace-nowrap disabled:opacity-50">
-                  {creatingCategory ? "Creating…" : "Create"}
-                </button>
-                <button type="button" onClick={() => { setAddingCategory(false); setNewCategory(""); }} className="px-3 py-2 rounded-md border border-input text-sm whitespace-nowrap">Cancel</button>
-              </div>
-            ) : (
-              <div className="flex gap-2">
-                <select className="dlg-input" value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })}>
-                  <option value="">—</option>
-                  {localCats.map((c: any) => (<option key={c.id} value={c.id}>{c.name}</option>))}
-                </select>
-                <button type="button" onClick={() => setAddingCategory(true)} title="Create a new category" className="px-3 py-2 rounded-md border border-input text-sm whitespace-nowrap hover:bg-accent">+ New</button>
-              </div>
-            )}
-          </Field>
-          <div className="col-span-2">
-            <span className="text-xs uppercase tracking-wider font-medium text-muted-foreground">Monthly Quantity Requirement (Jan–Dec)</span>
-            <div className="mt-2 grid grid-cols-3 sm:grid-cols-6 gap-2">
-              {ITEM_MONTH_KEYS.map((key, index) => (
-                <label key={key} className="block">
-                  <span className="text-[10px] uppercase text-muted-foreground">{ITEM_MONTH_LABELS[index]}</span>
-                  <input type="number" min={0} className="dlg-input" value={form[key] ?? 0} onChange={(e) => setForm({ ...form, [key]: e.target.value as any })} />
-                </label>
-              ))}
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">Total quantity for the year: <strong>{monthTotal}</strong></p>
-          </div>
-        </div>
-        <div className="flex justify-end gap-2 pt-2">
-          <button type="button" onClick={onClose} className="px-4 py-2 rounded-md border border-input text-sm">Cancel</button>
-          <button disabled={saving} className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50">
-            {saving ? "Saving…" : "Save"}
-          </button>
-        </div>
-        <style>{`.dlg-input{width:100%;border:1px solid var(--color-input);background:var(--color-card);border-radius:6px;padding:.5rem .7rem;font-size:.875rem;outline:none}.dlg-input:focus{border-color:var(--color-ring);box-shadow:0 0 0 3px color-mix(in oklab,var(--color-ring) 25%,transparent)}`}</style>
-      </form>
-    </div>
-  );
-}
-
-function Field({ label, children, full }: any) {
-  return (
-    <label className={`block ${full ? "col-span-2" : ""}`}>
-      <span className="text-xs uppercase tracking-wider font-medium text-muted-foreground">{label}</span>
-      <div className="mt-1.5">{children}</div>
-    </label>
-  );
 }
 
 function ExportMenu({ rows, title }: { rows: any[]; title: string }) {
