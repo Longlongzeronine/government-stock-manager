@@ -29,10 +29,13 @@ import { FUND_CLUSTER_OPTIONS, FundClusterControl } from "@/components/common/Fu
 import { ItemDialog } from "@/components/inventory/ItemDialog";
 import { exportCSV } from "@/lib/export";
 import { useAuth } from "@/contexts/AuthContext";
+import { sbSelect } from "@/lib/supabase-rest";
 import {
   postIar,
   createIcsForm,
   createIcsItem,
+  listAccountabilityEvents,
+  listIcsForms,
   createFormsFlowBackup,
   createParForm,
   createParItem,
@@ -42,6 +45,7 @@ import {
   getNextRisNumberFromHistory,
   getRisFormDetails,
   getRisFormStatus,
+  listRisForms,
   getIarFormDetails,
   listIarForms,
   listIarLineRemarks,
@@ -58,7 +62,7 @@ export const Route = createFileRoute("/_app/forms")({
   component: FormsFlow,
 });
 
-type FlowTab = "iar" | "stock-card" | "ris" | "ics" | "rsmi" | "rpci";
+type FlowTab = "iar" | "stock-card" | "ris" | "ics" | "rsmi" | "rpci" | "rspi" | "regspi";
 type PropertyFlow = "supplies" | "semi-expendable" | "ppe";
 type ViewMode = "preview" | "split";
 type Orientation = "portrait" | "landscape";
@@ -137,6 +141,35 @@ type IarLineRemark = {
   created_at?: string | null;
 };
 
+type IcsFormRecord = {
+  id: string;
+  ics_no: string;
+  ris_id?: string | null;
+  office?: string | null;
+  custodian_name?: string | null;
+  lines?: Array<{ item_id: string; quantity: number | string; remarks?: string | null }>;
+};
+
+type RegspiAccountabilityEvent = {
+  id: string;
+  item_id: string;
+  event_type: string;
+  reference_no?: string | null;
+  reported_by?: string | null;
+  from_custodian?: string | null;
+  to_custodian?: string | null;
+  notes?: string | null;
+  created_at: string;
+  quantity?: number | string | null;
+  ris_form_id?: string | null;
+  item_name?: string | null;
+  item_description?: string | null;
+  stock_number?: string | null;
+  unit?: string | null;
+  acquisition_cost?: number | string | null;
+  inventory_classification?: Item["inventory_classification"];
+};
+
 type RisFormDetails = {
   id: string;
   ris_no?: string | null;
@@ -153,6 +186,7 @@ type RisFormDetails = {
   verification_status?: string | null;
   verification_published_at?: string | null;
   status?: string | null;
+  property_flow?: PropertyFlow | null;
   created_at?: string | null;
   fund_cluster?: string | null;
   lines?: Array<{
@@ -160,7 +194,7 @@ type RisFormDetails = {
     item_id: string;
     quantity: number | string;
     remarks?: string | null;
-    item?: Pick<Item, "id" | "name" | "description" | "unit" | "stock_number"> | null;
+    item?: Pick<Item, "id" | "name" | "description" | "unit" | "stock_number" | "acquisition_cost"> | null;
   }>;
 };
 
@@ -288,14 +322,16 @@ function FormsFlow() {
   const [propertyFlow, setPropertyFlow] = useState<PropertyFlow>("supplies");
   const [tab, setTab] = useState<FlowTab>("iar");
   const [viewMode, setViewMode] = useState<ViewMode>("split");
-  const [orientation, setOrientation] = useState<Orientation>(
-    propertyFlow === "supplies" ? "landscape" : "portrait",
-  );
+  const [orientation, setOrientation] = useState<Orientation>("portrait");
+  useEffect(() => {
+    if (tab === "regspi") setOrientation("landscape");
+  }, [tab]);
   const [zoom, setZoom] = useState(1);
   const [selectedItemId, setSelectedItemId] = useState("");
   const [loadingIarReceiptId, setLoadingIarReceiptId] = useState("");
   const [loadingRisIssueId, setLoadingRisIssueId] = useState("");
   const [loadedRisId, setLoadedRisId] = useState("");
+  const [risDropdownOpen, setRisDropdownOpen] = useState(false);
   const formPreviewRef = useRef<HTMLDivElement | null>(null);
   const [reportMonth, setReportMonth] = useState(today.slice(0, 7));
   const [rpciStartDate, setRpciStartDate] = useState(`${today.slice(0, 4)}-01-01`);
@@ -367,7 +403,7 @@ function FormsFlow() {
   const [risValidationAttempted, setRisValidationAttempted] = useState(false);
   const [savedRisId, setSavedRisId] = useState<string | null>(null);
   const [ics, setIcs] = useState<IcsState>({
-    icsNo: makeFormNumber("ICS", today),
+    icsNo: "",
     risNo: "",
     office: FORM_DEFAULTS.issuedBy,
     custodianName: FORM_DEFAULTS.custodian,
@@ -377,6 +413,15 @@ function FormsFlow() {
     receivedByDesignation: FORM_DEFAULTS.receivedDesignation,
     receiveDate: today,
   });
+  useEffect(() => {
+    let cancelled = false;
+    void reserveNextIcsNumber(today).then((nextIcsNo) => {
+      if (!cancelled && nextIcsNo) {
+        setIcs((current) => current.icsNo ? current : { ...current, icsNo: nextIcsNo });
+      }
+    });
+    return () => { cancelled = true; };
+  }, [today]);
   const [icsLines, setIcsLines] = useState<Line[]>(Array.from({ length: 3 }, (_, i) => {
     const initialItem = i === 0 ? selectedItemId : "";
     return {
@@ -413,7 +458,7 @@ function FormsFlow() {
         if (Array.isArray(draft.iarLines)) setIarLines(draft.iarLines);
         if (draft.ris) setRis(draft.ris);
         if (Array.isArray(draft.risLines)) setRisLines(draft.risLines);
-        if (draft.ics) setIcs(draft.ics);
+        if (draft.ics) setIcs({ ...draft.ics, icsNo: "" });
         if (Array.isArray(draft.icsLines)) setIcsLines(draft.icsLines);
         if (draft.loadedRisId) setLoadedRisId(draft.loadedRisId);
         if (draft.savedRisId) setSavedRisId(draft.savedRisId);
@@ -435,10 +480,23 @@ function FormsFlow() {
     }
     try {
       sessionStorage.setItem("forms-flow-draft-v1", JSON.stringify({
-        iar, iarLines, ris, risLines, ics, icsLines, propertyFlow, tab, selectedItemId, loadedRisId, savedRisId,
+        iar, iarLines, ris, risLines, ics: { ...ics, icsNo: "" }, icsLines, propertyFlow, tab, selectedItemId, loadedRisId, savedRisId,
       }));
     } catch { /* Browser storage may be unavailable. */ }
   }, [iar, iarLines, ris, risLines, ics, icsLines, propertyFlow, tab, selectedItemId, loadedRisId, savedRisId]);
+
+  const { data: semiExRisForms = [], isFetching: isFetchingSemiExRis, refetch: refetchSemiExRis } = useQuery({
+    queryKey: ["ris-forms", "semi-expendable"],
+    queryFn: () => listRisForms({ data: { property_flow: "semi-expendable" } }),
+    enabled: tab === "ics" && propertyFlow === "semi-expendable",
+    refetchInterval: tab === "ics" && propertyFlow === "semi-expendable" ? 15_000 : false,
+  });
+  const risOptions = useMemo(
+    () => semiExRisForms
+      .filter((form: any) => ["pending", "approved", "issued", "verified"].includes(String(form.status || "").toLowerCase()))
+      .map((form: any) => ({ id: String(form.id), risNo: String(form.ris_no || "") })),
+    [semiExRisForms],
+  );
 
   // Refresh after form saves; avoid polling during editing so picker input and
   // form state stay stable while user types.
@@ -756,9 +814,83 @@ function FormsFlow() {
       setLoadingRisIssueId("");
     }
   }
+
+  async function handleRisSelect(risNo: string, risId: string) {
+    try {
+      // Fetch full RIS form details including line items
+      const risForm = await getRisFormDetails({ data: { id: risId } });
+      if (!risForm) {
+        setRisDropdownOpen(false);
+        return toast.error("Failed to load RIS form details.");
+      }
+
+      // Populate ICS header fields from RIS
+      setIcs((current) => ({
+        ...current,
+        risNo: risForm.ris_no || risNo,
+        office: risForm.office || "",
+        custodianName: risForm.received_by || risForm.requested_by || "",
+        receivedFrom: risForm.issued_by || "",
+        receiveDate: risForm.issued_date || today,
+      }));
+
+      // Convert RIS line items to ICS lines
+      const risLines = Array.isArray(risForm.lines) ? risForm.lines : [];
+      const icsLines: Line[] = risLines.map((line: any) => ({
+        id: createId(),
+        item_id: line.item_id || "",
+        quantity: String(line.quantity || ""),
+        unitCost: String(line.item?.acquisition_cost || ""),
+        remarks: line.remarks || "",
+        productDescription: line.item?.description || line.item?.name || "",
+      }));
+
+      setIcsLines(icsLines.length ? icsLines : [blankLine()]);
+      setLoadedRisId(risId);
+      setSavedRisId(risId);
+      setRisDropdownOpen(false);
+      toast.success(`RIS ${risNo} loaded into ICS.`);
+    } catch (error) {
+      setRisDropdownOpen(false);
+      toast.error(`Failed to load RIS: ${errorMessage(error)}`);
+    }
+  }
   const rsmiRows = useMemo(
     () => getRsmiRows(transactions, reportMonth, activeFundCluster, iarForms),
     [transactions, reportMonth, activeFundCluster, iarForms],
+  );
+  const { data: regspiIcsForms = [] } = useQuery({
+    queryKey: ["ics-forms", "regspi"],
+    queryFn: () => listIcsForms() as Promise<IcsFormRecord[]>,
+    enabled: tab === "regspi",
+  });
+  const { data: regspiEvents = [] } = useQuery({
+    queryKey: ["accountability-events", "regspi"],
+    queryFn: () => listAccountabilityEvents() as Promise<RegspiAccountabilityEvent[]>,
+    enabled: tab === "regspi",
+  });
+  const semiExRows = useMemo(
+    () => [
+      ...rsmiRows,
+      ...getRegspiReissueRows(transactions, reportMonth, activeFundCluster, iarForms),
+      ...getRegspiAccountabilityRows(regspiEvents, reportMonth),
+    ]
+      .filter((row) => row.inventoryClassification === "semi_expendable_property")
+      .map((row) => {
+        const linkedIcs = regspiIcsForms.find((form) =>
+          form.ris_id === row.risFormId &&
+          form.lines?.some((line) => line.item_id === row.itemId),
+        );
+        const linkedIcsLine = linkedIcs?.lines?.find((line) => line.item_id === row.itemId);
+        return {
+          ...row,
+          icsNo: row.icsNo || linkedIcs?.ics_no || row.risNo,
+          usefulLife: linkedIcsLine?.remarks?.trim() || "",
+          office: linkedIcs?.office || row.office,
+          officer: linkedIcs?.custodian_name || row.officer || "",
+        };
+      }),
+    [rsmiRows, transactions, reportMonth, activeFundCluster, iarForms, regspiIcsForms, regspiEvents],
   );
   const rpciRows = useMemo(
     () =>
@@ -972,6 +1104,7 @@ function FormsFlow() {
         verification_code: ris.verificationCode,
         document_version: 1,
         verification_status: "issued",
+        property_flow: propertyFlow,
         status: "pending",
         verification_published_at: new Date().toISOString(),
         created_by: user?.id,
@@ -1065,6 +1198,7 @@ function FormsFlow() {
       rememberPersonnel("ris_issued_by", ris.issuedBy),
       rememberPersonnel("ris_received_by", ris.receivedBy),
     ]);
+    await queryClient.invalidateQueries({ queryKey: ["ris-forms", "semi-expendable"] });
     const nextRisNo =
       (await reserveNextRisNumber(today)) || incrementRisNumber(ris.risNo, today);
     const nextVerification = createVerificationIdentity();
@@ -1089,7 +1223,7 @@ function FormsFlow() {
     });
     setRisLines([blankLine()]);
     setRisValidationAttempted(false);
-    setTab("ris");
+    setTab("ics");
   }
 
   async function saveIcs() {
@@ -1104,6 +1238,7 @@ function FormsFlow() {
       }
     }
     setSaving(true);
+    const savedIcsNo = ics.icsNo;
     try {
       const icsRecord = await createIcsForm({ data: {
         ics_no: ics.icsNo,
@@ -1125,8 +1260,8 @@ function FormsFlow() {
     } catch (error) {
       setSaving(false);
       if (isUniqueViolation(error as { code?: string; message?: string })) {
-        const nextIcsNo = makeFormNumber("ICS", today);
-        setIcs({ ...ics, icsNo: nextIcsNo });
+        const nextIcsNo = await reserveNextIcsNumber(today) || incrementIcsNumber(savedIcsNo, today);
+        setIcs((current) => ({ ...current, icsNo: nextIcsNo }));
         return toast.error(
           `ICS No. ${ics.icsNo} already exists. I prepared ${nextIcsNo}; try saving again.`,
         );
@@ -1134,7 +1269,9 @@ function FormsFlow() {
       return toast.error(errorMessage(error));
     }
     setSaving(false);
-    toast.success(`ICS ${ics.icsNo} saved.`);
+    const nextIcsNo = await reserveNextIcsNumber(today) || incrementIcsNumber(savedIcsNo, today);
+    setIcs((current) => ({ ...current, icsNo: nextIcsNo }));
+    toast.success(`ICS ${savedIcsNo} saved. Next ICS No.: ${nextIcsNo}`);
     setIcsValidationAttempted(false);
     await refreshFlow();
   }
@@ -1192,8 +1329,9 @@ function FormsFlow() {
       setRisLines([blankLine()]);
       setRisValidationAttempted(false);
     } else if (tab === "ics") {
+      const nextIcsNo = await reserveNextIcsNumber(today) || incrementIcsNumber(ics.icsNo, today);
       setIcs({
-        icsNo: makeFormNumber("ICS", today),
+        icsNo: nextIcsNo,
         risNo: "",
         office: FORM_DEFAULTS.issuedBy,
         custodianName: FORM_DEFAULTS.custodian,
@@ -1311,7 +1449,9 @@ function FormsFlow() {
                 disabled={
                   tab === "stock-card" ||
                   tab === "rsmi" ||
-                  tab === "rpci"
+                  tab === "rpci" ||
+                  tab === "rspi" ||
+                  tab === "regspi"
                 }
                 className="flow-header-btn h-10"
               >
@@ -1425,6 +1565,12 @@ function FormsFlow() {
                   saveIcs={saveIcs}
                   today={today}
                   propertyFlow={propertyFlow}
+                  risDropdownOpen={risDropdownOpen}
+                  setRisDropdownOpen={setRisDropdownOpen}
+                  risOptions={risOptions}
+                  handleRisSelect={handleRisSelect}
+                  isFetchingSemiExRis={isFetchingSemiExRis}
+                  refetchSemiExRis={refetchSemiExRis}
                 />
                 <div ref={formPreviewRef} className="scroll-mt-4">
                   <PaperPreview
@@ -1454,6 +1600,7 @@ function FormsFlow() {
                     reportMonth={reportMonth}
                     setReportMonth={setReportMonth}
                     rsmiRows={rsmiRows}
+                    semiExRows={semiExRows}
                     rpciStartDate={rpciStartDate}
                     setRpciStartDate={setRpciStartDate}
                     rpciEndDate={rpciEndDate}
@@ -1474,6 +1621,7 @@ function FormsFlow() {
                     icsFundCluster={icsFundCluster}
                     setIcsFundCluster={setFormsFundCluster}
                     today={today}
+                    propertyFlow={propertyFlow}
                   />
                 </div>
               </div>
@@ -1535,6 +1683,12 @@ function FormsFlow() {
                     saveIcs={saveIcs}
                     today={today}
                     propertyFlow={propertyFlow}
+                    risDropdownOpen={risDropdownOpen}
+                    setRisDropdownOpen={setRisDropdownOpen}
+                    risOptions={risOptions}
+                    handleRisSelect={handleRisSelect}
+                    isFetchingSemiExRis={isFetchingSemiExRis}
+                    refetchSemiExRis={refetchSemiExRis}
                   />
                 )}
 
@@ -1566,6 +1720,7 @@ function FormsFlow() {
                     reportMonth={reportMonth}
                     setReportMonth={setReportMonth}
                     rsmiRows={rsmiRows}
+                    semiExRows={semiExRows}
                     rpciStartDate={rpciStartDate}
                     setRpciStartDate={setRpciStartDate}
                     rpciEndDate={rpciEndDate}
@@ -1586,6 +1741,7 @@ function FormsFlow() {
                     icsFundCluster={icsFundCluster}
                     setIcsFundCluster={setFormsFundCluster}
                     today={today}
+                    propertyFlow={propertyFlow}
                   />
                 </div>
               </div>
@@ -1717,8 +1873,8 @@ function FoundationStepper({
         { label: "SPC", detail: "Semi-expendable property card", tab: "stock-card" as const, icon: FileSpreadsheet },
         { label: "RIS", detail: "Property issuance request", tab: "ris" as const, icon: Send },
         { label: "ICS", detail: "Inventory Custodian Slip", tab: "ics" as const, icon: FileCheck2 },
-        { label: "RSPI", detail: "Registry of Semi-Expendable Property Issued", icon: FileSpreadsheet },
-        { label: "RegSPI", detail: "Registry of Semi-Expendable Property", icon: FileSpreadsheet },
+        { label: "RSPI", detail: "Registry of Semi-Expendable Property Issued", tab: "rspi" as const, icon: FileSpreadsheet },
+        { label: "RegSPI", detail: "Registry of Semi-Expendable Property", tab: "regspi" as const, icon: FileSpreadsheet },
       ]
     : [
         { label: "IAR", detail: "Inspection and acceptance", tab: "iar" as const, icon: PackageCheck },
@@ -1878,6 +2034,12 @@ function EntryPanel({
   saveIcs,
   today,
   propertyFlow,
+  risDropdownOpen,
+  setRisDropdownOpen,
+  risOptions,
+  handleRisSelect,
+  isFetchingSemiExRis,
+  refetchSemiExRis,
 }: {
   tab: FlowTab;
   inventoryItems: Item[];
@@ -1892,6 +2054,12 @@ function EntryPanel({
   setIarLines: (lines: Line[]) => void;
   ris: RisState;
   setRis: (state: RisState) => void;
+  risDropdownOpen: boolean;
+  setRisDropdownOpen: (open: boolean) => void;
+  risOptions: Array<{ id: string; risNo: string }>;
+  handleRisSelect: (risNo: string, risId: string) => void;
+  isFetchingSemiExRis: boolean;
+  refetchSemiExRis: () => Promise<unknown>;
   risLines: Line[];
   setRisLines: (lines: Line[]) => void;
   ics: IcsState;
@@ -2159,20 +2327,50 @@ function EntryPanel({
               <FlowField label="ICS No.">
                 <input
                   className={`flow-input ${icsValidationAttempted && !ics.icsNo.trim() ? "border-red-500 ring-1 ring-red-500 focus:border-red-500 focus:ring-red-500" : ""}`}
-                  placeholder="e.g. ICS-2026-11-05-0000001"
+                  placeholder="Reserving next ICS number…"
                   value={ics.icsNo}
                   required
                   aria-invalid={icsValidationAttempted && !ics.icsNo.trim()}
                   onChange={(e) => setIcs({ ...ics, icsNo: e.target.value })}
                 />
               </FlowField>
-              <FlowField label="RIS No.">
-                <input
-                  className="flow-input"
-                  placeholder="e.g. RIS-2026-11-05-0000083"
-                  value={ics.risNo}
-                  onChange={(e) => setIcs({ ...ics, risNo: e.target.value })}
-                />
+              <FlowField label="RIS No. · Semi-Expendable RIS">
+                <div className="relative">
+                  <input
+                    className="flow-input"
+                    value={ics.risNo}
+                    onFocus={() => setRisDropdownOpen(true)}
+                    onBlur={() => setTimeout(() => setRisDropdownOpen(false), 200)}
+                    readOnly
+                  />
+                  {risDropdownOpen && (
+                    <div className="absolute z-10 mt-1 w-full border border-border bg-card rounded-md shadow-lg max-h-60 overflow-y-auto">
+                      <button
+                        type="button"
+                        className="w-full px-3 py-2 text-left text-xs text-muted-foreground border-b border-border hover:bg-accent"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => void refetchSemiExRis()}
+                      >
+                        {isFetchingSemiExRis ? "Refreshing RIS list…" : "Refresh semi-expendable RIS list"}
+                      </button>
+                      {risOptions.map((option) => (
+                        <div
+                          key={option.id}
+                          className="px-3 py-2 text-sm cursor-pointer hover:bg-accent hover:text-accent-foreground border-b border-border/50 last:border-b-0"
+                          onClick={() => handleRisSelect(option.risNo, option.id)}
+                        >
+                          <div className="font-medium text-foreground">{option.risNo}</div>
+                          <div className="text-xs text-muted-foreground">Semi-expendable property</div>
+                        </div>
+                      ))}
+                      {risOptions.length === 0 && (
+                        <div className="p-2 text-xs text-muted-foreground">
+                          {isFetchingSemiExRis ? "Loading semi-expendable RIS forms…" : "No semi-expendable RIS forms available."}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </FlowField>
               <FlowField label="Office">
                 <input
@@ -2246,15 +2444,17 @@ function EntryPanel({
                 </tr>
               </thead>
               <tbody>
-                {icsLines.map((line, index) => (
+                {icsLines.map((line, index) => {
+                  const icsItem = inventoryItems.find((i) => i.id === line.item_id);
+                  return (
                   <tr key={line.id} className="border-b border-border/50">
-                    <td className="py-2 px-2">Item placeholder</td>
+                    <td className="py-2 px-2">{icsItem?.name || "Item placeholder"}</td>
                     <td className="py-2 px-2 text-right">{line.quantity}</td>
                     <td className="py-2 px-2 text-right">{line.unitCost}</td>
                     <td className="py-2 px-2 text-right font-medium">{(Number(line.quantity||0)*Number(line.unitCost||0)).toFixed(2)}</td>
                     <td className="py-2 px-2">{line.remarks}</td>
                   </tr>
-                ))}
+                )})}
               </tbody>
             </table>
             {/* add-row-skip */}
@@ -2263,12 +2463,9 @@ function EntryPanel({
             <button
               type="button"
               disabled={saving}
-              onClick={() => {
-                setIcs({
-                  ...ics,
-                  icsNo: makeFormNumber("ICS", today),
-                  risNo: "",
-                });
+              onClick={async () => {
+                const nextIcsNo = await reserveNextIcsNumber(today) || incrementIcsNumber(ics.icsNo, today);
+                setIcs((current) => ({ ...current, icsNo: nextIcsNo, risNo: "" }));
                 setIcsLines(Array.from({ length: 3 }, blankLine));
                 setIcsValidationAttempted(false);
               }}
@@ -2311,6 +2508,30 @@ function EntryPanel({
         }
       />
       {/* RSMI paper is rendered once by the main preview shell below. */}
+    </section>
+  );
+
+  if (tab === "regspi") return (
+    <section className="rounded-lg border border-border bg-card p-4">
+      <FlowOptionsRow
+        title="RegSPI Options"
+        subtitle="Semi-expendable property issues for selected month and fund cluster."
+        options={
+          <div className="flow-options-form-inner">
+            <FlowField label="Report Month">
+              <input
+                className="flow-input"
+                type="month"
+                value={reportMonth}
+                onChange={(event) => setReportMonth(event.target.value)}
+              />
+            </FlowField>
+            <FlowField label="Fund Cluster">
+              <FundClusterControl value={rsmiFundCluster} onChange={setRsmiFundCluster} options={rsmiFundClusterOptions} className="flow-input" />
+            </FlowField>
+          </div>
+        }
+      />
     </section>
   );
 
@@ -2379,6 +2600,7 @@ function PaperPreview({
   reportMonth,
   setReportMonth,
   rsmiRows,
+  semiExRows,
   rsmiFundCluster,
   setRsmiFundCluster,
   rsmiFundClusterOptions,
@@ -2403,6 +2625,7 @@ function PaperPreview({
   icsFundCluster,
   setIcsFundCluster,
   today,
+  propertyFlow,
 }: {
   tab: FlowTab;
   orientation: Orientation;
@@ -2426,6 +2649,7 @@ function PaperPreview({
   reportMonth: string;
   setReportMonth: (month: string) => void;
   rsmiRows: RsmiRow[];
+  semiExRows: RsmiRow[];
   rsmiFundCluster: string;
   setRsmiFundCluster: (value: string) => void;
   rsmiFundClusterOptions?: readonly string[];
@@ -2450,6 +2674,7 @@ function PaperPreview({
   icsFundCluster: string;
   setIcsFundCluster: (value: string) => void;
   today: string;
+  propertyFlow: PropertyFlow;
 }) {
   return (
     <section className="flow-preview-shell">
@@ -2473,6 +2698,7 @@ function PaperPreview({
           {tab === "stock-card" && (
             <StockCardPaper
               orientation={orientation}
+              isSemiExpendable={propertyFlow === "semi-expendable"}
               items={stockCardItems}
               item={selectedItem ?? stockCardItems[0]}
               fundCluster={stockCardFundCluster}
@@ -2536,6 +2762,24 @@ function PaperPreview({
               rows={rpciRows}
               entries={rpciEntries}
               onEntries={setRpciEntries}
+              editable={editable}
+            />
+          )}
+          {tab === "rspi" && (
+            <RspiPaper
+              orientation={orientation}
+              fundCluster={rsmiFundCluster}
+              onFundCluster={setRsmiFundCluster}
+              rows={semiExRows}
+              editable={editable}
+            />
+          )}
+          {tab === "regspi" && (
+            <RegSPiPaper
+              orientation={orientation}
+              fundCluster={rsmiFundCluster}
+              onFundCluster={setRsmiFundCluster}
+              rows={semiExRows}
               editable={editable}
             />
           )}
@@ -2945,6 +3189,7 @@ function StockCardPaper({
   onSelectedItemId,
   rows,
   editable,
+  isSemiExpendable,
 }: {
   orientation: Orientation;
   items: Item[];
@@ -2955,18 +3200,16 @@ function StockCardPaper({
   onSelectedItemId: (id: string) => void;
   rows: StockRow[];
   editable: boolean;
+  isSemiExpendable: boolean;
 }) {
-  const title = item?.inventory_classification === "semi_expendable_property"
-    ? "Semi-Expendable Property Card"
-    : "Stock Card";
-  const isSemiExpendable = item?.inventory_classification === "semi_expendable_property";
+  const title = isSemiExpendable ? "Semi-Expendable Property Card" : "Stock Card";
   return (
     <div className={`flow-paper ${orientation} stock-paper`}>
       <div className="paper-title-dark">{title}</div>
       <table className="paper-grid official-meta-grid stock-meta-grid">
         <tbody>
           <tr>
-            <td colSpan={2}>
+            <td colSpan={6}>
               <strong>Entity Name :</strong>{" "}
               <span className="strong">
                 PROVINCIAL TRAINING CENTER - DAVAO DEL NORTE
@@ -2977,56 +3220,87 @@ function StockCardPaper({
               <FundClusterControl value={fundCluster} onChange={onFundCluster} editable={editable} className="paper-inline-control strong" />
             </td>
           </tr>
-          <tr>
-            <td>
-              <strong>{item?.inventory_classification === "semi_expendable_property" ? "Semi-Expendable Property" : "Item"} :</strong>{" "}
-              {editable ? (
-                <ItemLookup
-                  items={items}
-                  className="paper-inline-control strong"
-                  displayNameOnly
-                  searchOnly
-                  value={selectedItemId}
-                  onChange={onSelectedItemId}
-                  placeholder={
-                    items.length > 0
-                      ? "Type any word from the item name or description"
-                      : "No stock card items available"
-                  }
-                />
-              ) : (
-                <span className="strong">{item?.name || ""}</span>
-              )}
-            </td>
-            <td>
-              <strong>Stock No. :</strong>{" "}
-              <span className="strong">{item?.stock_number || ""}</span>
-            </td>
-            {isSemiExpendable && (
-              <td>
-                <strong>Semi-Expendable Property Number :</strong>{" "}
-                <span className="strong">{item?.stock_number || ""}</span>
-              </td>
-            )}
-          </tr>
-          <tr>
-            <td colSpan={2}>
-              <strong>Description :</strong>{" "}
-              <span className="strong">{itemDescription(item)}</span>
-            </td>
-            <td>
-              <strong>Unit of Measurement :</strong>{" "}
-              <span className="strong">{item?.unit || ""}</span>
-            </td>
-            {isSemiExpendable && (
-              <td>
-                <strong>Available Balance :</strong>{" "}
-                <span className="strong">
-                  {item ? `${rows.at(-1)?.balance ?? Number(item.quantity) ?? 0} ${item.unit || ""}`.trim() : ""}
-                </span>
-              </td>
-            )}
-          </tr>
+          {isSemiExpendable ? (
+            <>
+              <tr>
+                <td colSpan={5}>
+                  <strong>Semi-Expendable Property:</strong>{" "}
+                  {editable ? (
+                    <ItemLookup
+                      items={items}
+                      className="paper-inline-control strong"
+                      displayNameOnly
+                      searchOnly
+                      value={selectedItemId}
+                      onChange={onSelectedItemId}
+                      placeholder={
+                        items.length > 0
+                          ? "Type any word from the item name or description"
+                          : "No stock card items available"
+                      }
+                    />
+                  ) : (
+                    <span className="strong">{item?.name || ""}</span>
+                  )}
+                </td>
+                <td colSpan={2}>
+                  <strong>Semi-Expendable Property Number :</strong>{" "}
+                  <span className="strong">{item?.stock_number || ""}</span>
+                </td>
+              </tr>
+              <tr>
+                <td colSpan={7}>
+                  <strong>Description :</strong>{" "}
+                  <span className="strong">{itemDescription(item)}</span>
+                </td>
+              </tr>
+            </>
+          ) : (
+            <>
+              <tr>
+                <td colSpan={5}>
+                  <strong>Item :</strong>{" "}
+                  {editable ? (
+                    <ItemLookup
+                      items={items}
+                      className="paper-inline-control strong"
+                      displayNameOnly
+                      searchOnly
+                      value={selectedItemId}
+                      onChange={onSelectedItemId}
+                      placeholder={
+                        items.length > 0
+                          ? "Type any word from the item name or description"
+                          : "No stock card items available"
+                      }
+                    />
+                  ) : (
+                    <span className="strong">{item?.name || ""}</span>
+                  )}
+                </td>
+                <td>
+                  <strong>Stock No. :</strong>{" "}
+                  <span className="strong">{item?.stock_number || ""}</span>
+                </td>
+                <td>
+                  <strong>Available Balance :</strong>{" "}
+                  <span className="strong">
+                    {item ? `${item.quantity ?? 0} ${item.unit || ""}`.trim() : ""}
+                  </span>
+                </td>
+              </tr>
+              <tr>
+                <td colSpan={5}>
+                  <strong>Description :</strong>{" "}
+                  <span className="strong">{itemDescription(item)}</span>
+                </td>
+                <td colSpan={2}>
+                  <strong>Unit of Measurement :</strong>{" "}
+                  <span className="strong">{item?.unit || ""}</span>
+                </td>
+              </tr>
+            </>
+          )}
         </tbody>
       </table>
       <table className={`paper-grid ${isSemiExpendable ? "semi-expendable-card" : "stock-card"}`}>
@@ -3034,18 +3308,50 @@ function StockCardPaper({
           <tr>
             <th rowSpan={2}>Date</th>
             <th rowSpan={2}>Reference</th>
-            <th colSpan={3}>Receipt</th>
-            <th colSpan={3}>Issue/Transfer/Disposal</th>
-            <th rowSpan={2} colSpan={2}>Balance</th>
-            <th rowSpan={2}>Remarks</th>
+            {isSemiExpendable ? (
+              <>
+                <th colSpan={3}>Receipt</th>
+                <th colSpan={3}>Issue/Transfer/Disposal</th>
+              </>
+            ) : (
+              <>
+                <th colSpan={2}>Receipt</th>
+                <th colSpan={2}>Issue</th>
+              </>
+            )}
+            {isSemiExpendable ? (
+              <>
+                <th>Balance</th>
+                <th rowSpan={2}>Amount</th>
+                <th rowSpan={2}>Remarks</th>
+              </>
+            ) : (
+              <>
+                <th>Balance</th>
+                <th rowSpan={2}>No. of Days to Consume</th>
+              </>
+            )}
           </tr>
           <tr>
-            <th>Qty.</th>
-            <th>Unit Cost</th>
-            <th>Total Cost</th>
-            <th>Item No.</th>
-            <th>Qty.</th>
-            <th>Office/Officer</th>
+            {isSemiExpendable ? (
+              <>
+                <th>Qty.</th>
+                <th>Unit Cost</th>
+                <th>Total Cost</th>
+                <th>Item No.</th>
+                <th>Qty.</th>
+                <th>Office/Officer</th>
+                <th>Qty.</th>
+              </>
+            ) : (
+              <>
+                <th>Qty.</th>
+                <th>Quantity</th>
+                <th>Qty.</th>
+                <th>Office</th>
+                <th>Qty.</th>
+              </>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -3057,27 +3363,44 @@ function StockCardPaper({
               <td>
                 {extractReference(row?.remarks)}
               </td>
-              <td className="right">
-                {row?.type === "IN" ? row.quantity : ""}
-              </td>
-              <td className="right">
-                {row?.type === "IN" && row?.item?.acquisition_cost ? Number(row.item.acquisition_cost).toFixed(2) : ""}
-              </td>
-              <td className="right">
-                {row?.type === "IN" && row?.item?.acquisition_cost && Number(row.quantity) ? (Number(row.quantity) * Number(row.item.acquisition_cost)).toFixed(2) : ""}
-              </td>
-              <td>
-                {row?.type === "OUT" && row.item?.stock_number ? row.item.stock_number : ""}
-              </td>
-              <td className="right">
-                {row?.type === "OUT" ? row.quantity : ""}
-              </td>
-              <td>{extractOffice(row?.remarks)}</td>
-              <td className="right">{row?.balance ?? ""}</td>
-              <td className="right">
-                {row?.type === "OUT" && item ? ((Number(row.quantity) * Number(item.acquisition_cost || 0)) || "").toString() : ""}
-              </td>
-              <td>{row?.remarks || ""}</td>
+              {isSemiExpendable ? (
+                <>
+                  <td className="right">
+                    {row?.type === "IN" ? row.quantity : ""}
+                  </td>
+                  <td className="right">
+                    {row?.type === "IN" && row?.item?.acquisition_cost ? Number(row.item.acquisition_cost).toFixed(2) : ""}
+                  </td>
+                  <td className="right">
+                    {row?.type === "IN" && row?.item?.acquisition_cost && Number(row.quantity) ? (Number(row.quantity) * Number(row.item.acquisition_cost)).toFixed(2) : ""}
+                  </td>
+                  <td>
+                    {row?.type === "OUT" && row.item?.stock_number ? row.item.stock_number : ""}
+                  </td>
+                  <td className="right">
+                    {row?.type === "OUT" ? row.quantity : ""}
+                  </td>
+                  <td>{extractOffice(row?.remarks)}</td>
+                  <td className="right">{row?.balance ?? ""}</td>
+                  <td className="right">
+                    {row?.type === "OUT" && item ? ((Number(row.quantity) * Number(item.acquisition_cost || 0)) || "").toString() : ""}
+                  </td>
+                  <td>{row?.remarks || ""}</td>
+                </>
+              ) : (
+                <>
+                  <td className="right">
+                    {row?.type === "IN" ? row.quantity : ""}
+                  </td>
+                  <td></td>
+                  <td className="right">
+                    {row?.type === "OUT" ? row.quantity : ""}
+                  </td>
+                  <td>{extractOffice(row?.remarks)}</td>
+                  <td className="right">{row?.balance ?? ""}</td>
+                  <td></td>
+                </>
+              )}
             </tr>
           ))}
         </tbody>
@@ -3183,6 +3506,7 @@ function IcsPaper({
             <th className="ics-desc-col">Description</th>
             <th className="ics-itemno-col">Item No.</th>
             <th className="ics-life-col">Estimated Useful Life</th>
+            {editable && <th rowSpan={2} className="ics-action-col print-hidden" aria-label="Row actions" />}
           </tr>
           <tr>
             <th></th>
@@ -3197,9 +3521,7 @@ function IcsPaper({
         <tbody>
           {displayLines.map((line, index) => {
             const sourceLine = editable ? (line as Line | null) : null;
-            const previewLine = editable
-              ? getPreviewLine(items, sourceLine)
-              : (line as PreviewLine | null);
+            const previewLine = getPreviewLine(items, line);
             const item = previewLine?.item;
             const quantity = Number(previewLine?.quantity || 0);
             const unitCost = Number(previewLine?.unitCost || item?.acquisition_cost || 0);
@@ -3459,6 +3781,7 @@ function RisPaper({
             <th colSpan={4}>Requisition</th>
             <th colSpan={2}>Stock Available?</th>
             <th colSpan={2}>Issue</th>
+            {editable && <th rowSpan={2} className="action-col print-hidden" aria-label="Row actions" />}
           </tr>
           <tr>
             <th className="stock-no-col">Stock No.</th>
@@ -3469,7 +3792,6 @@ function RisPaper({
             <th>No</th>
             <th className="qty-col">Qty.</th>
             <th>Remarks</th>
-            {editable && <th className="action-col print-hidden"></th>}
           </tr>
         </thead>
         <tbody>
@@ -3932,7 +4254,7 @@ function RsmiPaper({
         <tbody>
           {padRows(rows, 12).map((row, index) => (
             <tr key={row?.id || index}>
-              <td>{row?.risNo || ""}</td>
+              <td>{row?.icsNo || row?.risNo || ""}</td>
               <td>{row?.responsibilityCenterCode || ""}</td>
               <td>{row?.stockNo || ""}</td>
               <td>{row?.item || ""}</td>
@@ -3984,6 +4306,268 @@ function RsmiPaper({
           `${FORM_DEFAULTS.accountingStaff}\n${FORM_DEFAULTS.accountingDesignation}`,
         ]}
       />
+    </div>
+  );
+}
+
+function RspiPaper({
+  orientation,
+  fundCluster,
+  onFundCluster,
+  rows,
+  editable,
+}: {
+  orientation: Orientation;
+  fundCluster: string;
+  onFundCluster: (value: string) => void;
+  rows: RsmiRow[];
+  editable: boolean;
+}) {
+  const [serialNo, setSerialNo] = useState("");
+  const [dateIssued, setDateIssued] = useState("");
+  return (
+    <div className={`flow-paper ${orientation} rspi-paper official-paper`}>
+      <div className="paper-title-dark">REPORT OF SEMI-EXPENDABLE PROPERTY ISSUED</div>
+      <table className="paper-grid official-meta-grid">
+        <tbody>
+          <tr>
+            <td colSpan={6}>
+              <strong>Entity Name :</strong>{" "}
+              <span className="strong">
+                PROVINCIAL TRAINING CENTER - DAVAO DEL NORTE
+              </span>
+            </td>
+            <td colSpan={2}>
+              <strong>Serial No:</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  value={serialNo}
+                  onChange={(event) => setSerialNo(event.target.value)}
+                />
+              ) : (
+                <span className="strong">{serialNo || ""}</span>
+              )}
+            </td>
+          </tr>
+          <tr>
+            <td colSpan={6}>
+              <strong>Fund Cluster:</strong>{" "}
+              <FundClusterControl
+                value={fundCluster}
+                onChange={onFundCluster}
+                editable={editable}
+                className="paper-inline-control strong"
+              />
+            </td>
+            <td colSpan={2}>
+              <strong>Date:</strong>{" "}
+              {editable ? (
+                <input
+                  className="paper-inline-control strong"
+                  type="date"
+                  value={dateIssued}
+                  onChange={(event) => setDateIssued(event.target.value)}
+                />
+              ) : (
+                <span className="strong">{dateIssued || ""}</span>
+              )}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <table className="paper-grid rspi-grid">
+        <colgroup>
+          <col style={{ width: "8%" }} /><col style={{ width: "11%" }} />
+          <col style={{ width: "12%" }} /><col style={{ width: "18%" }} />
+          <col style={{ width: "9%" }} /><col style={{ width: "9%" }} />
+          <col style={{ width: "14%" }} /><col style={{ width: "19%" }} />
+        </colgroup>
+        <thead>
+          <tr>
+            <th colSpan={6}>
+              To be filled out by the Property and/or Supply Division Unit
+            </th>
+            <th colSpan={2}>
+              To be filled out by the Accounting Division Unit
+            </th>
+          </tr>
+          <tr>
+            <th>ICS No.</th>
+            <th>Responsibility Center Code</th>
+            <th>Semi-Expendable Property No.</th>
+            <th>Item Description</th>
+            <th>Unit</th>
+            <th>Quantity Issued</th>
+            <th>Unit Cost</th>
+            <th>Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {padRows(rows, 22).map((row, index) => (
+            <tr key={row?.id || index}>
+              <td>{row?.risNo || ""}</td>
+              <td>{row?.responsibilityCenterCode || ""}</td>
+              <td>{row?.stockNo || ""}</td>
+              <td>{row?.item || ""}</td>
+              <td>{row?.unit || ""}</td>
+              <td className="right">{row?.quantity || ""}</td>
+              <td className="right">{row?.unitCost ? peso(row.unitCost) : ""}</td>
+              <td className="right">{row?.amount ? peso(row.amount) : ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <table className="paper-grid rspi-grid rspi-footer">
+        <colgroup>
+          <col style={{ width: "8%" }} /><col style={{ width: "11%" }} />
+          <col style={{ width: "12%" }} /><col style={{ width: "18%" }} />
+          <col style={{ width: "9%" }} /><col style={{ width: "9%" }} />
+          <col style={{ width: "14%" }} /><col style={{ width: "19%" }} />
+        </colgroup>
+        <tbody>
+          <tr>
+            <td colSpan={5}>
+              <div className="rspi-certification">I hereby certify to the correctness of the above information</div>
+              <div className="rspi-signature-name">ENGR. JENY E. BUSCANO</div>
+              <div className="rspi-signature-caption">
+                Signature over Printed Name of Property and/or Supply Custodian
+              </div>
+            </td>
+            <td colSpan={3}>
+              <div className="rspi-posted-by">Posted by:</div>
+              <div className="rspi-signature-name">ERICK VINCENT L. FERMIL</div>
+              <div className="rspi-signature-caption">
+                Signature over Printed Name of Designated Accounting Staff
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function RegSPiPaper({
+  orientation,
+  fundCluster,
+  onFundCluster,
+  rows,
+  editable,
+}: {
+  orientation: Orientation;
+  fundCluster: string;
+  onFundCluster: (value: string) => void;
+  rows: RsmiRow[];
+  editable: boolean;
+}) {
+  const [serialNo, setSerialNo] = useState("");
+  const [dateIssued, setDateIssued] = useState("");
+  return (
+    <div className={`flow-paper ${orientation} regspi-paper official-paper`}>
+      <div className="paper-title-dark">
+        REGISTRY OF SEMI-EXPENDABLE PROPERTY ISSUED
+      </div>
+      <table className="paper-grid official-meta-grid">
+        <tbody>
+          <tr>
+            <td colSpan={7}>
+              <strong>Entity Name :</strong>{" "}
+              <span className="strong">
+                PROVINCIAL TRAINING CENTER - DAVAO DEL NORTE
+              </span>
+            </td>
+            <td colSpan={8}>
+              <strong>Fund Cluster:</strong>{" "}
+              <FundClusterControl
+                value={fundCluster}
+                onChange={onFundCluster}
+                editable={editable}
+                className="paper-inline-control strong"
+              />
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <table className="paper-grid regspi-grid">
+        <colgroup>
+          <col style={{ width: "7%" }} /><col style={{ width: "11%" }} />
+          <col style={{ width: "8%" }} /><col style={{ width: "12%" }} />
+          <col style={{ width: "6%" }} /><col style={{ width: "3%" }} />
+          <col style={{ width: "8%" }} /><col style={{ width: "3%" }} />
+          <col style={{ width: "8%" }} /><col style={{ width: "3%" }} />
+          <col style={{ width: "8%" }} /><col style={{ width: "5%" }} />
+          <col style={{ width: "4%" }} /><col style={{ width: "6%" }} />
+          <col style={{ width: "8%" }} />
+        </colgroup>
+        <thead>
+          <tr>
+            <th rowSpan={2}>DATE</th>
+            <th colSpan={2}>Reference</th>
+            <th rowSpan={2}>Item Description</th>
+            <th rowSpan={2}>Estimated Useful Life</th>
+            <th colSpan={2}>Issued</th>
+            <th colSpan={2}>Returned</th>
+            <th colSpan={2}>Re-issued</th>
+            <th rowSpan={2}>Disposed</th>
+            <th colSpan={2}>Balance</th>
+            <th rowSpan={2}>Remarks</th>
+          </tr>
+          <tr>
+            <th>ICS No./RSPP No.</th>
+            <th>Item/Property No.</th>
+            <th>Qty.</th>
+            <th>Office/Officer</th>
+            <th>Qty.</th>
+            <th>Office/Officer</th>
+            <th>Qty.</th>
+            <th>Office/Officer</th>
+            <th>Qty.</th>
+            <th>Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {padRows(rows, 12).map((row, index) => (
+            <tr key={row?.id || index}>
+              <td><span className="regspi-cell-text">{row?.date ? format(new Date(row.date), "MM/dd/yyyy") : ""}</span></td>
+              <td><span className="regspi-cell-text" title={row?.icsNo || row?.risNo || ""}>{row?.icsNo || row?.risNo || ""}</span></td>
+              <td><span className="regspi-cell-text" title={row?.stockNo || ""}>{row?.stockNo || ""}</span></td>
+              <td><span className="regspi-cell-text" title={row?.item || ""}>{row?.item || ""}</span></td>
+              <td><span className="regspi-cell-text" title={row?.usefulLife || ""}>{row?.usefulLife || ""}</span></td>
+              <td className="right">{row?.movement === "issued" ? row.quantity || "" : ""}</td>
+              <td><span className="regspi-cell-text" title={row?.movement === "issued" ? [row.office, row.officer].filter(Boolean).join(" / ") : ""}>{row?.movement === "issued" ? [row.office, row.officer].filter(Boolean).join(" / ") : ""}</span></td>
+              <td className="right">{row?.movement === "returned" ? row.quantity || "" : ""}</td>
+              <td><span className="regspi-cell-text" title={row?.movement === "returned" ? [row.office, row.officer].filter(Boolean).join(" / ") : ""}>{row?.movement === "returned" ? [row.office, row.officer].filter(Boolean).join(" / ") : ""}</span></td>
+              <td className="right">{row?.movement === "reissued" ? row.quantity || "" : ""}</td>
+              <td><span className="regspi-cell-text" title={row?.movement === "reissued" ? [row.office, row.officer].filter(Boolean).join(" / ") : ""}>{row?.movement === "reissued" ? [row.office, row.officer].filter(Boolean).join(" / ") : ""}</span></td>
+              <td className="right">{row?.movement === "disposed" ? row.quantity || "" : ""}</td>
+              <td className="right">{row?.quantity || ""}</td>
+              <td className="right">{row?.amount ? peso(row.amount) : ""}</td>
+              <td><span className="regspi-cell-text" title={row?.remarks || ""}>{row?.remarks || ""}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <table className="paper-grid regspi-signatures-grid">
+        <tbody>
+          <tr>
+            <td colSpan={8}>
+              <div className="regspi-signature-top regspi-certification">I hereby certify to the correctness of the above information</div>
+              <div className="regspi-signature-name">ENGR. JENY E. BUSCANO</div>
+              <div className="regspi-signature-caption">
+                Signature over Printed Name of Property and/or Supply Custodian
+              </div>
+            </td>
+            <td colSpan={7}>
+              <div className="regspi-signature-top regspi-posted-by">Posted by:</div>
+              <div className="regspi-signature-name">ERICK VINCENT L. FERMIL</div>
+              <div className="regspi-signature-caption">
+                Signature over Printed Name of Designated Accounting Staff
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -5152,6 +5736,12 @@ function incrementRisNumber(current: string, date: string) {
   return `${date}-${String(Number(match[2]) + 1).padStart(7, "0")}`;
 }
 
+function incrementIcsNumber(current: string, date: string) {
+  const match = current.match(/^(?:ICS-)?(\d{4}-\d{2}-\d{2})-(\d+)$/);
+  if (!match || match[1] !== date) return `${date}-0000001`;
+  return `${date}-${String(Number(match[2]) + 1).padStart(7, "0")}`;
+}
+
 async function reserveNextRisNumber(date: string) {
   try {
     return await reserveNextFormNumber({
@@ -5159,6 +5749,17 @@ async function reserveNextRisNumber(date: string) {
     });
   } catch (error) {
     console.error("Unable to reserve RIS number:", errorMessage(error));
+    return "";
+  }
+}
+
+async function reserveNextIcsNumber(date: string) {
+  try {
+    return await reserveNextFormNumber({
+      data: { prefix: "ICS", date },
+    });
+  } catch (error) {
+    console.error("Unable to reserve ICS number:", errorMessage(error));
     return "";
   }
 }
@@ -5354,10 +5955,20 @@ function isRisTransaction(transaction: Transaction) {
 
 type RsmiRow = {
   id: string;
+  itemId: string;
+  risFormId: string;
+  date: string;
   risNo: string;
+  icsNo?: string;
+  usefulLife?: string;
   responsibilityCenterCode: string;
   stockNo: string;
   item: string;
+  office: string;
+  officer?: string;
+  remarks: string;
+  movement: "issued" | "reissued" | "returned" | "disposed";
+  inventoryClassification?: Item["inventory_classification"];
   unit: string;
   quantity: number;
   unitCost: number;
@@ -5409,6 +6020,8 @@ function activeStageLabel(tab: FlowTab) {
   if (tab === "ris") return "RIS";
   if (tab === "ics") return "ICS";
   if (tab === "rpci") return "RPCI";
+  if (tab === "rspi") return "RSPI";
+  if (tab === "regspi") return "RegSPI";
   return "RSMI";
 }
 
@@ -5445,14 +6058,96 @@ function getRsmiRows(
         extractUnitCost(tx.remarks) || findLatestReceiptCost(transactions, tx);
       return {
         id: tx.id,
+        itemId: tx.item_id,
+        risFormId: tx.source_form_id || "",
+        date: tx.created_at,
         risNo: extractReference(tx.remarks),
         responsibilityCenterCode: extractResponsibilityCenter(tx.remarks),
         stockNo: tx.item?.stock_number || "",
         item: combinedItemDescription(tx.item) || "Unknown item",
+        office: extractOffice(tx.remarks),
+        remarks: extractRisLineRemark(tx.remarks),
+        movement: "issued",
+        inventoryClassification: tx.item?.inventory_classification,
         unit: tx.item?.unit || "",
         quantity: tx.quantity,
         unitCost,
         amount: tx.quantity * unitCost,
+      };
+    });
+}
+
+function getRegspiReissueRows(
+  transactions: Transaction[],
+  reportMonth: string,
+  fundCluster: string,
+  iarForms: IarFormRecord[],
+): RsmiRow[] {
+  const itemClusters = getIarItemClusters(transactions, iarForms);
+  return transactions
+    .filter((tx) =>
+      tx.type === "OUT" &&
+      tx.source_form_type === "RSPI" &&
+      tx.item?.inventory_classification === "semi_expendable_property" &&
+      (extractFundCluster(tx.remarks) || inferLegacyIssueCluster(itemClusters.get(tx.item_id))) === fundCluster &&
+      dateKey(tx.created_at) === reportMonth,
+    )
+    .map((tx) => {
+      const unitCost = extractUnitCost(tx.remarks) || findLatestReceiptCost(transactions, tx);
+      return {
+        id: tx.id,
+        itemId: tx.item_id,
+        risFormId: tx.source_form_id || "",
+        date: tx.created_at,
+        risNo: extractReference(tx.remarks),
+        icsNo: extractRemarkValue(tx.remarks, "ICS "),
+        responsibilityCenterCode: extractResponsibilityCenter(tx.remarks),
+        stockNo: tx.item?.stock_number || "",
+        item: combinedItemDescription(tx.item) || "Unknown item",
+        office: "",
+        officer: extractRemarkValue(tx.remarks, "Custodian:"),
+        remarks: extractRisLineRemark(tx.remarks),
+        movement: "reissued",
+        inventoryClassification: tx.item?.inventory_classification,
+        unit: tx.item?.unit || "",
+        quantity: tx.quantity,
+        unitCost,
+        amount: tx.quantity * unitCost,
+      };
+    });
+}
+
+function getRegspiAccountabilityRows(
+  events: RegspiAccountabilityEvent[],
+  reportMonth: string,
+): RsmiRow[] {
+  return events
+    .filter((event) =>
+      (event.event_type === "returned" || event.event_type === "disposed") &&
+      event.inventory_classification === "semi_expendable_property" &&
+      dateKey(event.created_at) === reportMonth,
+    )
+    .map((event) => {
+      const unitCost = Number(event.acquisition_cost || 0);
+      return {
+        id: event.id,
+        itemId: event.item_id,
+        risFormId: event.ris_form_id || "",
+        date: event.created_at,
+        risNo: event.reference_no || "",
+        icsNo: "",
+        responsibilityCenterCode: "",
+        stockNo: event.stock_number || "",
+        item: [event.item_name, event.item_description].filter(Boolean).join(" — ") || "Unknown item",
+        office: event.to_custodian || event.from_custodian || "",
+        officer: event.reported_by || "",
+        remarks: event.notes || "",
+        movement: event.event_type === "returned" ? "returned" : "disposed",
+        inventoryClassification: event.inventory_classification,
+        unit: event.unit || "",
+        quantity: Number(event.quantity || 0),
+        unitCost,
+        amount: Number(event.quantity || 0) * unitCost,
       };
     });
 }
@@ -5638,7 +6333,7 @@ async function createAccountabilityDocuments({
           ics_id: ics.id,
           item_id: line.item_id,
           quantity: Number(line.quantity),
-          unit_cost: Number(line.item?.acquisition_cost || 0),
+          unit_cost: Number(line.unitCost || line.item?.acquisition_cost || 0),
           remarks: line.remarks || null,
         } });
       }
@@ -5662,7 +6357,7 @@ async function createAccountabilityDocuments({
           par_id: par.id,
           item_id: line.item_id,
           quantity: Number(line.quantity),
-          unit_cost: Number(line.item?.acquisition_cost || 0),
+          unit_cost: Number(line.unitCost || line.item?.acquisition_cost || 0),
           remarks: line.remarks || null,
         } });
       }
@@ -5727,6 +6422,21 @@ function extractOffice(remarks?: string | null) {
     .split("|")
     .find((part) => part.trim().startsWith("Office:"));
   return office?.replace("Office:", "").trim() || "";
+}
+
+function extractRemarkValue(remarks: string | null | undefined, prefix: string) {
+  if (!remarks) return "";
+  const part = remarks.split("|").map((value) => value.trim()).find((value) => value.startsWith(prefix));
+  return part?.slice(prefix.length).trim() || "";
+}
+
+function extractRisLineRemark(remarks?: string | null) {
+  if (!remarks) return "";
+  return remarks
+    .split("|")
+    .map((part) => part.trim())
+    .filter((part) => !/^(RIS\s|RSPI\s|ICS\s|Fund Cluster:|Office:|Responsibility Center:|Purpose:|Custodian:)/i.test(part))
+    .join(" | ");
 }
 
 function extractFundCluster(remarks?: string | null) {
@@ -5838,7 +6548,11 @@ const flowStyles = `
 .stock-paper .semi-expendable-card th:first-child,.stock-paper .semi-expendable-card td:first-child{width:64px}
 .stock-paper .semi-expendable-card th:nth-child(2),.stock-paper .semi-expendable-card td:nth-child(2){width:96px}
 .stock-paper .semi-expendable-card th:nth-child(4),.stock-paper .semi-expendable-card td:nth-child(4){width:64px}
+.stock-paper .semi-expendable-card th:nth-child(3),.stock-paper .semi-expendable-card td:nth-child(3){width:58px}
+.stock-paper .semi-expendable-card th:nth-child(4),.stock-paper .semi-expendable-card td:nth-child(4){width:64px}
+.stock-paper .semi-expendable-card th:nth-child(5),.stock-paper .semi-expendable-card td:nth-child(5){width:74px}
 .stock-paper .semi-expendable-card th:nth-child(6),.stock-paper .semi-expendable-card td:nth-child(6){width:84px}
+.stock-paper .semi-expendable-card th:nth-child(7),.stock-paper .semi-expendable-card td:nth-child(7){width:58px}
 .stock-paper .semi-expendable-card th:nth-child(8),.stock-paper .semi-expendable-card td:nth-child(8){width:92px}
 .stock-paper .semi-expendable-card th:nth-child(9),.stock-paper .semi-expendable-card td:nth-child(9){width:58px}
 .stock-paper .semi-expendable-card th:nth-child(10),.stock-paper .semi-expendable-card td:nth-child(10){width:74px}
@@ -5848,6 +6562,31 @@ const flowStyles = `
 .ris-paper .signature-table td{height:31px}
 .rsmi-paper .paper-title-dark{font-size:16px}
 .rsmi-paper .rsmi-recap{margin-top:0}
+.rspi-paper{font-family:"Times New Roman",Times,serif;font-size:12px}
+.rspi-paper .paper-title-dark{font-size:16px;margin-bottom:8px}
+.rspi-paper .rspi-grid{table-layout:fixed;font-family:"Times New Roman",Times,serif;font-size:11px}
+.rspi-paper .rspi-grid th,.rspi-paper .rspi-grid td{padding:3px;line-height:1.15;overflow-wrap:anywhere}
+.rspi-paper .rspi-grid th{font-size:11px;font-weight:700}
+.rspi-paper .rspi-grid tbody tr{height:19px}
+.rspi-paper .rspi-grid tbody td{height:19px}
+.rspi-paper .rspi-footer td{height:126px!important;vertical-align:top;padding:5px 7px}
+.rspi-paper .rspi-certification{text-align:center;margin:18px 0 0}
+.rspi-paper .rspi-posted-by{height:18px;border-bottom:1px solid #bbb;margin:-5px -7px 0;padding:0 7px}
+.rspi-paper .rspi-signature-name{margin-top:34px;text-align:center;font-weight:700;text-decoration:underline;text-underline-offset:2px}
+.rspi-paper .rspi-signature-caption{margin-top:10px;text-align:center;font-size:11px;white-space:nowrap}
+.regspi-paper .paper-title-dark{font-size:16px;margin-bottom:14px}
+.regspi-paper .regspi-grid{table-layout:fixed;font-size:9px}
+.regspi-paper .regspi-grid th,.regspi-paper .regspi-grid td{padding:3px;line-height:1.2;white-space:normal;overflow-wrap:anywhere;word-break:normal}
+.regspi-paper .regspi-grid tbody tr{height:40px}
+.regspi-paper .regspi-grid tbody td{height:40px;max-height:40px;overflow:hidden}
+.regspi-paper .regspi-cell-text{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere;line-height:1.15}
+.regspi-paper .regspi-signatures-grid{table-layout:fixed;font-size:10px}
+.regspi-paper .regspi-signatures-grid td{height:108px;padding:6px 8px;vertical-align:top}
+.regspi-paper .regspi-signature-top{height:12px;line-height:16px}
+.regspi-paper .regspi-certification{text-align:center;position:relative;top:17px}
+.regspi-paper .regspi-posted-by{text-align:left;border-bottom:1px solid #bbb}
+.regspi-paper .regspi-signature-name{margin-top:37px;text-align:center;font-weight:800;text-decoration:underline;text-underline-offset:2px;line-height:14px}
+.regspi-paper .regspi-signature-caption{margin-top:8px;text-align:center;font-size:9px;line-height:12px}
 .paper-meta{display:grid;border:1px solid #111;border-bottom:0}
 .paper-meta.two{grid-template-columns:1fr 1fr}
 .paper-meta.three{grid-template-columns:1fr 1fr 1fr}
@@ -5931,6 +6670,7 @@ const flowStyles = `
 .ics-paper .ics-desc-col{min-width:200px}
 .ics-paper .ics-itemno-col{width:64px}
 .ics-paper .ics-life-col{width:90px}
+.ics-paper .ics-action-col{width:32px;min-width:32px;padding:0}
 .ics-paper .ics-qty-input{width:100%;text-align:right}
 .ics-paper .ics-signatures-grid td{padding:10px 15px}
 .ics-paper .signature-block-cell{text-align:center}

@@ -1272,6 +1272,7 @@ export const listTransactionsAsc = createServerFn({ method: "GET" })
                 id: r.item.id,
                 name: r.item.name,
                 description: r.item.description,
+                stock_number: r.item.stock_number,
                 unit: r.item.unit,
                 quantity: r.item.quantity,
                 acquisition_cost: r.item.acquisition_cost,
@@ -1285,7 +1286,7 @@ export const listTransactionsAsc = createServerFn({ method: "GET" })
         const limit = data?.limit ?? 5000;
         const rows = await sbSelect(
           "transactions",
-          `select=*,item:items(id,name,description,unit,quantity,acquisition_cost,inventory_classification,semi_expendable_tier)&order=created_at.asc&limit=${limit}`,
+          `select=*,item:items(id,name,description,stock_number,unit,quantity,acquisition_cost,inventory_classification,semi_expendable_tier)&order=created_at.asc&limit=${limit}`,
         );
         return rows.map((r: any) => ({
           ...r,
@@ -1294,6 +1295,7 @@ export const listTransactionsAsc = createServerFn({ method: "GET" })
                 id: r.item.id,
                 name: r.item.name,
                 description: r.item.description,
+                stock_number: r.item.stock_number,
                 unit: r.item.unit,
                 quantity: r.item.quantity,
                 acquisition_cost: r.item.acquisition_cost,
@@ -1514,7 +1516,7 @@ export const getRisFormDetails = createServerFn({ method: "GET" })
                 to_char(r.issued_date, 'YYYY-MM-DD') AS issued_date,
                 r.verification_token, r.verification_code,
                 r.verification_status, r.verification_published_at,
-                r.status, r.created_at::text AS created_at,
+                r.status, r.property_flow, r.created_at::text AS created_at,
                 COALESCE(
                   json_agg(json_build_object(
                     'id', ri.id,
@@ -1526,7 +1528,8 @@ export const getRisFormDetails = createServerFn({ method: "GET" })
                       'name', i.name,
                       'description', i.description,
                       'unit', i.unit,
-                      'stock_number', i.stock_number
+                      'stock_number', i.stock_number,
+                      'acquisition_cost', i.acquisition_cost
                     )
                   ) ORDER BY ri.created_at) FILTER (WHERE ri.id IS NOT NULL),
                   '[]'::json
@@ -1545,7 +1548,7 @@ export const getRisFormDetails = createServerFn({ method: "GET" })
                 to_char(r.issued_date, 'YYYY-MM-DD') AS issued_date,
                 r.verification_token, r.verification_code,
                 r.verification_status, r.verification_published_at,
-                r.status, r.created_at::text AS created_at,
+                r.status, r.property_flow, r.created_at::text AS created_at,
                 COALESCE(
                   json_agg(json_build_object(
                     'id', ri.id,
@@ -1557,7 +1560,8 @@ export const getRisFormDetails = createServerFn({ method: "GET" })
                       'name', i.name,
                       'description', i.description,
                       'unit', i.unit,
-                      'stock_number', i.stock_number
+                      'stock_number', i.stock_number,
+                      'acquisition_cost', i.acquisition_cost
                     )
                   ) ORDER BY ri.created_at) FILTER (WHERE ri.id IS NOT NULL),
                   '[]'::json
@@ -1580,7 +1584,7 @@ export const getRisFormDetails = createServerFn({ method: "GET" })
         if (!form) return null;
         const lines = await sbSelect<any>(
           "ris_items",
-          `select=id,item_id,quantity,remarks,item:items(id,name,description,unit)&ris_id=eq.${encodeURIComponent(form.id)}&order=created_at.asc&limit=1000`,
+          `select=id,item_id,quantity,remarks,item:items(id,name,description,unit,acquisition_cost)&ris_id=eq.${encodeURIComponent(form.id)}&order=created_at.asc&limit=1000`,
         );
         return {
           id: form.id,
@@ -1598,6 +1602,7 @@ export const getRisFormDetails = createServerFn({ method: "GET" })
           verification_status: form.verification_status ?? null,
           verification_published_at: form.verification_published_at ?? null,
           status: form.status,
+          property_flow: form.property_flow ?? "supplies",
           created_at: form.created_at,
           fund_cluster: form.fund_cluster ?? null,
           lines,
@@ -1728,6 +1733,7 @@ export const createRisForm = createServerFn({ method: "POST" })
         created_by_name: data.created_by_name || null,
         status: data.status || "pending",
         priority: data.priority || "normal",
+        property_flow: data.property_flow || "supplies",
     };
     return withDbFallback(
       async (sql) => {
@@ -1746,6 +1752,7 @@ export const createRisForm = createServerFn({ method: "POST" })
           "document_version",
           "verification_status",
           "verification_published_at",
+          "property_flow",
         ],
         getRestWriteConfig(),
       ),
@@ -1753,11 +1760,12 @@ export const createRisForm = createServerFn({ method: "POST" })
   });
 
 export const listRisForms = createServerFn({ method: "GET" })
-  .inputValidator((d: { created_by?: string } | undefined) => d ?? {})
+  .inputValidator((d: { created_by?: string; property_flow?: string } | undefined) => d ?? {})
   .handler(async ({ data }) => {
     return withDbFallback(
       async (sql) => {
       const createdBy = data.created_by?.trim() || null;
+      const propertyFlow = data.property_flow?.trim() || null;
       return await sql`
         SELECT
           r.id,
@@ -1766,6 +1774,7 @@ export const listRisForms = createServerFn({ method: "GET" })
           r.purpose,
           r.requested_by,
           r.status,
+          r.property_flow,
           r.priority,
           r.review_notes,
           r.created_at::text AS created_at,
@@ -1783,6 +1792,20 @@ export const listRisForms = createServerFn({ method: "GET" })
         LEFT JOIN categories c ON c.id = i.category_id
         LEFT JOIN suppliers s ON s.id = i.supplier_id
         WHERE (${createdBy}::text IS NULL OR r.created_by = ${createdBy}::text)
+          AND (
+            ${propertyFlow}::text IS NULL
+            OR r.property_flow = ${propertyFlow}::text
+            OR (
+              ${propertyFlow}::text = 'semi-expendable'
+              AND EXISTS (
+                SELECT 1
+                FROM ris_items semi_ri
+                JOIN items semi_i ON semi_i.id = semi_ri.item_id
+                WHERE semi_ri.ris_id = r.id
+                  AND semi_i.inventory_classification = 'semi_expendable_property'
+              )
+            )
+          )
         GROUP BY r.id
         ORDER BY
           CASE WHEN r.status IN ('pending', 'draft') THEN 0 ELSE 1 END,
@@ -1795,7 +1818,7 @@ export const listRisForms = createServerFn({ method: "GET" })
           : "";
         const forms = await sbSelect<any>(
           "ris_forms",
-          `select=id,ris_no,office,purpose,requested_by,status,created_at${ownerFilter}&order=created_at.desc&limit=1000`,
+          `select=id,ris_no,office,purpose,requested_by,status,property_flow,created_at${ownerFilter}&order=created_at.desc&limit=1000`,
         );
         if (forms.length === 0) return [];
 
@@ -1808,7 +1831,7 @@ export const listRisForms = createServerFn({ method: "GET" })
         const items = itemIds.length
           ? await sbSelect<any>(
               "items",
-              `select=id,name,unit,acquisition_cost,category_id,supplier_id&id=in.(${itemIds.map(encodeURIComponent).join(",")})&limit=10000`,
+              `select=id,name,unit,acquisition_cost,category_id,supplier_id,inventory_classification&id=in.(${itemIds.map(encodeURIComponent).join(",")})&limit=10000`,
             )
           : [];
         const categoryIds = [...new Set(items.map((item) => String(item.category_id || "")).filter(Boolean))];
@@ -1831,7 +1854,16 @@ export const listRisForms = createServerFn({ method: "GET" })
           linesByForm.set(String(line.ris_id), lines);
         }
 
-        return forms.map((form) => {
+        const flowForms = data.property_flow?.trim() === "semi-expendable"
+          ? forms.filter((form) =>
+              form.property_flow === "semi-expendable" ||
+              (linesByForm.get(String(form.id)) || []).some((line) =>
+                itemById.get(String(line.item_id))?.inventory_classification === "semi_expendable_property",
+              ),
+            )
+          : forms;
+
+        return flowForms.map((form) => {
           const lines = linesByForm.get(String(form.id)) || [];
           const lineItems = lines.map((line) => ({
             line,
@@ -1849,6 +1881,9 @@ export const listRisForms = createServerFn({ method: "GET" })
           const remarks = distinct(lines.map((line) => line.remarks));
           return {
             ...form,
+            property_flow: form.property_flow === "semi-expendable" || lineItems.some(({ item }) => item?.inventory_classification === "semi_expendable_property")
+              ? "semi-expendable"
+              : form.property_flow,
             priority: "normal",
             review_notes: null,
             item_name: itemNames.join(", ") || "No item listed",
@@ -2080,6 +2115,17 @@ export const reserveNextFormNumber = createServerFn({ method: "POST" })
             WHERE ris_no LIKE ${`${date}-%`}
           `;
           historyNext = Number(latest.last_number || 0) + 1;
+        } else if (prefix === "ICS") {
+          const [latest] = await tx`
+            SELECT COALESCE(
+              MAX(NULLIF(substring(ics_no from '-([0-9]+)$'), '')::bigint),
+              0
+            ) AS last_number
+            FROM ics_forms
+            WHERE ics_no LIKE ${`${date}-%`}
+              OR ics_no LIKE ${`ICS-${date}-%`}
+          `;
+          historyNext = Number(latest.last_number || 0) + 1;
         }
         const [counter] = await tx`
           INSERT INTO form_number_counters (form_prefix, series_year, last_number)
@@ -2092,7 +2138,7 @@ export const reserveNextFormNumber = createServerFn({ method: "POST" })
           RETURNING last_number
         `;
         const series = String(counter.last_number).padStart(7, "0");
-        return prefix === "RIS"
+        return prefix === "RIS" || prefix === "ICS"
           ? `${date}-${series}`
           : `${prefix}-${date}-${series}`;
       }),
@@ -2107,7 +2153,18 @@ export const reserveNextFormNumber = createServerFn({ method: "POST" })
           });
           reservedSeries = Number(reserved.match(/-(\d+)$/)?.[1] || 0);
         } catch (rpcError) {
-          if (prefix !== "RIS") throw rpcError;
+          if (prefix !== "RIS" && prefix !== "ICS") throw rpcError;
+        }
+        if (prefix === "ICS") {
+          const history = await sbSelect<{ ics_no: string }>(
+            "ics_forms",
+            `select=ics_no&or=(ics_no.like.${encodeURIComponent(`${date}-%`)},ics_no.like.${encodeURIComponent(`ICS-${date}-%`)})&order=ics_no.desc&limit=10000`,
+          );
+          const historySeries = history.reduce((max, form) => {
+            const match = form.ics_no.match(/-(\d+)$/);
+            return Math.max(max, Number(match?.[1] || 0));
+          }, 0);
+          return `${date}-${String(Math.max(reservedSeries, historySeries + 1, 1)).padStart(7, "0")}`;
         }
         if (prefix !== "RIS") return `${prefix}-${date}-${String(reservedSeries).padStart(7, "0")}`;
         const history = await sbSelect<{ ris_no: string }>(
@@ -2164,6 +2221,115 @@ export const getNextRisNumberFromHistory = createServerFn({ method: "GET" })
       },
     );
   });
+
+export const listIcsForms = createServerFn({ method: "GET" }).handler(async () =>
+  withDbFallback(
+    async (sql) => await sql`
+      SELECT
+        f.id, f.ics_no, f.ris_id, f.office, f.custodian_name,
+        f.created_at::text AS created_at,
+        COALESCE(
+          json_agg(json_build_object(
+            'item_id', ii.item_id,
+            'quantity', ii.quantity,
+            'unit_cost', ii.unit_cost,
+            'remarks', ii.remarks
+          ) ORDER BY ii.created_at) FILTER (WHERE ii.id IS NOT NULL),
+          '[]'::json
+        ) AS lines
+      FROM ics_forms f
+      LEFT JOIN ics_items ii ON ii.ics_id = f.id
+      GROUP BY f.id
+      ORDER BY f.created_at DESC
+    `,
+    async () => {
+      const forms = await sbSelect<any>(
+        "ics_forms",
+        "select=id,ics_no,ris_id,office,custodian_name,created_at&order=created_at.desc&limit=10000",
+      );
+      if (!forms.length) return [];
+      const ids = forms.map((form) => String(form.id));
+      const items = await sbSelect<any>(
+        "ics_items",
+        `select=ics_id,item_id,quantity,unit_cost,remarks&ics_id=in.(${ids.map(encodeURIComponent).join(",")})&limit=10000`,
+      );
+      const linesByIcs = new Map<string, any[]>();
+      for (const line of items) {
+        const lines = linesByIcs.get(String(line.ics_id)) || [];
+        lines.push(line);
+        linesByIcs.set(String(line.ics_id), lines);
+      }
+      return forms.map((form) => ({
+        ...form,
+        lines: linesByIcs.get(String(form.id)) || [],
+      }));
+    },
+  ),
+);
+
+export const listAccountabilityEvents = createServerFn({ method: "GET" }).handler(async () =>
+  withDbFallback(
+    async (sql) => await sql`
+      SELECT
+        e.id, e.item_id, e.event_type, e.reference_no, e.reported_by,
+        e.from_custodian, e.to_custodian, e.notes,
+        e.created_at::text AS created_at,
+        ri.quantity,
+        rf.id AS ris_form_id,
+        i.name AS item_name,
+        i.description AS item_description,
+        i.stock_number,
+        i.unit,
+        i.acquisition_cost,
+        i.inventory_classification
+      FROM accountability_events e
+      LEFT JOIN ris_forms rf
+        ON rf.ris_no = regexp_replace(coalesce(e.reference_no, ''), '^RIS\\s*', '', 'i')
+      LEFT JOIN ris_items ri ON ri.ris_id = rf.id AND ri.item_id = e.item_id
+      LEFT JOIN items i ON i.id = e.item_id
+      ORDER BY e.created_at ASC
+    `,
+    async () => {
+      const events = await sbSelect<any>(
+        "accountability_events",
+        "select=id,item_id,event_type,reference_no,reported_by,from_custodian,to_custodian,notes,created_at&order=created_at.asc&limit=10000",
+      );
+      if (!events.length) return [];
+      const itemIds = [...new Set(events.map((event) => String(event.item_id)))];
+      const items = await sbSelect<any>(
+        "items",
+        `select=id,name,description,stock_number,unit,acquisition_cost,inventory_classification&id=in.(${itemIds.map(encodeURIComponent).join(",")})&limit=10000`,
+      );
+      const refs = [...new Set(events.map((event) => String(event.reference_no || "").replace(/^RIS\s*/i, "")).filter(Boolean))];
+      const forms = refs.length
+        ? await sbSelect<any>("ris_forms", `select=id,ris_no&ris_no=in.(${refs.map(encodeURIComponent).join(",")})&limit=10000`)
+        : [];
+      const formIds = forms.map((form) => String(form.id));
+      const lines = formIds.length
+        ? await sbSelect<any>("ris_items", `select=ris_id,item_id,quantity&ris_id=in.(${formIds.map(encodeURIComponent).join(",")})&limit=10000`)
+        : [];
+      const formsByNo = new Map(forms.map((form) => [String(form.ris_no), String(form.id)]));
+      const quantityByFormItem = new Map(lines.map((line) => [`${line.ris_id}:${line.item_id}`, line.quantity]));
+      const itemsById = new Map(items.map((item) => [String(item.id), item]));
+      return events.map((event) => {
+        const risNo = String(event.reference_no || "").replace(/^RIS\s*/i, "");
+        const risId = formsByNo.get(risNo);
+        const item = itemsById.get(String(event.item_id));
+        return {
+          ...event,
+          quantity: risId ? quantityByFormItem.get(`${risId}:${event.item_id}`) ?? null : null,
+          ris_form_id: risId || null,
+          item_name: item?.name || "",
+          item_description: item?.description || "",
+          stock_number: item?.stock_number || "",
+          unit: item?.unit || "",
+          acquisition_cost: item?.acquisition_cost || 0,
+          inventory_classification: item?.inventory_classification || null,
+        };
+      });
+    },
+  ),
+);
 
 export const createIcsForm = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
@@ -2321,4 +2487,105 @@ export const getInventorySnapshot = createServerFn({ method: "GET" }).handler(
     }
   },
 );
+// ============================================================================
+// Semi-Expendable Property Workflow Rules (Rules 1-9)
+// TypeScript wrappers for PL/pgSQL database functions
+// ============================================================================
+
+export const approveIar = createServerFn({ method: "POST" })
+  .inputValidator((d: { form_id: string }) => d)
+  .handler(async ({ data }) => withDbFallback(
+    async (sql) => {
+      const [result] = await sql`SELECT public.approve_iar(${data.form_id}::uuid) AS result`;
+      return result?.result;
+    },
+    async () => sbRpc("approve_iar", { form_id: data.form_id }),
+  ));
+
+export const approveRis = createServerFn({ method: "POST" })
+  .inputValidator((d: { form_id: string }) => d)
+  .handler(async ({ data }) => withDbFallback(
+    async (sql) => {
+      const [result] = await sql`SELECT public.approve_ris(${data.form_id}::uuid) AS result`;
+      return result?.result;
+    },
+    async () => sbRpc("approve_ris", { form_id: data.form_id }),
+  ));
+
+export const approveItr = createServerFn({ method: "POST" })
+  .inputValidator((d: { form_id: string }) => d)
+  .handler(async ({ data }) => withDbFallback(
+    async (sql) => {
+      const [result] = await sql`SELECT public.approve_itr(${data.form_id}::uuid) AS result`;
+      return result?.result;
+    },
+    async () => sbRpc("approve_itr", { form_id: data.form_id }),
+  ));
+
+export const reportPropertyLoss = createServerFn({ method: "POST" })
+  .inputValidator((d: { form_id: string; event_type: string }) => d)
+  .handler(async ({ data }) => withDbFallback(
+    async (sql) => {
+      const [result] = await sql`SELECT public.report_property_loss(${data.form_id}::uuid, ${data.event_type}::text) AS result`;
+      return result?.result;
+    },
+    async () => sbRpc("report_property_loss", { form_id: data.form_id, event_type: data.event_type }),
+  ));
+
+export const receiveReturnedProperty = createServerFn({ method: "POST" })
+  .inputValidator((d: { form_id: string }) => d)
+  .handler(async ({ data }) => withDbFallback(
+    async (sql) => {
+      const [result] = await sql`SELECT public.receive_returned_property(${data.form_id}::uuid) AS result`;
+      return result?.result;
+    },
+    async () => sbRpc("receive_returned_property", { form_id: data.form_id }),
+  ));
+
+export const generateRegspi = createServerFn({ method: "POST" })
+  .inputValidator((d: { form_id: string }) => d)
+  .handler(async ({ data }) => withDbFallback(
+    async (sql) => {
+      const [result] = await sql`SELECT public.generate_regspi(${data.form_id}::uuid) AS result`;
+      return result?.result;
+    },
+    async () => sbRpc("generate_regspi", { form_id: data.form_id }),
+  ));
+
+export const generateRspi = createServerFn({ method: "POST" })
+  .inputValidator((d: { form_id: string; period_start: string; period_end: string }) => d)
+  .handler(async ({ data }) => withDbFallback(
+    async (sql) => {
+      const [result] = await sql`SELECT public.generate_rspi(${data.form_id}::uuid, ${data.period_start}::date, ${data.period_end}::date) AS result`;
+      return result?.result;
+    },
+    async () => sbRpc("generate_rspi", { form_id: data.form_id, period_start: data.period_start, period_end: data.period_end }),
+  ));
+
+export const generateRpcsp = createServerFn({ method: "POST" })
+  .inputValidator((d: { as_of_date: string }) => d)
+  .handler(async ({ data }) => withDbFallback(
+    async (sql) => {
+      const [result] = await sql`SELECT public.generate_rpcsp(${data.as_of_date}::date) AS result`;
+      return result?.result;
+    },
+    async () => sbRpc("generate_rpcsp", { as_of_date: data.as_of_date }),
+  ));
+
+export const checkInventoryReconciliation = createServerFn({ method: "GET" })
+  .inputValidator((d: { item_id?: string } | undefined) => d ?? {})
+  .handler(async ({ data }) => withDbFallback(
+    async (sql) => {
+      if (data.item_id) {
+        return await sql`SELECT * FROM public.check_inventory_reconciliation(${data.item_id}::uuid)`;
+      }
+      return await sql`SELECT * FROM public.check_inventory_reconciliation()`;
+    },
+    async () => {
+      if (data.item_id) {
+        return await sbRpc("check_inventory_reconciliation", { p_item_id: data.item_id });
+      }
+      return await sbRpc("check_inventory_reconciliation", {});
+    },
+  ));
 

@@ -252,6 +252,20 @@ export async function ensureSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS accountability_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      item_id UUID NOT NULL REFERENCES items(id),
+      event_type TEXT NOT NULL CHECK (event_type IN ('lost', 'damaged', 'returned', 'disposed', 'transferred')),
+      reference_no TEXT DEFAULT NULL,
+      reported_by TEXT DEFAULT NULL,
+      from_custodian TEXT DEFAULT NULL,
+      to_custodian TEXT DEFAULT NULL,
+      notes TEXT DEFAULT NULL,
+      created_by TEXT DEFAULT NULL,
+      created_by_name TEXT DEFAULT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS iar_forms (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       iar_no TEXT NOT NULL UNIQUE,
@@ -321,7 +335,15 @@ export async function ensureSchema() {
     ALTER TABLE ris_forms
       ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending',
       ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal',
-      ADD COLUMN IF NOT EXISTS review_notes TEXT DEFAULT NULL;
+      ADD COLUMN IF NOT EXISTS review_notes TEXT DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS property_flow TEXT DEFAULT NULL;
+
+    ALTER TABLE ris_forms
+      DROP CONSTRAINT IF EXISTS ris_forms_property_flow_check;
+
+    ALTER TABLE ris_forms
+      ADD CONSTRAINT ris_forms_property_flow_check
+      CHECK (property_flow IN ('supplies', 'semi-expendable', 'ppe'));
 
     ALTER TABLE ris_forms
       DROP COLUMN IF EXISTS needed_by;
@@ -347,6 +369,25 @@ export async function ensureSchema() {
       transaction_id UUID DEFAULT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    UPDATE ris_forms r
+    SET property_flow = 'semi-expendable'
+    WHERE (r.property_flow IS NULL OR r.property_flow = 'supplies')
+      AND EXISTS (
+      SELECT 1
+      FROM ris_items ri
+      JOIN items i ON i.id = ri.item_id
+      WHERE ri.ris_id = r.id
+        AND i.inventory_classification = 'semi_expendable_property'
+    );
+
+    UPDATE ris_forms
+    SET property_flow = 'supplies'
+    WHERE property_flow IS NULL;
+
+    ALTER TABLE ris_forms
+      ALTER COLUMN property_flow SET DEFAULT 'supplies',
+      ALTER COLUMN property_flow SET NOT NULL;
 
     CREATE TABLE IF NOT EXISTS form_number_counters (
       form_prefix TEXT NOT NULL,
