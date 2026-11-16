@@ -255,6 +255,7 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS accountability_events (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       item_id UUID NOT NULL REFERENCES items(id),
+      quantity NUMERIC(14,2) DEFAULT NULL,
       event_type TEXT NOT NULL CHECK (event_type IN ('lost', 'damaged', 'returned', 'disposed', 'transferred')),
       reference_no TEXT DEFAULT NULL,
       reported_by TEXT DEFAULT NULL,
@@ -265,6 +266,23 @@ export async function ensureSchema() {
       created_by_name TEXT DEFAULT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    CREATE TABLE IF NOT EXISTS ppe_documents (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_type TEXT NOT NULL CHECK (document_type IN ('ppe-ledger','par','ptr','rpcppe','iirup','rlsddp','rrpe')),
+      document_no TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','approved','cancelled')),
+      form_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_by TEXT DEFAULT NULL,
+      created_by_name TEXT DEFAULT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (document_type, document_no)
+    );
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS issued_quantity NUMERIC(14,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS returned_quantity NUMERIC(14,2) NOT NULL DEFAULT 0;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS last_ics_id UUID;
+    ALTER TABLE accountability_events ADD COLUMN IF NOT EXISTS quantity NUMERIC(14,2) DEFAULT NULL;
 
     CREATE TABLE IF NOT EXISTS iar_forms (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

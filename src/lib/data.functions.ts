@@ -1624,6 +1624,10 @@ export const createFormsFlowBackup = createServerFn({ method: "GET" }).handler(
       "iar_items",
       "ris_forms",
       "ris_items",
+      "par_forms",
+      "par_items",
+      "accountability_events",
+      "ppe_documents",
       "form_personnel_memory",
       "form_number_counters",
     ] as const;
@@ -2274,7 +2278,7 @@ export const listAccountabilityEvents = createServerFn({ method: "GET" }).handle
         e.id, e.item_id, e.event_type, e.reference_no, e.reported_by,
         e.from_custodian, e.to_custodian, e.notes,
         e.created_at::text AS created_at,
-        ri.quantity,
+        coalesce(ri.quantity, e.quantity) AS quantity,
         rf.id AS ris_form_id,
         i.name AS item_name,
         i.description AS item_description,
@@ -2292,7 +2296,7 @@ export const listAccountabilityEvents = createServerFn({ method: "GET" }).handle
     async () => {
       const events = await sbSelect<any>(
         "accountability_events",
-        "select=id,item_id,event_type,reference_no,reported_by,from_custodian,to_custodian,notes,created_at&order=created_at.asc&limit=10000",
+        "select=id,item_id,quantity,event_type,reference_no,reported_by,from_custodian,to_custodian,notes,created_at&order=created_at.asc&limit=10000",
       );
       if (!events.length) return [];
       const itemIds = [...new Set(events.map((event) => String(event.item_id)))];
@@ -2317,7 +2321,7 @@ export const listAccountabilityEvents = createServerFn({ method: "GET" }).handle
         const item = itemsById.get(String(event.item_id));
         return {
           ...event,
-          quantity: risId ? quantityByFormItem.get(`${risId}:${event.item_id}`) ?? null : null,
+          quantity: (risId ? quantityByFormItem.get(`${risId}:${event.item_id}`) : null) ?? event.quantity ?? null,
           ris_form_id: risId || null,
           item_name: item?.name || "",
           item_description: item?.description || "",
@@ -2406,6 +2410,147 @@ export const createParItem = createServerFn({ method: "POST" })
         return row;
       },
       async () => sbInsert("par_items", payload, getRestWriteConfig()),
+    );
+  });
+
+export const listPpeDocuments = createServerFn({ method: "GET" }).handler(async () =>
+  withDbFallback(
+    async (sql) => await sql`SELECT * FROM ppe_documents ORDER BY created_at DESC`,
+    async () => await sbSelect("ppe_documents", "select=*&order=created_at.desc&limit=5000"),
+  ).catch(() => []),
+);
+
+export const listParForms = createServerFn({ method: "GET" }).handler(async () =>
+  withDbFallback(
+    async (sql) => await sql`
+      SELECT p.id, p.par_no, p.accountable_person, p.office, p.status, p.created_at,
+        coalesce(json_agg(json_build_object(
+          'item_id', pi.item_id, 'quantity', pi.quantity, 'unit_cost', pi.unit_cost,
+          'remarks', pi.remarks, 'item', json_build_object('id', i.id, 'name', i.name,
+          'description', i.description, 'stock_number', i.stock_number, 'unit', i.unit,
+          'acquisition_cost', i.acquisition_cost)
+        )) FILTER (WHERE pi.id IS NOT NULL), '[]'::json) AS lines
+      FROM par_forms p LEFT JOIN par_items pi ON pi.par_id = p.id
+      LEFT JOIN items i ON i.id = pi.item_id
+      GROUP BY p.id ORDER BY p.created_at DESC
+    `,
+    async () => {
+      const forms = await sbSelect<any>("par_forms", "select=id,par_no,accountable_person,office,status,created_at&order=created_at.desc&limit=5000");
+      if (!forms.length) return [];
+      const formIds = forms.map((form) => String(form.id));
+      const lines = await sbSelect<any>("par_items", `select=par_id,item_id,quantity,unit_cost,remarks&par_id=in.(${formIds.map(encodeURIComponent).join(",")})&limit=10000`);
+      const itemIds = [...new Set(lines.map((line) => String(line.item_id)))];
+      const items = itemIds.length ? await sbSelect<any>("items", `select=id,name,description,stock_number,unit,acquisition_cost&id=in.(${itemIds.map(encodeURIComponent).join(",")})&limit=10000`) : [];
+      const itemsById = new Map(items.map((item) => [String(item.id), item]));
+      const linesByForm = new Map<string, any[]>();
+      for (const line of lines) linesByForm.set(String(line.par_id), [...(linesByForm.get(String(line.par_id)) || []), { ...line, item: itemsById.get(String(line.item_id)) || null }]);
+      return forms.map((form) => ({ ...form, lines: linesByForm.get(String(form.id)) || [] }));
+    },
+  ).catch(() => []),
+);
+
+export const savePpeDocument = createServerFn({ method: "POST" })
+  .inputValidator((d: any) => d)
+  .handler(async ({ data }) => {
+    const type = String(data.document_type || "");
+    const number = String(data.document_no || "").trim();
+    if (!number) throw new Error("Form number is required.");
+    const payload = {
+      document_type: type, document_no: number,
+      status: data.status === "approved" ? "approved" : "draft",
+      form_data: data.form_data || {}, created_by: data.created_by || null,
+      created_by_name: data.created_by_name || null, updated_at: new Date().toISOString(),
+    };
+    return withDbFallback(
+      async (sql) => {
+        const [existing] = await sql`SELECT status FROM ppe_documents WHERE document_type = ${type} AND document_no = ${number} FOR UPDATE`;
+        if (existing?.status === "approved") throw new Error("Approved form is locked and cannot be changed.");
+        const [row] = await sql`
+          INSERT INTO ppe_documents ${sql(payload)}
+          ON CONFLICT (document_type, document_no) DO UPDATE SET
+            form_data = EXCLUDED.form_data,
+            status = CASE WHEN ppe_documents.status = 'approved' THEN ppe_documents.status ELSE EXCLUDED.status END,
+            updated_at = now()
+          RETURNING *
+        `;
+        if (!row) throw new Error("Unable to save this form.");
+        return row;
+      },
+      async () => {
+        const query = `select=*&document_type=eq.${encodeURIComponent(type)}&document_no=eq.${encodeURIComponent(number)}&limit=1`;
+        const [existing] = await sbSelect<any>("ppe_documents", query);
+        if (existing?.status === "approved") throw new Error("Approved form is locked and cannot be changed.");
+        if (existing) {
+          const [row] = await sbUpdate<any>("ppe_documents", `id=eq.${encodeURIComponent(existing.id)}`, payload, getRestWriteConfig());
+          return row;
+        }
+        return sbInsert("ppe_documents", payload, getRestWriteConfig());
+      },
+    );
+  });
+
+export const approvePpeDocument = createServerFn({ method: "POST" })
+  .inputValidator((d: any) => d)
+  .handler(async ({ data }) => {
+    const id = String(data.id || "");
+    if (!id) throw new Error("Save form before approval.");
+    return withDbFallback(
+      async (sql) => sql.begin(async (tx: any) => {
+        const [doc] = await tx`SELECT * FROM ppe_documents WHERE id = ${id} FOR UPDATE`;
+        if (!doc) throw new Error("Form not found.");
+        if (doc.status === "approved") return doc;
+        const form = doc.form_data || {};
+        const rows = Array.isArray(form.items) ? form.items.filter((line: any) => line.itemId) : [];
+        const actorId = data.created_by || doc.created_by || null;
+        const actorName = data.created_by_name || doc.created_by_name || "";
+        if (doc.document_type === "par") {
+          const [par] = await tx`
+            INSERT INTO par_forms (par_no, accountable_person, office, created_by, created_by_name)
+            VALUES (${doc.document_no}, ${form.accountablePerson || ""}, ${form.office || null}, ${actorId}, ${actorName})
+            ON CONFLICT (par_no) DO UPDATE SET accountable_person = EXCLUDED.accountable_person, office = EXCLUDED.office
+            RETURNING id
+          `;
+          for (const line of rows) {
+            const [existing] = await tx`SELECT id FROM par_items WHERE par_id = ${par.id} AND item_id = ${line.itemId} LIMIT 1`;
+            if (!existing) {
+              const quantity = Math.max(Number(line.quantity || 1), 0);
+              await tx`INSERT INTO par_items (par_id,item_id,quantity,unit_cost,remarks) VALUES (${par.id}, ${line.itemId}::uuid, ${quantity}, ${Number(line.unitCost || 0)}, ${line.remarks || null})`;
+              await tx`UPDATE items SET accountability_status = 'issued', issued_quantity = coalesce(issued_quantity,0) + ${quantity} WHERE id = ${line.itemId}::uuid`;
+            }
+          }
+        }
+        for (const line of ["ptr", "iirup", "rlsddp", "rrpe"].includes(doc.document_type) ? rows : []) {
+          const itemId = String(line.itemId);
+          const quantity = Math.max(Number(line.quantity || 1), 0);
+          const eventType = doc.document_type === "ptr" ? "transferred" : doc.document_type === "rrpe" ? "returned" : doc.document_type === "iirup" ? "disposed" : ({ Lost: "lost", Stolen: "lost", Damaged: "damaged", Destroyed: "disposed" } as Record<string, string>)[form.propertyStatus] || "damaged";
+          const from = form.fromAccountableOfficer || form.accountableOfficer || form.returnedBy || null;
+          const to = doc.document_type === "ptr" ? form.toAccountableOfficer || null : doc.document_type === "rrpe" ? form.receivedBy || "Property Custodian" : null;
+          const notes = [form.circumstances, form.reasonForTransfer, form.remarks].filter(Boolean).join(" | ") || null;
+          await tx`INSERT INTO accountability_events (item_id,quantity,event_type,reference_no,reported_by,from_custodian,to_custodian,notes,created_by,created_by_name) VALUES (${itemId}::uuid,${quantity},${eventType},${doc.document_no},${actorName},${from},${to},${notes},${actorId},${actorName})`;
+          if (doc.document_type === "ptr") {
+            if (form.previousParNo || form.parNo) await tx`UPDATE par_forms SET status='cancelled' WHERE par_no=${form.previousParNo || form.parNo} AND status='issued'`;
+            else await tx`UPDATE par_forms SET status='cancelled' WHERE id IN (SELECT par_id FROM par_items WHERE item_id=${itemId}::uuid) AND status='issued'`;
+            const newParNo = `${doc.document_no}-PAR`;
+            const [newPar] = await tx`INSERT INTO par_forms (par_no,accountable_person,office,created_by,created_by_name) VALUES (${newParNo},${to || ""},${form.toOffice || null},${actorId},${actorName}) ON CONFLICT (par_no) DO UPDATE SET accountable_person=EXCLUDED.accountable_person, office=EXCLUDED.office RETURNING id`;
+            const [existing] = await tx`SELECT id FROM par_items WHERE par_id=${newPar.id} AND item_id=${itemId}::uuid LIMIT 1`;
+            if (!existing) await tx`INSERT INTO par_items (par_id,item_id,quantity,unit_cost,remarks) VALUES (${newPar.id},${itemId}::uuid,${quantity},${Number(line.unitCost || 0)},${line.remarks || null})`;
+            await tx`UPDATE items SET accountability_status='issued' WHERE id=${itemId}::uuid`;
+          } else if (doc.document_type === "rrpe") {
+            if (form.parNo) await tx`UPDATE par_forms SET status='returned' WHERE par_no=${form.parNo} AND status='issued'`;
+            else await tx`UPDATE par_forms SET status='returned' WHERE id IN (SELECT par_id FROM par_items WHERE item_id=${itemId}::uuid) AND status='issued'`;
+            await tx`UPDATE items SET accountability_status='returned', issued_quantity=greatest(coalesce(issued_quantity,0)-${quantity},0), returned_quantity=coalesce(returned_quantity,0)+${quantity} WHERE id=${itemId}::uuid`;
+            await tx`INSERT INTO transactions (item_id,type,quantity,staff_name,remarks,source_form_type,source_form_id) VALUES (${itemId}::uuid,'IN',${quantity},${actorName},${`RRPE ${doc.document_no} | Return from ${form.returnedBy || ""}`},'RRPE',${id}::uuid)`;
+          } else {
+            if (form.previousParNo || form.parNo) await tx`UPDATE par_forms SET status='cancelled' WHERE par_no=${form.previousParNo || form.parNo} AND status='issued'`;
+            else await tx`UPDATE par_forms SET status='cancelled' WHERE id IN (SELECT par_id FROM par_items WHERE item_id=${itemId}::uuid) AND status='issued'`;
+            const nextStatus = eventType === "lost" ? "lost" : eventType === "damaged" ? "damaged" : "disposed";
+            await tx`UPDATE items SET accountability_status=${nextStatus}, issued_quantity=greatest(coalesce(issued_quantity,0)-${quantity},0) WHERE id=${itemId}::uuid`;
+          }
+        }
+        const [approved] = await tx`UPDATE ppe_documents SET status='approved',updated_at=now() WHERE id=${id} RETURNING *`;
+        return approved;
+      }),
+      async () => sbRpc("approve_ppe_document", { p_document_id: id, p_actor_id: data.created_by || null, p_actor_name: data.created_by_name || "" }, getRestWriteConfig()),
     );
   });
 

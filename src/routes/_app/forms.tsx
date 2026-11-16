@@ -27,6 +27,7 @@ import { PageHeader } from "@/components/layout/AppShell";
 import { SummaryActions } from "@/components/common/SummaryActions";
 import { FUND_CLUSTER_OPTIONS, FundClusterControl } from "@/components/common/FundClusterControl";
 import { ItemDialog } from "@/components/inventory/ItemDialog";
+import { PpeDocumentFlow, type PpeDocumentType } from "@/components/forms/PpeDocumentFlow";
 import { exportCSV } from "@/lib/export";
 import { useAuth } from "@/contexts/AuthContext";
 import { sbSelect } from "@/lib/supabase-rest";
@@ -35,6 +36,8 @@ import {
   createIcsForm,
   createIcsItem,
   listAccountabilityEvents,
+  listPpeDocuments,
+  listParForms,
   listIcsForms,
   createFormsFlowBackup,
   createParForm,
@@ -62,7 +65,7 @@ export const Route = createFileRoute("/_app/forms")({
   component: FormsFlow,
 });
 
-type FlowTab = "iar" | "stock-card" | "ris" | "ics" | "rsmi" | "rpci" | "rspi" | "regspi";
+type FlowTab = "iar" | "stock-card" | "ris" | "ics" | "rsmi" | "rpci" | "rspi" | "regspi" | PpeDocumentType;
 type PropertyFlow = "supplies" | "semi-expendable" | "ppe";
 type ViewMode = "preview" | "split";
 type Orientation = "portrait" | "landscape";
@@ -324,7 +327,8 @@ function FormsFlow() {
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [orientation, setOrientation] = useState<Orientation>("portrait");
   useEffect(() => {
-    if (tab === "regspi") setOrientation("landscape");
+    if (["regspi", "ppe-ledger", "rpcppe", "iirup"].includes(tab)) setOrientation("landscape");
+    else if (["par", "ptr", "rlsddp", "rrpe"].includes(tab)) setOrientation("portrait");
   }, [tab]);
   const [zoom, setZoom] = useState(1);
   const [selectedItemId, setSelectedItemId] = useState("");
@@ -577,6 +581,53 @@ function FormsFlow() {
     () => getIarItemIdsForCluster(transactions, iarForms, activeFundCluster),
     [transactions, iarForms, activeFundCluster],
   );
+  const risItemClusters = useMemo(
+    () => getIarItemClusters(transactions, iarForms),
+    [transactions, iarForms],
+  );
+
+  // Keep the RIS Fund Cluster in sync with the inventory fund cluster of the
+  // items selected on the RIS lines (e.g. inventory 01-MOOE => form shows 01-MOOE).
+  useEffect(() => {
+    const validRisLines = risLines.filter(
+      (line) => line.item_id && Number(line.quantity) > 0,
+    );
+    if (validRisLines.length === 0) return;
+    const resolvedCluster = resolveRisClusterFromLines(
+      validRisLines,
+      risItemClusters,
+    );
+    if (!resolvedCluster) return;
+    if (
+      normalizeFundCluster(risFundCluster) !==
+      normalizeFundCluster(resolvedCluster)
+    ) {
+      setFormsFundCluster(resolvedCluster);
+    }
+  }, [risLines, risItemClusters, risFundCluster]);
+
+  // Block manual Fund Cluster picks that conflict with the inventory fund
+  // cluster of the selected RIS line items (e.g. inventory 01-MOOE must not be
+  // switched to 06-SSP, and vice versa).
+  function setRisFundCluster(value: string) {
+    const validRisLines = risLines.filter(
+      (line) => line.item_id && Number(line.quantity) > 0,
+    );
+    const resolvedCluster =
+      validRisLines.length > 0
+        ? resolveRisClusterFromLines(validRisLines, risItemClusters)
+        : "";
+    if (
+      resolvedCluster &&
+      normalizeFundCluster(value) !== normalizeFundCluster(resolvedCluster)
+    ) {
+      toast.error(
+        `Fund cluster cannot be "${value}"; the selected inventory items are "${resolvedCluster}".`,
+      );
+      return;
+    }
+    setFormsFundCluster(value);
+  }
 
   useEffect(() => {
     if (draftRestored.current) return;
@@ -869,6 +920,16 @@ function FormsFlow() {
     queryFn: () => listAccountabilityEvents() as Promise<RegspiAccountabilityEvent[]>,
     enabled: tab === "regspi",
   });
+  const { data: ppeDocuments = [], refetch: refetchPpeDocuments } = useQuery({
+    queryKey: ["ppe-documents"],
+    queryFn: () => listPpeDocuments() as Promise<any[]>,
+    enabled: propertyFlow === "ppe",
+  });
+  const { data: ppeParForms = [], refetch: refetchPpeParForms } = useQuery({
+    queryKey: ["par-forms"],
+    queryFn: () => listParForms() as Promise<any[]>,
+    enabled: propertyFlow === "ppe" && tab === "par",
+  });
   const semiExRows = useMemo(
     () => [
       ...rsmiRows,
@@ -1007,7 +1068,7 @@ function FormsFlow() {
       invoiceNo: "",
     });
     setIarLines(Array.from({ length: 4 }, blankLine));
-    setTab(propertyFlow === "supplies" ? "stock-card" : "iar");
+    setTab(propertyFlow === "semi-expendable" ? "iar" : "stock-card");
   }
 
   async function saveRis() {
@@ -1075,6 +1136,15 @@ function FormsFlow() {
       if (!acceptedStockItems.some((candidate: Item) => candidate.id === line.item_id)) {
         return toast.error("RIS can only issue items that were accepted through IAR and still have stock.");
       }
+    }
+    const risInventoryCluster = resolveRisClusterFromLines(validLines, risItemClusters);
+    if (
+      risInventoryCluster &&
+      normalizeFundCluster(risInventoryCluster) !== normalizeFundCluster(risFundCluster)
+    ) {
+      return toast.error(
+        `Fund cluster must be "${risInventoryCluster}" to match the selected inventory items before issuing.`,
+      );
     }
     for (const { item, quantity: requestedQuantity, available } of requestedByLot.values()) {
       if (Number(item.quantity) <= 0) {
@@ -1451,7 +1521,8 @@ function FormsFlow() {
                   tab === "rsmi" ||
                   tab === "rpci" ||
                   tab === "rspi" ||
-                  tab === "regspi"
+                  tab === "regspi" ||
+                  isPpeDocumentTab(tab)
                 }
                 className="flow-header-btn h-10"
               >
@@ -1514,7 +1585,28 @@ function FormsFlow() {
           }
         >
           <main className="min-w-0">
-            {viewMode === "split" && tab === "rsmi" ? (
+            {propertyFlow === "ppe" && isPpeDocumentTab(tab) ? (
+              <PpeDocumentFlow
+                key={tab}
+                type={tab}
+                orientation={orientation}
+                zoom={zoom}
+                items={items}
+                movements={transactions}
+                iarForms={iarForms}
+                fundClusterOptions={iarFundClusterOptions.length ? iarFundClusterOptions : undefined}
+                documents={ppeDocuments}
+                parForms={ppeParForms}
+                canWrite={canWrite}
+                userId={user?.id}
+                userName={userName}
+                onRefresh={() => {
+                  void refetchPpeDocuments();
+                  void refetchPpeParForms();
+                  void refreshFlow();
+                }}
+              />
+            ) : viewMode === "split" && tab === "rsmi" ? (
               <div className="flex flex-col gap-4">
                 <EntryPanel
                   tab={tab}
@@ -1593,7 +1685,7 @@ function FormsFlow() {
                     stockCardFundCluster={stockCardFundCluster}
                     setStockCardFundCluster={setFormsFundCluster}
                     risFundCluster={risFundCluster}
-                    setRisFundCluster={setFormsFundCluster}
+                    setRisFundCluster={setRisFundCluster}
                     selectedItemId={selectedItemId}
                     setSelectedItemId={setSelectedItemId}
                     stockRows={stockRows}
@@ -1713,7 +1805,7 @@ function FormsFlow() {
                     stockCardFundCluster={stockCardFundCluster}
                     setStockCardFundCluster={setFormsFundCluster}
                     risFundCluster={risFundCluster}
-                    setRisFundCluster={setFormsFundCluster}
+                    setRisFundCluster={setRisFundCluster}
                     selectedItemId={selectedItemId}
                     setSelectedItemId={setSelectedItemId}
                     stockRows={stockRows}
@@ -1876,7 +1968,18 @@ function FoundationStepper({
         { label: "RSPI", detail: "Registry of Semi-Expendable Property Issued", tab: "rspi" as const, icon: FileSpreadsheet },
         { label: "RegSPI", detail: "Registry of Semi-Expendable Property", tab: "regspi" as const, icon: FileSpreadsheet },
       ]
-    : [
+    : propertyFlow === "ppe" ? [
+        { label: "IAR", detail: "Inspection and acceptance", tab: "iar" as const, icon: PackageCheck },
+        { label: "PPELC", detail: "PPE ledger card", tab: "ppe-ledger" as const, icon: FileSpreadsheet },
+        { label: "PC", detail: "Property card", tab: "stock-card" as const, icon: FileSpreadsheet },
+        { label: "RIS", detail: "Property issuance request", tab: "ris" as const, icon: Send },
+        { label: "PAR", detail: "Property acknowledgment receipt", tab: "par" as const, icon: FileCheck2 },
+        { label: "PTR", detail: "Property transfer report", tab: "ptr" as const, icon: Send },
+        { label: "RPCPPE", detail: "Physical count report", tab: "rpcppe" as const, icon: FileSpreadsheet },
+        { label: "IIRUP", detail: "Unserviceable property report", tab: "iirup" as const, icon: FileText },
+        { label: "RLSDDP", detail: "Lost/damaged property report", tab: "rlsddp" as const, icon: FileText },
+        { label: "RRPE", detail: "Return/receipt of property", tab: "rrpe" as const, icon: FileCheck2 },
+      ] : [
         { label: "IAR", detail: "Inspection and acceptance", tab: "iar" as const, icon: PackageCheck },
         { label: "Property Card", detail: "Individual property ledger", tab: "stock-card" as const, icon: FileSpreadsheet },
         { label: "RIS", detail: "Property issuance request", tab: "ris" as const, icon: Send },
@@ -1886,7 +1989,7 @@ function FoundationStepper({
 
   return (
     <section className="rounded-xl border border-border bg-card p-2 shadow-sm">
-      <div className="grid gap-2 lg:grid-cols-6">
+      <div className={`grid gap-2 ${propertyFlow === "ppe" ? "md:grid-cols-5 xl:grid-cols-10" : "lg:grid-cols-6"}`}>
         {stages.map((stage) => {
           const Icon = stage.icon;
           const isActive = stage.tab === active;
@@ -2699,6 +2802,7 @@ function PaperPreview({
             <StockCardPaper
               orientation={orientation}
               isSemiExpendable={propertyFlow === "semi-expendable"}
+              isPpe={propertyFlow === "ppe"}
               items={stockCardItems}
               item={selectedItem ?? stockCardItems[0]}
               fundCluster={stockCardFundCluster}
@@ -3190,6 +3294,7 @@ function StockCardPaper({
   rows,
   editable,
   isSemiExpendable,
+  isPpe,
 }: {
   orientation: Orientation;
   items: Item[];
@@ -3201,8 +3306,9 @@ function StockCardPaper({
   rows: StockRow[];
   editable: boolean;
   isSemiExpendable: boolean;
+  isPpe: boolean;
 }) {
-  const title = isSemiExpendable ? "Semi-Expendable Property Card" : "Stock Card";
+  const title = isPpe ? "Property Card" : isSemiExpendable ? "Semi-Expendable Property Card" : "Stock Card";
   return (
     <div className={`flow-paper ${orientation} stock-paper`}>
       <div className="paper-title-dark">{title}</div>
@@ -3259,7 +3365,7 @@ function StockCardPaper({
             <>
               <tr>
                 <td colSpan={5}>
-                  <strong>Item :</strong>{" "}
+                  <strong>{isPpe ? "Property :" : "Item :"}</strong>{" "}
                   {editable ? (
                     <ItemLookup
                       items={items}
@@ -3279,7 +3385,7 @@ function StockCardPaper({
                   )}
                 </td>
                 <td>
-                  <strong>Stock No. :</strong>{" "}
+                  <strong>{isPpe ? "Property No. :" : "Stock No. :"}</strong>{" "}
                   <span className="strong">{item?.stock_number || ""}</span>
                 </td>
                 <td>
@@ -6022,7 +6128,18 @@ function activeStageLabel(tab: FlowTab) {
   if (tab === "rpci") return "RPCI";
   if (tab === "rspi") return "RSPI";
   if (tab === "regspi") return "RegSPI";
+  if (tab === "ppe-ledger") return "PPELC";
+  if (tab === "par") return "PAR";
+  if (tab === "ptr") return "PTR";
+  if (tab === "rpcppe") return "RPCPPE";
+  if (tab === "iirup") return "IIRUP";
+  if (tab === "rlsddp") return "RLSDDP";
+  if (tab === "rrpe") return "RRPE";
   return "RSMI";
+}
+
+function isPpeDocumentTab(tab: FlowTab): tab is PpeDocumentType {
+  return ["ppe-ledger", "par", "ptr", "rpcppe", "iirup", "rlsddp", "rrpe"].includes(tab);
 }
 
 function itemMatchesPropertyFlow(item: Item, flow: PropertyFlow) {
@@ -6196,6 +6313,21 @@ function getIarItemClusters(
 
 function inferLegacyIssueCluster(clusters?: Set<string>) {
   return clusters?.size === 1 ? [...clusters][0] : "";
+}
+
+function resolveRisClusterFromLines(
+  lines: Line[],
+  itemClusters: Map<string, Set<string>>,
+): string {
+  const clusters = new Set<string>();
+  for (const line of lines) {
+    if (!line.item_id) continue;
+    const itemClusterSet = itemClusters.get(line.item_id);
+    if (itemClusterSet?.size) {
+      for (const cluster of itemClusterSet) clusters.add(cluster);
+    }
+  }
+  return clusters.size === 1 ? [...clusters][0] : "";
 }
 
 function normalizeFundCluster(value: unknown) {

@@ -36,7 +36,9 @@ export function ItemDialog({
     description: editing?.description ?? initialDescription,
     category_id: editing?.category_id ?? "",
     supplier_id: editing?.supplier_id ?? "",
-    item_type: editing?.item_type ?? (propertyFlow === "supplies" ? "supply" : "material"),
+    item_type: editing?.inventory_classification === "ppe"
+      ? "ppe"
+      : editing?.item_type ?? (propertyFlow === "supplies" ? "supply" : propertyFlow === "ppe" ? "ppe" : "material"),
     acquisition_cost: editing?.acquisition_cost ?? (propertyFlow === "supplies" ? 0 : propertyFlow === "ppe" ? 50000 : 10000),
     unit: editing?.unit ?? "pieces",
     reorder_level: editing?.reorder_level ?? 10,
@@ -51,7 +53,10 @@ export function ItemDialog({
 
   useEffect(() => setLocalCats(cats || []), [cats]);
 
-  const dialogClassification = classifyInventoryItem(form.item_type, form.acquisition_cost);
+  const dialogClassification = classifyInventoryItem(
+    form.item_type === "ppe" ? "material" : form.item_type,
+    form.acquisition_cost,
+  );
 
   async function createCategoryInline() {
     const name = newCategory.trim();
@@ -83,7 +88,7 @@ export function ItemDialog({
       category_id: form.category_id || null,
       category_name: localCats.find((category: any) => String(category.id) === String(form.category_id))?.name || null,
       supplier_id: form.supplier_id || null,
-      item_type: form.item_type || "supply",
+      item_type: form.item_type === "ppe" ? "material" : form.item_type || "supply",
       acquisition_cost: Number(form.acquisition_cost) || 0,
       unit: form.unit,
       reorder_level: Number(form.reorder_level) || 10,
@@ -148,8 +153,9 @@ export function ItemDialog({
               setForm((current: any) => ({
                 ...current,
                 item_type: val,
-                // Set default acquisition cost based on type so classification trigger works
+                // PPE is a distinct UI choice; database stores it as material at capitalization threshold.
                 acquisition_cost: val === "supply" ? 0 : val === "material" && current.item_type !== val ? 10000 : current.acquisition_cost,
+                ...(val === "ppe" ? { acquisition_cost: 50000 } : {}),
               }));
             }}>
               {propertyFlow === "supplies" || !propertyFlow ? (
@@ -159,7 +165,7 @@ export function ItemDialog({
                 <option value="material">Semi-Expendable Property</option>
               ) : null}
               {propertyFlow === "ppe" || !propertyFlow ? (
-                <option value="material">Property, Plant & Equipment</option>
+                <option value="ppe">Property, Plant & Equipment</option>
               ) : null}
             </select>
           </Field>

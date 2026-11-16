@@ -160,8 +160,9 @@ export async function sbDelete(
 export async function sbRpc<T = any>(
   fn: string,
   params: Record<string, unknown> = {},
+  writeCfg: { url: string; key: string } | null = null,
 ): Promise<T> {
-  const cfg = getRestConfig();
+  const cfg = writeCfg || getRestConfig();
   if (!cfg) throw new Error("Supabase REST config missing");
   const res = await fetch(`${cfg.url}/rest/v1/rpc/${fn}`, {
     method: "POST",
