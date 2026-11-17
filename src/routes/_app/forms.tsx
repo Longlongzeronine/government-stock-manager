@@ -28,9 +28,7 @@ import { SummaryActions } from "@/components/common/SummaryActions";
 import { FUND_CLUSTER_OPTIONS, FundClusterControl } from "@/components/common/FundClusterControl";
 import { ItemDialog } from "@/components/inventory/ItemDialog";
 import { PpeDocumentFlow, type PpeDocumentType } from "@/components/forms/PpeDocumentFlow";
-import { exportCSV } from "@/lib/export";
 import { useAuth } from "@/contexts/AuthContext";
-import { sbSelect } from "@/lib/supabase-rest";
 import {
   postIar,
   createIcsForm,
@@ -64,7 +62,6 @@ export const Route = createFileRoute("/_app/forms")({
   head: () => ({ meta: [{ title: "Forms Flow - Supplify" }] }),
   component: FormsFlow,
 });
-
 type FlowTab = "iar" | "stock-card" | "ris" | "ics" | "rsmi" | "rpci" | "rspi" | "regspi" | PpeDocumentType;
 type PropertyFlow = "supplies" | "semi-expendable" | "ppe";
 type ViewMode = "preview" | "split";
@@ -1557,6 +1554,16 @@ function FormsFlow() {
               </button>
               <span className="w-12 text-center text-sm font-semibold tabular-nums">
                 {Math.round(zoom * 100)}%
+
+<PpeDocumentFlow
+  document={form}
+  type={documentType}
+  loaded={loaded}
+  savedStatus={savedStatus}
+  isPpeDocumentTab={isPpeDocumentTab}
+  recordId={recordId}
+  setRecordId={setRecordId}
+/>
               </span>
               <button
                 className="flow-icon h-full aspect-square"
