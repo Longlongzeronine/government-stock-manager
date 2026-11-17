@@ -324,8 +324,8 @@ function FormsFlow() {
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [orientation, setOrientation] = useState<Orientation>("portrait");
   useEffect(() => {
-    if (["regspi", "ppe-ledger", "rpcppe", "iirup"].includes(tab)) setOrientation("landscape");
-    else if (["par", "ptr", "rlsddp", "rrpe"].includes(tab)) setOrientation("portrait");
+    if (["regspi", "ppe-ledger", "splc", "rpcppe", "rpcsp", "iirup"].includes(tab)) setOrientation("landscape");
+    else if (["par", "ptr", "itr", "rlsddp", "rrpe"].includes(tab)) setOrientation("portrait");
   }, [tab]);
   const [zoom, setZoom] = useState(1);
   const [selectedItemId, setSelectedItemId] = useState("");
@@ -686,9 +686,9 @@ function FormsFlow() {
   const stockBalanceItems = useMemo(
     () => pickerItems.map((item) => ({
       ...item,
-      quantity: getStockRows(item, transactions).at(-1)?.balance ?? (Number(item.quantity) || 0),
+      quantity: getStockRows(item, transactions, activeFundCluster, iarForms).at(-1)?.balance ?? (Number(item.quantity) || 0),
     })),
-    [pickerItems, transactions],
+    [pickerItems, transactions, activeFundCluster, iarForms],
   );
   const acceptedStockItems = useMemo(
     () => getAcceptedStockItems(stockBalanceItems, transactions).filter((item) => clusterItemIds.has(item.id)),
@@ -713,8 +713,8 @@ function FormsFlow() {
     (item: Item) => item.id === selectedItemId,
   );
   const stockRows = useMemo(
-    () => getStockRows(selectedItem, transactions),
-    [selectedItem, transactions],
+    () => getStockRows(selectedItem, transactions, activeFundCluster, iarForms),
+    [selectedItem, transactions, activeFundCluster, iarForms],
   );
   useEffect(() => {
     if (!selectedItem || icsLines.length === 0) return;
@@ -920,7 +920,7 @@ function FormsFlow() {
   const { data: ppeDocuments = [], refetch: refetchPpeDocuments } = useQuery({
     queryKey: ["ppe-documents"],
     queryFn: () => listPpeDocuments() as Promise<any[]>,
-    enabled: propertyFlow === "ppe",
+    enabled: propertyFlow === "ppe" || propertyFlow === "semi-expendable",
   });
   const { data: ppeParForms = [], refetch: refetchPpeParForms } = useQuery({
     queryKey: ["par-forms"],
@@ -931,7 +931,7 @@ function FormsFlow() {
     () => [
       ...rsmiRows,
       ...getRegspiReissueRows(transactions, reportMonth, activeFundCluster, iarForms),
-      ...getRegspiAccountabilityRows(regspiEvents, reportMonth),
+      ...getRegspiAccountabilityRows(regspiEvents, reportMonth, activeFundCluster, transactions, iarForms),
     ]
       .filter((row) => row.inventoryClassification === "semi_expendable_property")
       .map((row) => {
@@ -1592,10 +1592,11 @@ function FormsFlow() {
           }
         >
           <main className="min-w-0">
-            {propertyFlow === "ppe" && isPpeDocumentTab(tab) ? (
+            {isPpeDocumentTab(tab) && (propertyFlow === "ppe" || (propertyFlow === "semi-expendable" && ["splc", "itr", "iirup", "rlsddp", "rrpe", "rpcsp"].includes(tab))) ? (
               <PpeDocumentFlow
                 key={tab}
                 type={tab}
+                propertyFlow={propertyFlow}
                 orientation={orientation}
                 zoom={zoom}
                 items={items}
@@ -1969,11 +1970,17 @@ function FoundationStepper({
   const stages = isSemiExpendable
     ? [
         { label: "IAR", detail: "Inspection and acceptance", tab: "iar" as const, icon: PackageCheck },
+        { label: "SPLC", detail: "Semi-expendable property ledger card", tab: "splc" as const, icon: FileSpreadsheet },
         { label: "SPC", detail: "Semi-expendable property card", tab: "stock-card" as const, icon: FileSpreadsheet },
         { label: "RIS", detail: "Property issuance request", tab: "ris" as const, icon: Send },
         { label: "ICS", detail: "Inventory Custodian Slip", tab: "ics" as const, icon: FileCheck2 },
+        { label: "ITR", detail: "Inventory Transfer Report", tab: "itr" as const, icon: Send },
         { label: "RSPI", detail: "Registry of Semi-Expendable Property Issued", tab: "rspi" as const, icon: FileSpreadsheet },
         { label: "RegSPI", detail: "Registry of Semi-Expendable Property", tab: "regspi" as const, icon: FileSpreadsheet },
+        { label: "IIRUP", detail: "Unserviceable property report", tab: "iirup" as const, icon: FileText },
+        { label: "RLSDDP", detail: "Lost/damaged property report", tab: "rlsddp" as const, icon: FileText },
+        { label: "RRPE", detail: "Return/receipt of property", tab: "rrpe" as const, icon: FileCheck2 },
+        { label: "RPCSP", detail: "Physical count of semi-expendable property", tab: "rpcsp" as const, icon: FileSpreadsheet },
       ]
     : propertyFlow === "ppe" ? [
         { label: "IAR", detail: "Inspection and acceptance", tab: "iar" as const, icon: PackageCheck },
@@ -6018,11 +6025,16 @@ function getPreviewLine(
 function getStockRows(
   item: Item | undefined,
   transactions: Transaction[],
+  fundCluster?: string,
+  iarForms: IarFormRecord[] = [],
 ): StockRow[] {
   if (!item) return [];
+  const itemClusters = fundCluster ? getIarItemClusters(transactions, iarForms) : undefined;
   const itemTransactions = transactions.filter(
     (tx) =>
-      tx.item_id === item.id && (isIarTransaction(tx) || isRisTransaction(tx)),
+      tx.item_id === item.id &&
+      (isIarTransaction(tx) || isRisTransaction(tx)) &&
+      (!fundCluster || getTransactionFundCluster(tx, iarForms, itemClusters) === normalizeFundCluster(fundCluster)),
   );
   // Stock Card is a transaction ledger: start at zero and apply each receipt
   // or issue once. Using items.quantity here invents opening stock when that
@@ -6032,6 +6044,25 @@ function getStockRows(
     balance += tx.type === "IN" ? tx.quantity : -tx.quantity;
     return { ...tx, balance };
   });
+}
+
+function getTransactionFundCluster(
+  tx: Transaction,
+  iarForms: IarFormRecord[],
+  itemClusters?: Map<string, Set<string>>,
+) {
+  const transactionCluster = normalizeFundCluster(extractFundCluster(tx.remarks));
+  if (transactionCluster) return transactionCluster;
+  if (isIarTransaction(tx)) {
+    const linkedForm = tx.source_form_id
+      ? iarForms.find((form) => form.id === tx.source_form_id)
+      : undefined;
+    const iarNo = extractReference(tx.remarks).replace(/^IAR\s*/i, "").trim();
+    const byNumber = linkedForm || iarForms.find((form) => String(form.iar_no || "").trim() === iarNo);
+    const formCluster = normalizeFundCluster(byNumber?.form_data?.fund_cluster);
+    if (formCluster) return formCluster;
+  }
+  return inferLegacyIssueCluster(itemClusters?.get(tx.item_id));
 }
 
 function getAcceptedStockItems(items: Item[], transactions: Transaction[]) {
@@ -6130,6 +6161,7 @@ function getFlowStats(
 function activeStageLabel(tab: FlowTab) {
   if (tab === "iar") return "IAR";
   if (tab === "stock-card") return "Stock Card";
+  if (tab === "splc") return "SPLC";
   if (tab === "ris") return "RIS";
   if (tab === "ics") return "ICS";
   if (tab === "rpci") return "RPCI";
@@ -6142,11 +6174,13 @@ function activeStageLabel(tab: FlowTab) {
   if (tab === "iirup") return "IIRUP";
   if (tab === "rlsddp") return "RLSDDP";
   if (tab === "rrpe") return "RRPE";
+  if (tab === "itr") return "ITR";
+  if (tab === "rpcsp") return "RPCSP";
   return "RSMI";
 }
 
 function isPpeDocumentTab(tab: FlowTab): tab is PpeDocumentType {
-  return ["ppe-ledger", "par", "ptr", "rpcppe", "iirup", "rlsddp", "rrpe"].includes(tab);
+  return ["ppe-ledger", "par", "ptr", "rpcppe", "iirup", "rlsddp", "rrpe", "splc", "itr", "rpcsp"].includes(tab);
 }
 
 function itemMatchesPropertyFlow(item: Item, flow: PropertyFlow) {
@@ -6174,7 +6208,7 @@ function getRsmiRows(
       (tx) =>
         tx.type === "OUT" &&
         isRisTransaction(tx) &&
-        (extractFundCluster(tx.remarks) || inferLegacyIssueCluster(itemClusters.get(tx.item_id))) === fundCluster &&
+        normalizeFundCluster(extractFundCluster(tx.remarks) || inferLegacyIssueCluster(itemClusters.get(tx.item_id))) === normalizeFundCluster(fundCluster) &&
         dateKey(tx.created_at) === reportMonth,
     )
     .map((tx) => {
@@ -6213,7 +6247,7 @@ function getRegspiReissueRows(
       tx.type === "OUT" &&
       tx.source_form_type === "RSPI" &&
       tx.item?.inventory_classification === "semi_expendable_property" &&
-      (extractFundCluster(tx.remarks) || inferLegacyIssueCluster(itemClusters.get(tx.item_id))) === fundCluster &&
+      normalizeFundCluster(extractFundCluster(tx.remarks) || inferLegacyIssueCluster(itemClusters.get(tx.item_id))) === normalizeFundCluster(fundCluster) &&
       dateKey(tx.created_at) === reportMonth,
     )
     .map((tx) => {
@@ -6244,11 +6278,17 @@ function getRegspiReissueRows(
 function getRegspiAccountabilityRows(
   events: RegspiAccountabilityEvent[],
   reportMonth: string,
+  fundCluster: string,
+  transactions: Transaction[],
+  iarForms: IarFormRecord[],
 ): RsmiRow[] {
+  const itemClusters = getIarItemClusters(transactions, iarForms);
+  const selectedCluster = normalizeFundCluster(fundCluster);
   return events
     .filter((event) =>
       (event.event_type === "returned" || event.event_type === "disposed") &&
       event.inventory_classification === "semi_expendable_property" &&
+      [...(itemClusters.get(event.item_id) || [])].some((cluster) => normalizeFundCluster(cluster) === selectedCluster) &&
       dateKey(event.created_at) === reportMonth,
     )
     .map((event) => {
@@ -6281,9 +6321,10 @@ function getIarItemIdsForCluster(
   iarForms: IarFormRecord[],
   fundCluster: string,
 ): Set<string> {
+  const selectedCluster = normalizeFundCluster(fundCluster);
   return new Set(
     [...getIarItemClusters(transactions, iarForms).entries()]
-      .filter(([, clusters]) => clusters.has(fundCluster))
+      .filter(([, clusters]) => [...clusters].some((cluster) => normalizeFundCluster(cluster) === selectedCluster))
       .map(([itemId]) => itemId),
   );
 }
@@ -6309,7 +6350,9 @@ function getIarItemClusters(
         : undefined;
       const iarNo = extractReference(tx.remarks).replace(/^IAR\s*/i, "").trim();
       const form = linkedForm || formsByNumber.get(iarNo);
-      const cluster = normalizeFundCluster(form?.form_data?.fund_cluster);
+      const cluster =
+        normalizeFundCluster(form?.form_data?.fund_cluster) ||
+        normalizeFundCluster(extractFundCluster(tx.remarks));
       if (!cluster) return;
       const clusters = itemClusters.get(tx.item_id) || new Set<string>();
       clusters.add(cluster);
@@ -6379,6 +6422,7 @@ function getRpciRows(
           (transaction) =>
             transaction.item_id === item.id &&
             (isIarTransaction(transaction) || isRisTransaction(transaction)) &&
+            getTransactionFundCluster(transaction, iarForms, itemClusters) === selectedCluster &&
             new Date(transaction.created_at).getTime() > periodEnd.getTime(),
         )
         .reduce(
@@ -6389,7 +6433,7 @@ function getRpciRows(
               : -Number(transaction.quantity)),
           0,
         );
-      const currentCardBalance = getStockRows(item, transactions).at(-1)?.balance ?? (Number(item.quantity) || 0);
+      const currentCardBalance = getStockRows(item, transactions, fundCluster, iarForms).at(-1)?.balance ?? (Number(item.quantity) || 0);
       const cardBalance = currentCardBalance - movementsAfterYear;
       const entry = entries[item.id];
       const onHand =

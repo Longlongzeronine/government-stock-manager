@@ -2453,6 +2453,8 @@ export const savePpeDocument = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
     const type = String(data.document_type || "");
+    if (!["ppe-ledger", "par", "ptr", "rpcppe", "iirup", "rlsddp", "rrpe", "splc", "itr", "rpcsp"].includes(type))
+      throw new Error("Unsupported property form type.");
     const number = String(data.document_no || "").trim();
     if (!number) throw new Error("Form number is required.");
     const payload = {

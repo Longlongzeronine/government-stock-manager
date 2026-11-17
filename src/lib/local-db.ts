@@ -269,7 +269,7 @@ export async function ensureSchema() {
 
     CREATE TABLE IF NOT EXISTS ppe_documents (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      document_type TEXT NOT NULL CHECK (document_type IN ('ppe-ledger','par','ptr','rpcppe','iirup','rlsddp','rrpe')),
+      document_type TEXT NOT NULL CHECK (document_type IN ('ppe-ledger','par','ptr','rpcppe','iirup','rlsddp','rrpe','splc','itr','rpcsp')),
       document_no TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','approved','cancelled')),
       form_data JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -279,6 +279,9 @@ export async function ensureSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (document_type, document_no)
     );
+    ALTER TABLE ppe_documents DROP CONSTRAINT IF EXISTS ppe_documents_document_type_check;
+    ALTER TABLE ppe_documents ADD CONSTRAINT ppe_documents_document_type_check
+      CHECK (document_type IN ('ppe-ledger','par','ptr','rpcppe','iirup','rlsddp','rrpe','splc','itr','rpcsp'));
     ALTER TABLE items ADD COLUMN IF NOT EXISTS issued_quantity NUMERIC(14,2) NOT NULL DEFAULT 0;
     ALTER TABLE items ADD COLUMN IF NOT EXISTS returned_quantity NUMERIC(14,2) NOT NULL DEFAULT 0;
     ALTER TABLE items ADD COLUMN IF NOT EXISTS last_ics_id UUID;

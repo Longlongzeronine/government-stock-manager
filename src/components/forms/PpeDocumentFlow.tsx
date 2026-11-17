@@ -15,7 +15,10 @@ export type PpeDocumentType =
   | "rpcppe"
   | "iirup"
   | "rlsddp"
-  | "rrpe";
+  | "rrpe"
+  | "splc"
+  | "itr"
+  | "rpcsp";
 
 type PpeItem = {
   id: string;
@@ -66,6 +69,8 @@ type PpeRow = {
   saleAmount: string;
   endUser: string;
   ledgerBalance?: string;
+  repairNature?: string;
+  repairAmount?: string;
 };
 
 type PpeDocument = {
@@ -132,6 +137,9 @@ const TITLES: Record<
     appendix: "Annex 28",
     orientation: "portrait",
   },
+  splc: { title: "SEMI-EXPENDABLE PROPERTY LEDGER CARD", appendix: "Annex A.2", orientation: "landscape" },
+  itr: { title: "INVENTORY TRANSFER REPORT", appendix: "Annex A.5", orientation: "portrait" },
+  rpcsp: { title: "REPORT ON THE PHYSICAL COUNT OF SEMI-EXPENDABLE PROPERTY", appendix: "Annex A.8", orientation: "landscape" },
 };
 
 const ENTITY = "PROVINCIAL TRAINING CENTER - DAVAO DEL NORTE";
@@ -151,8 +159,8 @@ function normalizeFundCluster(value: unknown) {
 
 const today = () => new Date().toISOString().slice(0, 10);
 const numberFor = (type: PpeDocumentType, date = today()) =>
-  type === "ppe-ledger"
-    ? `PPELC-${date}`
+  ["ppe-ledger", "splc"].includes(type)
+    ? `${type === "splc" ? "SPLC" : "PPELC"}-${date}`
     : `0001-${date.slice(5, 7)}-${date.slice(0, 4)}`;
 const blankRow = (itemId = ""): PpeRow => ({
   itemId,
@@ -278,6 +286,33 @@ const FIELD_SETS: Record<
     { key: "returnedBy", label: "Returned by / end user" },
     { key: "receivedBy", label: "Received by / property custodian" },
   ],
+  splc: [
+    { key: "fundCluster", label: "Fund cluster" },
+    { key: "objectAccountCode", label: "UACS object code" },
+    { key: "repairNature", label: "Repair history: nature" },
+    { key: "repairAmount", label: "Repair history: amount" },
+  ],
+  itr: [
+    { key: "fundCluster", label: "Fund cluster" },
+    { key: "fromAccountableOfficer", label: "From accountable officer / agency / fund cluster" },
+    { key: "toAccountableOfficer", label: "To accountable officer / agency / fund cluster" },
+    { key: "transferType", label: "Transfer type", kind: "select", options: ["Donation", "Relocate", "Reassignment", "Others"] },
+    { key: "reasonForTransfer", label: "Reason for transfer" },
+    { key: "approvedBy", label: "Approved by" },
+    { key: "releasedBy", label: "Released / issued by" },
+    { key: "receivedBy", label: "Received by" },
+  ],
+  rpcsp: [
+    { key: "fundCluster", label: "Fund cluster" },
+    { key: "ppeType", label: "Type of semi-expendable property" },
+    { key: "accountableOfficer", label: "Accountable officer" },
+    { key: "designation", label: "Official designation" },
+    { key: "station", label: "Station" },
+    { key: "dateAssumption", label: "Date of assumption", kind: "date" },
+    { key: "certifiedBy", label: "Certified correct by" },
+    { key: "approvedBy", label: "Approved by" },
+    { key: "verifiedBy", label: "Verified by (COA)" },
+  ],
 };
 
 const COLUMNS: Record<
@@ -372,6 +407,25 @@ const COLUMNS: Record<
     { key: "endUser", label: "End-user" },
     { key: "remarks", label: "Remarks" },
   ],
+  splc: [
+    { key: "acquiredDate", label: "Date" }, { key: "reference", label: "Reference" },
+    { key: "quantity", label: "Receipt Qty." }, { key: "unitCost", label: "Unit Cost" },
+    { key: "amount", label: "Total Cost" }, { key: "issues", label: "Issue / Transfer / Adjustments" },
+    { key: "impairmentLoss", label: "Accumulated Impairment Losses" }, { key: "balance", label: "Adjusted Cost" }, { key: "repairNature", label: "Nature of Repair" },
+    { key: "repairAmount", label: "Amount" },
+  ],
+  itr: [
+    { key: "acquiredDate", label: "Date Acquired" }, { key: "propertyNo", label: "Item No." },
+    { key: "reference", label: "ICS" }, { key: "item", label: "Description" },
+    { key: "amount", label: "Amount" }, { key: "endUser", label: "Condition of Inventory" },
+  ],
+  rpcsp: [
+    { key: "article", label: "Article" }, { key: "description", label: "Description" },
+    { key: "propertyNo", label: "Semi-expendable Property No." }, { key: "unit", label: "Unit of Measure" },
+    { key: "amount", label: "Unit Value" }, { key: "quantity", label: "Balance per Card" },
+    { key: "physicalCount", label: "On Hand per Card" }, { key: "balance", label: "Shortage / Overage Qty." },
+    { key: "varianceValue", label: "Shortage / Overage Value" }, { key: "remarks", label: "Remarks" },
+  ],
 };
 
 const SIGNATURES: Record<PpeDocumentType, string[]> = {
@@ -386,6 +440,9 @@ const SIGNATURES: Record<PpeDocumentType, string[]> = {
     "Notary public",
   ],
   rrpe: ["Returned by", "Received by"],
+  splc: ["Recorded by", "Reviewed by"],
+  itr: ["Approved by", "Released / Issued by", "Received by"],
+  rpcsp: ["Certified correct by", "Approved by", "Witnessed by"],
 };
 
 function initialFields(type: PpeDocumentType, date: string) {
@@ -394,8 +451,9 @@ function initialFields(type: PpeDocumentType, date: string) {
     date,
     fundCluster: "06-SSP",
   };
-  if (type === "rpcppe") defaults.asAt = date;
+  if (["rpcppe", "rpcsp"].includes(type)) defaults.asAt = date;
   if (type === "iirup") defaults.asAt = date;
+  if (type === "rpcsp") defaults.ppeType = "INFORMATION AND COMMUNICATION TECHNOLOGY";
   if (type === "rrpe") defaults.date = date;
   return Object.fromEntries(
     FIELD_SETS[type].map(({ key }) => [key, defaults[key] || ""]),
@@ -404,6 +462,7 @@ function initialFields(type: PpeDocumentType, date: string) {
 
 export function PpeDocumentFlow({
   type,
+  propertyFlow,
   orientation,
   zoom,
   items,
@@ -418,6 +477,7 @@ export function PpeDocumentFlow({
   onRefresh,
 }: {
   type: PpeDocumentType;
+  propertyFlow: "semi-expendable" | "ppe";
   orientation: "portrait" | "landscape";
   zoom: number;
   items: PpeItem[];
@@ -432,8 +492,8 @@ export function PpeDocumentFlow({
   onRefresh: () => void;
 }) {
   const ppeItems = useMemo(
-    () => items.filter((item) => item.inventory_classification === "ppe"),
-    [items],
+    () => items.filter((item) => item.inventory_classification === (propertyFlow === "semi-expendable" ? "semi_expendable_property" : "ppe")),
+    [items, propertyFlow],
   );
   const [recordId, setRecordId] = useState("");
   const [docNo, setDocNo] = useState(() => numberFor(type));
@@ -452,7 +512,14 @@ export function PpeDocumentFlow({
       const form = movement.source_form_id ? formsById.get(movement.source_form_id) : undefined;
       const reference = String(movement.remarks || "").match(/IAR\s+([^|]+)/i)?.[1]?.trim();
       const linkedForm = form || iarForms.find((entry) => entry.iar_no?.trim() === reference);
-      const fundCluster = normalizeFundCluster(linkedForm?.form_data?.fund_cluster);
+      const remarkCluster = String(movement.remarks || "")
+        .split("|")
+        .find((part) => /^\s*Fund Cluster:/i.test(part))
+        ?.replace(/^\s*Fund Cluster:/i, "")
+        .trim();
+      const fundCluster =
+        normalizeFundCluster(linkedForm?.form_data?.fund_cluster) ||
+        normalizeFundCluster(remarkCluster);
       if (!fundCluster) continue;
       const itemClusters = clusters.get(movement.item_id) || new Set<string>();
       itemClusters.add(fundCluster);
@@ -461,13 +528,12 @@ export function PpeDocumentFlow({
     return clusters;
   }, [iarForms, movements]);
   const selectableItems = useMemo(() => {
-    if (type !== "par") return ppeItems;
     const fundCluster = normalizeFundCluster(fields.fundCluster);
     return ppeItems.filter((item) => itemFundClusters.get(item.id)?.has(fundCluster));
-  }, [type, ppeItems, fields.fundCluster, itemFundClusters]);
+  }, [ppeItems, fields.fundCluster, itemFundClusters]);
 
   const [rows, setRows] = useState<PpeRow[]>(() =>
-    type === "rpcppe"
+    ["rpcppe", "rpcsp"].includes(type)
       ? ppeItems.map((item) => ({
           ...blankRow(item.id),
           quantity: String(item.quantity),
@@ -485,22 +551,8 @@ export function PpeDocumentFlow({
   const isReadOnly = savedStatus !== "draft" || !canWrite;
 
   useEffect(() => {
-    if (type !== "par" || savedStatus === "approved" || savedStatus === "cancelled") return;
-    const availableIds = new Set(selectableItems.map((item) => item.id));
-    setRows((current) => {
-      let changed = false;
-      const next = current.map((row) => {
-        if (!row.itemId || availableIds.has(row.itemId)) return row;
-        changed = true;
-        return blankRow();
-      });
-      return changed ? next : current;
-    });
-  }, [type, selectableItems, savedStatus]);
-
-  useEffect(() => {
     if (recordId || ppeItems.length === 0) return;
-    if (type === "rpcppe" && rows.length === 1 && !rows[0]?.itemId) {
+    if (["rpcppe", "rpcsp"].includes(type) && (rows.length === 0 || (rows.length === 1 && !rows[0]?.itemId))) {
       setRows(
         ppeItems.map((item) => ({
           ...blankRow(item.id),
@@ -509,14 +561,30 @@ export function PpeDocumentFlow({
           unitCost: String(item.acquisition_cost || 0),
         })),
       );
-    } else if (type === "ppe-ledger" && !rows[0]?.itemId) {
+    } else if (["ppe-ledger", "splc"].includes(type) && !rows[0]?.itemId) {
       setRows([blankRow(ppeItems[0].id)]);
     }
   }, [type, ppeItems, recordId, rows]);
 
   useEffect(() => {
+    if (type !== "rpcsp" || ppeItems.length === 0) return;
+    setRows((current) => {
+      const existingIds = new Set(current.map((row) => row.itemId));
+      const missingRows = ppeItems
+        .filter((item) => !existingIds.has(item.id))
+        .map((item) => ({
+          ...blankRow(item.id),
+          quantity: String(item.quantity),
+          propertyNo: item.stock_number || "",
+          unitCost: String(item.acquisition_cost || 0),
+        }));
+      return missingRows.length ? [...current, ...missingRows] : current;
+    });
+  }, [type, ppeItems, recordId]);
+
+  useEffect(() => {
     if (
-      type === "ppe-ledger" ||
+      ["ppe-ledger", "splc"].includes(type) ||
       recordId ||
       savedStatus === "approved" ||
       docNo !== numberFor(type, date)
@@ -549,9 +617,15 @@ export function PpeDocumentFlow({
     updateField("fundCluster", value);
   }
   function updateRow(index: number, patch: Partial<PpeRow>) {
-    setRows((current) =>
-      current.map((row, i) => (i === index ? { ...row, ...patch } : row)),
-    );
+    setRows((current) => {
+      if (type === "splc") {
+        const next = [...current];
+        while (next.length <= index) next.push(blankRow(ledgerItemId));
+        next[index] = { ...next[index], ...patch };
+        return next;
+      }
+      return current.map((row, i) => (i === index ? { ...row, ...patch } : row));
+    });
   }
   function addRow() {
     setRows((current) => [...current, blankRow(selectableItems[0]?.id || "")]);
@@ -571,7 +645,7 @@ export function PpeDocumentFlow({
     setSavedStatus("draft");
     setReserveNonce((value) => value + 1);
     setRows(
-      type === "rpcppe"
+      ["rpcppe", "rpcsp"].includes(type)
         ? ppeItems.map((item) => ({
             ...blankRow(item.id),
             quantity: String(item.quantity),
@@ -629,14 +703,14 @@ export function PpeDocumentFlow({
     if (!canWrite)
       return toast.error("You do not have permission to change forms.");
     if (!docNo.trim()) return toast.error("Enter form number before saving.");
-    const filled = rows.filter((row) => row.itemId);
+    const filled = rows.filter((row) => row.itemId && selectableItems.some((item) => item.id === row.itemId));
     if (
-      ["par", "ptr", "iirup", "rlsddp", "rrpe"].includes(type) &&
+      ["par", "ptr", "iirup", "rlsddp", "rrpe", "itr"].includes(type) &&
       filled.length === 0
     )
       return toast.error("Select at least one PPE item.");
-    if (type === "ppe-ledger" && !rows[0]?.itemId)
-      return toast.error("Select PPE item for ledger card.");
+    if (["ppe-ledger", "splc"].includes(type) && !filled.some((row) => row.itemId))
+      return toast.error("Select property item for ledger card.");
     if (type === "par" && !fields.accountablePerson?.trim())
       return toast.error("Enter accountable person before issuing PAR.");
     if (type === "ptr" && !fields.toAccountableOfficer?.trim())
@@ -660,7 +734,7 @@ export function PpeDocumentFlow({
     )
       return toast.error("Enter police station and notification date.");
     if (
-      type === "rpcppe" &&
+      ["rpcppe", "rpcsp"].includes(type) &&
       rows.some((row) => row.itemId && !row.physicalCount.trim())
     )
       return toast.error(
@@ -671,11 +745,11 @@ export function PpeDocumentFlow({
       const formData = {
         ...fields,
         date,
-        items: type === "rpcppe" ? rows : filled,
+        items: ["rpcppe", "rpcsp", "splc"].includes(type) ? tableRows : filled,
       };
       const effectiveDocNo =
-        type === "ppe-ledger"
-          ? `PPELC-${rows[0]?.itemId || "UNSELECTED"}`
+        ["ppe-ledger", "splc"].includes(type)
+          ? `${type === "splc" ? "SPLC" : "PPELC"}-${tableRows[0]?.itemId || "UNSELECTED"}`
           : docNo;
       const saved = await savePpeDocument({
         data: {
@@ -717,7 +791,7 @@ export function PpeDocumentFlow({
     if (key === "description") return item?.description || "";
     if (key === "unit") return item?.unit || "";
     if (key === "amount")
-      return type === "rpcppe"
+      return ["rpcppe", "rpcsp"].includes(type)
         ? Number(row.unitCost || item?.acquisition_cost || 0).toFixed(2)
         : (
             Number(row.quantity || 0) *
@@ -739,7 +813,7 @@ export function PpeDocumentFlow({
       ).toFixed(2);
     if (key === "balance") {
       if (row.ledgerBalance !== undefined) return row.ledgerBalance;
-      if (type === "rpcppe")
+      if (["rpcppe", "rpcsp"].includes(type))
         return row.physicalCount
           ? String(Number(row.physicalCount) - Number(row.quantity || 0))
           : "";
@@ -752,50 +826,56 @@ export function PpeDocumentFlow({
     }
     if (key === "reference") return (row.remarks || "").split("|")[0].trim();
     if (key === "issues") return row.disposalTransfer || "";
-    if (key === "repairNature") return fields.repairNature || "";
-    if (key === "repairAmount") return fields.repairAmount || "";
+    if (key === "repairNature") return row.repairNature || fields.repairNature || "";
+    if (key === "repairAmount") return row.repairAmount || fields.repairAmount || "";
     if (key === "propertyNo") return row.propertyNo || item?.stock_number || "";
     return String(row[key as keyof PpeRow] ?? "");
   }
 
-  const tableRows = type === "rpcppe" ? rows : rows.filter((row) => row.itemId);
-  const ledgerItemId = rows[0]?.itemId || "";
+  const selectableItemIds = new Set(selectableItems.map((item) => item.id));
+  const tableRows = ["rpcppe", "rpcsp"].includes(type)
+    ? rows.filter((row) => selectableItemIds.has(row.itemId))
+    : rows.filter((row) => row.itemId && selectableItemIds.has(row.itemId));
+  const ledgerItemId = selectableItemIds.has(rows[0]?.itemId || "") ? rows[0]?.itemId || "" : "";
   const ledgerItem = ppeItems.find((item) => item.id === ledgerItemId);
   const ledgerMoves = movements
     .filter((movement) => movement.item_id === ledgerItemId)
     .sort((a, b) => timestampValue(a.created_at) - timestampValue(b.created_at));
   let ledgerBalance = 0;
-  const ledgerPaperRows = ledgerMoves.map((movement, index) => {
+  const ledgerRowCount = type === "splc" ? Math.max(ledgerMoves.length, ledgerItemId ? rows.length : 0, 1) : ledgerMoves.length;
+  const ledgerPaperRows = Array.from({ length: ledgerRowCount }, (_, index) => {
+    const movement = ledgerMoves[index];
+    const savedRow = ledgerItemId ? rows[index] : undefined;
     const unitCost = Number(ledgerItem?.acquisition_cost || 0);
-    const amount = Number(movement.quantity || 0) * unitCost;
-    ledgerBalance += movement.type === "IN" ? amount : -amount;
+    const amount = Number(movement?.quantity || 0) * unitCost;
+    if (movement) ledgerBalance += movement.type === "IN" ? amount : -amount;
     return {
       ...blankRow(ledgerItemId),
-      acquiredDate: dateValue(movement.created_at),
-      quantity: movement.type === "IN" ? String(movement.quantity) : "",
+      ...savedRow,
+      acquiredDate: movement ? dateValue(movement.created_at) : savedRow?.acquiredDate || "",
+      quantity: movement ? (movement.type === "IN" ? String(movement.quantity) : "") : savedRow?.quantity || "",
       unitCost: String(unitCost),
-      remarks: movement.remarks || "",
+      remarks: movement?.remarks || savedRow?.remarks || "",
       accumulatedDepreciation:
         index === ledgerMoves.length - 1
           ? fields.accumulatedDepreciation || ""
           : "",
       impairmentLoss:
-        index === ledgerMoves.length - 1 ? fields.impairmentLoss || "" : "",
-      disposalTransfer: movement.type === "OUT" ? amount.toFixed(2) : "",
-      ledgerBalance: (
+        savedRow?.impairmentLoss ?? (index === ledgerMoves.length - 1 ? fields.impairmentLoss || "" : ""),
+      disposalTransfer: savedRow?.disposalTransfer ?? (movement?.type === "OUT" ? amount.toFixed(2) : ""),
+      ledgerBalance: savedRow?.ledgerBalance ?? (
         ledgerBalance -
         (index === ledgerMoves.length - 1
-          ? Number(fields.accumulatedDepreciation || 0) +
-            Number(fields.impairmentLoss || 0)
+          ? Number(fields.accumulatedDepreciation || 0) + Number(fields.impairmentLoss || 0)
           : 0)
       ).toFixed(2),
     };
   });
   const paperRows =
-    type === "ppe-ledger"
+    ["ppe-ledger", "splc"].includes(type)
       ? ledgerPaperRows
-      : type === "rpcppe" && tableRows.length === 0
-        ? ppeItems.map((item) => ({
+      : ["rpcppe", "rpcsp"].includes(type) && tableRows.length === 0
+        ? selectableItems.map((item) => ({
             ...blankRow(item.id),
             quantity: String(item.quantity),
             propertyNo: item.stock_number || "",
@@ -914,11 +994,11 @@ export function PpeDocumentFlow({
           ))}
         </div>
 
-        {!["ppe-ledger"].includes(type) && (
+        {!["ppe-ledger", "splc"].includes(type) && (
           <div className="mt-4">
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-semibold">Property items</h3>
-              {type !== "rpcppe" && (
+              {!["rpcppe", "rpcsp"].includes(type) && (
                 <button
                   className="flow-header-btn"
                   disabled={isReadOnly}
@@ -930,14 +1010,17 @@ export function PpeDocumentFlow({
               )}
             </div>
             <div className="space-y-3">
-              {rows.map((row, index) => (
+              {rows
+                .map((row, index) => ({ row, index }))
+                .filter(({ row }) => selectableItemIds.has(row.itemId))
+                .map(({ row, index }) => (
                 <div
                   className="grid gap-2 rounded-md border border-border p-3 sm:grid-cols-2"
                   key={`${row.itemId}-${index}`}
                 >
-                  {type !== "rpcppe" && (
+                  {!["rpcppe", "rpcsp"].includes(type) && (
                     <label className="ppe-label sm:col-span-2">
-                      PPE item
+                      {propertyFlow === "semi-expendable" ? "Semi-expendable property item" : "PPE item"}
                       <select
                         className="ppe-field"
                         value={row.itemId}
@@ -964,7 +1047,7 @@ export function PpeDocumentFlow({
                       </select>
                     </label>
                   )}
-                  {(type === "rpcppe"
+                  {(["rpcppe", "rpcsp"].includes(type)
                     ? [
                         {
                           key: "physicalCount",
@@ -1003,7 +1086,15 @@ export function PpeDocumentFlow({
                           { key: "saleAmount", label: "Sales amount" },
                           { key: "remarks", label: "Condition / remarks" },
                         ]
-                      : [
+                      : type === "itr"
+                        ? [
+                            { key: "acquiredDate", label: "Date acquired", kind: "date" },
+                            { key: "propertyNo", label: "Item number" },
+                            { key: "remarks", label: "ICS number" },
+                            { key: "unitCost", label: "Amount" },
+                            { key: "endUser", label: "Condition of inventory" },
+                          ]
+                        : [
                           { key: "quantity", label: "Quantity" },
                           { key: "propertyNo", label: "Property number" },
                           {
@@ -1035,7 +1126,7 @@ export function PpeDocumentFlow({
                       />
                     </label>
                   ))}
-                  {type !== "rpcppe" && !isReadOnly && (
+                  {!["rpcppe", "rpcsp"].includes(type) && !isReadOnly && (
                     <button
                       className="flow-header-btn justify-self-start"
                       type="button"
@@ -1050,9 +1141,9 @@ export function PpeDocumentFlow({
           </div>
         )}
 
-        {type === "ppe-ledger" && (
+        {["ppe-ledger", "splc"].includes(type) && (
           <label className="ppe-label mt-4">
-            PPE item
+              {type === "splc" ? "Semi-expendable property" : "PPE item"}
             <select
               className="ppe-field"
               value={ledgerItemId}
@@ -1111,14 +1202,14 @@ export function PpeDocumentFlow({
         >
           <div className="flex justify-between text-[10px]">
             <span>
-              {type === "ppe-ledger" ? "171" : type === "par" ? "" : ""}
+              {["ppe-ledger", "splc"].includes(type) ? (type === "splc" ? "Annex A.2" : "171") : ""}
             </span>
             <span>{title.appendix}</span>
           </div>
           <h1>{title.title}</h1>
-          {type === "rpcppe" && (
+          {["rpcppe", "rpcsp"].includes(type) && (
             <div className="text-center text-xs font-semibold">
-              {fields.ppeType || "(Type of Property, Plant and Equipment)"}
+              {fields.ppeType || (type === "rpcsp" ? "(Type of Semi-expendable Property)" : "(Type of Property, Plant and Equipment)")}
             </div>
           )}
           <div className="ppe-paper-info">
@@ -1132,17 +1223,15 @@ export function PpeDocumentFlow({
               <b>
                 {type === "iirup"
                   ? "As at:"
-                  : type === "rpcppe"
-                    ? "As of:"
+                  : ["rpcppe", "rpcsp"].includes(type)
+                    ? "As at:"
                     : "Date:"}
               </b>{" "}
               {date}
             </div>
-            {type === "ppe-ledger" && (
+            {["ppe-ledger", "splc"].includes(type) && (
               <>
-                <div>
-                  <b>Property, Plant and Equipment:</b> {ledgerItem?.name || ""}
-                </div>
+                <div><b>{type === "splc" ? "Semi-Expendable Property:" : "Property, Plant and Equipment:"}</b> {ledgerItem?.name || ""}</div>
                 <div>
                   <b>Property Number:</b> {ledgerItem?.stock_number || ""}
                 </div>
@@ -1160,12 +1249,24 @@ export function PpeDocumentFlow({
                 </div>
               </>
             )}
-            {type === "rpcppe" && (
+            {["rpcppe", "rpcsp"].includes(type) && (
               <div className="ppe-paper-wide">
                 <b>Accountable officer:</b> {fields.accountableOfficer} &nbsp;{" "}
                 <b>Designation:</b> {fields.designation} &nbsp; <b>Station:</b>{" "}
                 {fields.station} &nbsp; <b>Date of assumption:</b>{" "}
                 {fields.dateAssumption}
+              </div>
+            )}
+            {type === "splc" && (
+              <div className="ppe-paper-wide">
+                <b>Semi-Expendable Property Number:</b> {ledgerItem?.stock_number || "________________________"} &nbsp;
+                <b>Description:</b> {ledgerItem?.description || ledgerItem?.name || ""} &nbsp;
+                <b>UACS Object Code:</b> {fields.objectAccountCode || ""}
+              </div>
+            )}
+            {type === "rpcsp" && (
+              <div className="ppe-paper-wide">
+                For which <b>{fields.accountableOfficer || "________________________"}</b>, {fields.designation || ""}, {fields.station || ""} is accountable, having assumed such accountability on {fields.dateAssumption || "____________"}.
               </div>
             )}
             {type === "rlsddp" && (
@@ -1190,6 +1291,13 @@ export function PpeDocumentFlow({
                 <br />
                 <b>Transfer type:</b> {fields.transferType} &nbsp;{" "}
                 <b>Reason:</b> {fields.reasonForTransfer}
+              </div>
+            )}
+            {type === "itr" && (
+              <div className="ppe-paper-wide">
+                <b>ITR No.:</b> {docNo} &nbsp; <b>From:</b> {fields.fromAccountableOfficer}<br />
+                <b>To:</b> {fields.toAccountableOfficer}<br />
+                <b>Transfer type:</b> {fields.transferType}
               </div>
             )}
             {type === "par" && (
@@ -1223,7 +1331,7 @@ export function PpeDocumentFlow({
               <b>INSPECTION AND DISPOSAL</b>
             </div>
           )}
-          {type === "rpcppe" && (
+          {["rpcppe", "rpcsp"].includes(type) && (
             <div className="ppe-paper-band">
               <b>ARTICLE</b>
               <span />
@@ -1232,7 +1340,17 @@ export function PpeDocumentFlow({
           )}
           <table className="paper-grid ppe-paper-table">
             <thead>
-              {type === "ppe-ledger" ? (
+              {["ppe-ledger", "splc"].includes(type) ? type === "splc" ? (
+                <>
+                  <tr>
+                    <th rowSpan={2}>Date</th><th rowSpan={2}>Reference</th>
+                    <th colSpan={3}>Receipt</th><th rowSpan={2}>Issue / Transfer / Adjustments</th>
+                    <th rowSpan={2}>Accumulated Impairment Losses</th><th rowSpan={2}>Adjusted Cost</th>
+                    <th colSpan={2}>Repair History</th>
+                  </tr>
+                  <tr><th>Qty.</th><th>Unit Cost</th><th>Total Cost</th><th>Nature of Repair</th><th>Amount</th></tr>
+                </>
+              ) : (
                 <>
                   <tr>
                     <th rowSpan={2}>Date</th>
@@ -1267,20 +1385,66 @@ export function PpeDocumentFlow({
                   ? 18
                   : type === "par"
                     ? 35
-                    : type === "rpcppe"
+                    : ["rpcppe", "rpcsp"].includes(type)
                       ? 20
                       : type === "ptr"
                         ? 27
                         : type === "rrpe"
                           ? 10
-                          : type === "ppe-ledger"
+                          : ["ppe-ledger", "splc"].includes(type)
                             ? 20
                             : 8,
               ).map((row, index) => (
                 <tr key={`${row?.itemId || "blank"}-${index}`}>
                   {COLUMNS[type].map((column) => (
                     <td key={column.key}>
-                      {row ? displayCell(row, String(column.key)) : ""}
+                      {type === "splc" && column.key === "issues" ? (
+                        <input
+                          aria-label={`Issue, transfer, or adjustment, row ${index + 1}`}
+                          className="splc-cell-input"
+                          value={row?.disposalTransfer || ""}
+                          disabled={isReadOnly}
+                          onChange={(event) => updateRow(index, { disposalTransfer: event.target.value })}
+                        />
+                      ) : type === "splc" && column.key === "repairNature" ? (
+                        <input
+                          aria-label={`Nature of repair, row ${index + 1}`}
+                          className="splc-cell-input"
+                          value={row?.repairNature || ""}
+                          disabled={isReadOnly}
+                          onChange={(event) => updateRow(index, { repairNature: event.target.value })}
+                        />
+                      ) : type === "splc" && column.key === "repairAmount" ? (
+                        <input
+                          aria-label={`Repair amount, row ${index + 1}`}
+                          className="splc-cell-input"
+                          type="number"
+                          step="0.01"
+                          value={row?.repairAmount || ""}
+                          disabled={isReadOnly}
+                          onChange={(event) => updateRow(index, { repairAmount: event.target.value })}
+                        />
+                      ) : type === "splc" && column.key === "impairmentLoss" ? (
+                        <input
+                          aria-label={`Accumulated impairment loss, row ${index + 1}`}
+                          className="splc-cell-input"
+                          type="number"
+                          step="0.01"
+                          value={row?.impairmentLoss || ""}
+                          disabled={isReadOnly}
+                          onChange={(event) => updateRow(index, { impairmentLoss: event.target.value })}
+                        />
+                      ) : type === "splc" && column.key === "balance" ? (
+                        <input
+                          aria-label={`Adjusted cost, row ${index + 1}`}
+                          className="splc-cell-input"
+                          type="number"
+                          step="0.01"
+                          value={row?.ledgerBalance || ""}
+                          disabled={isReadOnly}
+                          onChange={(event) => updateRow(index, { ledgerBalance: event.target.value })}
+                        />
+                      ) : row ? displayCell(row, String(column.key)) : ""}
                     </td>
                   ))}
                 </tr>
@@ -1360,6 +1524,15 @@ export function PpeDocumentFlow({
               <b>Reason for Transfer:</b> {fields.reasonForTransfer}
             </div>
           )}
+          {type === "itr" && (
+            <div className="ppe-paper-note">
+              <b>Reason/s for Transfer:</b> {fields.reasonForTransfer}
+              <br /><br />
+              <b>Approved by:</b> {fields.approvedBy || "________________________"} &nbsp;
+              <b>Released/Issued by:</b> {fields.releasedBy || "________________________"} &nbsp;
+              <b>Received by:</b> {fields.receivedBy || "________________________"}
+            </div>
+          )}
           <div className="ppe-paper-signatures">
             {SIGNATURES[type].map((signature) => (
               <div key={signature}>
@@ -1376,7 +1549,7 @@ export function PpeDocumentFlow({
             ))}
           </div>
           <div className="ppe-paper-footer">
-            {type === "rpcppe"
+            {["rpcppe", "rpcsp"].includes(type)
               ? "Submit to the Auditor and Accounting Division/Unit by January 31."
               : type === "iirup"
                 ? "Submit after disposal is completed; original supports accounting adjustment."
@@ -1442,6 +1615,8 @@ const PPE_PAPER_STYLES = `
 .ppe-document-paper .ppe-paper-table th,.ppe-document-paper .ppe-paper-table td{border:1px solid #222;padding:4px;vertical-align:top;overflow-wrap:anywhere}
 .ppe-document-paper .ppe-paper-table th{text-align:center;font-weight:700}
 .ppe-document-paper .ppe-paper-table td{height:23px}
+.ppe-document-paper .splc-cell-input{display:block;width:100%;min-width:0;border:0;background:transparent;padding:0;color:inherit;font:inherit;outline:none}
+.ppe-document-paper .splc-cell-input:focus{outline:1px solid #2563eb;outline-offset:1px}
 .ppe-document-paper .ppe-total-row td{font-weight:bold}
 .ppe-document-paper .ppe-paper-signatures{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:36px;text-align:center;font-size:9px;break-inside:avoid}
 .ppe-document-paper.rrpe .ppe-paper-signatures{grid-template-columns:1fr 1fr}
