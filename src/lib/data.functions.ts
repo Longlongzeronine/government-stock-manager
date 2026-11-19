@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { assertFormAccessFromRequest, assertInventoryWriteFromRequest, getPermittedFormKeysFromRequest } from "@/lib/form-access.server";
 
 import {
   getRestConfig,
@@ -1006,7 +1007,9 @@ export const deleteItem = createServerFn({ method: "POST" })
 // Post header, receipt lines, stock transactions and balances atomically.
 export const postIar = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
-  .handler(async ({ data }) => withDbFallback(
+  .handler(async ({ data }) => {
+    await assertFormAccessFromRequest(`${data.property_flow === "semi-expendable" ? "semi" : data.property_flow === "ppe" ? "ppe" : "supplies"}_iar`, "post");
+    return withDbFallback(
     async (sql) => sql.begin(async (tx: any) => {
       const [form] = await tx`
         INSERT INTO iar_forms ${tx({
@@ -1067,7 +1070,8 @@ export const postIar = createServerFn({ method: "POST" })
         throw error;
       }
     },
-  ));
+    );
+  });
 
 // ============================================
 // CATEGORIES
@@ -1311,6 +1315,10 @@ export const listTransactionsAsc = createServerFn({ method: "GET" })
 export const createTransaction = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
+    if (data.source_form_type === "RIS") {
+      const prefix = data.property_flow === "semi-expendable" ? "semi" : data.property_flow === "ppe" ? "ppe" : "supplies";
+      await assertFormAccessFromRequest(`${prefix}_ris`, "issue");
+    } else await assertInventoryWriteFromRequest();
     const quantity = Number(data.quantity);
     const availableFromStockCard = (movements: any[]) => movements
       .filter((movement) => {
@@ -1422,6 +1430,7 @@ export const listAuditLogs = createServerFn({ method: "GET" }).handler(
 
 export const listIarForms = createServerFn({ method: "GET" }).handler(
   async () => {
+    await getPermittedFormKeysFromRequest(["supplies_iar", "semi_iar", "ppe_iar"], "list");
     return withDbFallback(
       async (sql) => await sql`
         SELECT id, iar_no, form_data FROM iar_forms ORDER BY created_at DESC
@@ -1436,7 +1445,9 @@ export const listIarForms = createServerFn({ method: "GET" }).handler(
 
 export const getIarFormDetails = createServerFn({ method: "GET" })
   .inputValidator((data: { id: string }) => data)
-  .handler(async ({ data }) => withDbFallback(
+  .handler(async ({ data }) => {
+    await getPermittedFormKeysFromRequest(["supplies_iar", "semi_iar", "ppe_iar"], "read");
+    return withDbFallback(
     async (sql) => {
       const [form] = await sql`
         SELECT
@@ -1479,12 +1490,14 @@ export const getIarFormDetails = createServerFn({ method: "GET" })
       );
       return { ...form, lines };
     },
-  ));
+    );
+  });
 
 // Newest non-empty line remark recorded on an IAR receipt, per item. RIS reads
 // this so the receiving remark carries over to the issue slip.
 export const listIarLineRemarks = createServerFn({ method: "GET" }).handler(
   async () => {
+    await getPermittedFormKeysFromRequest(["supplies_iar", "semi_iar", "ppe_iar"], "list_remarks");
     return withDbFallback(
       async (sql) => await sql`
         SELECT DISTINCT ON (ii.item_id)
@@ -1572,6 +1585,10 @@ export const getRisFormDetails = createServerFn({ method: "GET" })
               WHERE r.ris_no = ${data.ris_no}
               GROUP BY r.id
             `;
+        if (form) {
+          const prefix = form.property_flow === "semi-expendable" ? "semi" : form.property_flow === "ppe" ? "ppe" : "supplies";
+          await assertFormAccessFromRequest(`${prefix}_ris`, "read");
+        }
         return form || null;
       },
       async () => {
@@ -1582,6 +1599,8 @@ export const getRisFormDetails = createServerFn({ method: "GET" })
             : `select=*&ris_no=eq.${encodeURIComponent(data.ris_no || "")}&limit=1`,
         );
         if (!form) return null;
+        const prefix = form.property_flow === "semi-expendable" ? "semi" : form.property_flow === "ppe" ? "ppe" : "supplies";
+        await assertFormAccessFromRequest(`${prefix}_ris`, "read");
         const lines = await sbSelect<any>(
           "ris_items",
           `select=id,item_id,quantity,remarks,item:items(id,name,description,unit,acquisition_cost)&ris_id=eq.${encodeURIComponent(form.id)}&order=created_at.asc&limit=1000`,
@@ -1652,6 +1671,7 @@ export const createFormsFlowBackup = createServerFn({ method: "GET" }).handler(
 export const createIarForm = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
+    await assertFormAccessFromRequest(`${data.property_flow === "semi-expendable" ? "semi" : data.property_flow === "ppe" ? "ppe" : "supplies"}_iar`, "create");
     const payload = {
       iar_no: data.iar_no,
       supplier: data.supplier || null,
@@ -1672,6 +1692,7 @@ export const createIarForm = createServerFn({ method: "POST" })
 export const createIarItem = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
+    await assertFormAccessFromRequest(`${data.property_flow === "semi-expendable" ? "semi" : data.property_flow === "ppe" ? "ppe" : "supplies"}_iar`, "add_item");
     const payload = {
       iar_id: data.iar_id,
       item_id: data.item_id,
@@ -1694,7 +1715,9 @@ export const createIarItem = createServerFn({ method: "POST" })
 
 export const updateIarPriceLots = createServerFn({ method: "POST" })
   .inputValidator((d: { item_id: string; lots: { id: string; unit_cost: number }[] }) => d)
-  .handler(async ({ data }) => withDbFallback(
+  .handler(async ({ data }) => {
+    await assertFormAccessFromRequest("supplies_iar", "adjust_price");
+    return withDbFallback(
     async (sql) => sql.begin(async (tx: any) => {
       const updated = [];
       for (const lot of data.lots) {
@@ -1713,11 +1736,13 @@ export const updateIarPriceLots = createServerFn({ method: "POST" })
       if (!row) throw new Error("IAR price identity was not found for this item.");
       return sbUpdate("iar_items", `id=eq.${encodeURIComponent(lot.id)}&item_id=eq.${encodeURIComponent(data.item_id)}`, { unit_cost: unitCost, amount: Number(row.quantity) * unitCost }, getRestWriteConfig());
     })),
-  ));
+    );
+  });
 
 export const createRisForm = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
+    await assertFormAccessFromRequest(`${data.property_flow === "semi-expendable" ? "semi" : data.property_flow === "ppe" ? "ppe" : "supplies"}_ris`, "create");
     const payload = {
         ris_no: data.ris_no,
         office: data.office || null,
@@ -1766,10 +1791,14 @@ export const createRisForm = createServerFn({ method: "POST" })
 export const listRisForms = createServerFn({ method: "GET" })
   .inputValidator((d: { created_by?: string; property_flow?: string } | undefined) => d ?? {})
   .handler(async ({ data }) => {
+    const formKeyForFlow: Record<string, string> = { supplies: "supplies_ris", "semi-expendable": "semi_ris", ppe: "ppe_ris" };
+    const propertyFlow = data.property_flow?.trim() || null;
+    const allowedFlows = propertyFlow
+      ? (await assertFormAccessFromRequest(formKeyForFlow[propertyFlow] ?? "supplies_ris", "list"), [propertyFlow])
+      : (await getPermittedFormKeysFromRequest(["supplies_ris", "semi_ris", "ppe_ris"], "list")).map((key) => key.replace(/_ris$/, "").replace("semi", "semi-expendable"));
     return withDbFallback(
       async (sql) => {
       const createdBy = data.created_by?.trim() || null;
-      const propertyFlow = data.property_flow?.trim() || null;
       return await sql`
         SELECT
           r.id,
@@ -1797,10 +1826,9 @@ export const listRisForms = createServerFn({ method: "GET" })
         LEFT JOIN suppliers s ON s.id = i.supplier_id
         WHERE (${createdBy}::text IS NULL OR r.created_by = ${createdBy}::text)
           AND (
-            ${propertyFlow}::text IS NULL
-            OR r.property_flow = ${propertyFlow}::text
+            r.property_flow = ANY(${allowedFlows}::text[])
             OR (
-              ${propertyFlow}::text = 'semi-expendable'
+              'semi-expendable' = ANY(${allowedFlows}::text[])
               AND EXISTS (
                 SELECT 1
                 FROM ris_items semi_ri
@@ -1858,14 +1886,12 @@ export const listRisForms = createServerFn({ method: "GET" })
           linesByForm.set(String(line.ris_id), lines);
         }
 
-        const flowForms = data.property_flow?.trim() === "semi-expendable"
-          ? forms.filter((form) =>
-              form.property_flow === "semi-expendable" ||
-              (linesByForm.get(String(form.id)) || []).some((line) =>
-                itemById.get(String(line.item_id))?.inventory_classification === "semi_expendable_property",
-              ),
-            )
-          : forms;
+        const flowForms = forms.filter((form) =>
+          allowedFlows.includes(form.property_flow || "supplies") ||
+          (allowedFlows.includes("semi-expendable") && (linesByForm.get(String(form.id)) || []).some((line) =>
+            itemById.get(String(line.item_id))?.inventory_classification === "semi_expendable_property",
+          )),
+        );
 
         return flowForms.map((form) => {
           const lines = linesByForm.get(String(form.id)) || [];
@@ -1910,17 +1936,25 @@ export const getRisFormStatus = createServerFn({ method: "GET" })
     return withDbFallback(
       async (sql) => {
         const [row] = await sql`
-          SELECT status FROM ris_forms
+          SELECT status, property_flow FROM ris_forms
           WHERE ris_no = ${data.ris_no}
           ORDER BY created_at DESC LIMIT 1
         `;
+        if (row) {
+          const prefix = row.property_flow === "semi-expendable" ? "semi" : row.property_flow === "ppe" ? "ppe" : "supplies";
+          await assertFormAccessFromRequest(`${prefix}_ris`, "read_status");
+        }
         return (row?.status as string | null | undefined) ?? null;
       },
       async () => {
         const [row] = await sbSelect<any>(
           "ris_forms",
-          `select=status&ris_no=eq.${encodeURIComponent(data.ris_no)}&order=created_at.desc&limit=1`,
+          `select=status,property_flow&ris_no=eq.${encodeURIComponent(data.ris_no)}&order=created_at.desc&limit=1`,
         );
+        if (row) {
+          const prefix = row.property_flow === "semi-expendable" ? "semi" : row.property_flow === "ppe" ? "ppe" : "supplies";
+          await assertFormAccessFromRequest(`${prefix}_ris`, "read_status");
+        }
         return (row?.status as string | null | undefined) ?? null;
       },
     );
@@ -1932,9 +1966,12 @@ export const updateRisFormStatus = createServerFn({ method: "POST" })
       id: string;
       status: "pending" | "approved" | "rejected" | "issued" | "cancelled";
       review_note?: string;
+      property_flow?: string;
     }) => d,
   )
   .handler(async ({ data }) => {
+    const prefix = data.property_flow === "semi-expendable" ? "semi" : data.property_flow === "ppe" ? "ppe" : "supplies";
+    await assertFormAccessFromRequest(`${prefix}_ris`, "review");
     const status = data.status;
     return withDbFallback(
       async (sql) => {
@@ -1980,6 +2017,7 @@ export const updateRisFormStatus = createServerFn({ method: "POST" })
 export const createRisItem = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
+    await assertFormAccessFromRequest(`${data.property_flow === "semi-expendable" ? "semi" : data.property_flow === "ppe" ? "ppe" : "supplies"}_ris`, "add_item");
     const payload = {
         ris_id: data.ris_id,
         item_id: data.item_id,
@@ -2453,6 +2491,8 @@ export const savePpeDocument = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
     const type = String(data.document_type || "");
+    const formKey = type === "splc" ? "semi_splc" : type === "ppe-ledger" ? "ppe_ppelc" : type === "rspi" ? "semi_rspi" : null;
+    if (formKey) await assertFormAccessFromRequest(formKey, "save");
     if (!["ppe-ledger", "par", "ptr", "rpcppe", "iirup", "rlsddp", "rrpe", "splc", "itr", "rpcsp"].includes(type))
       throw new Error("Unsupported property form type.");
     const number = String(data.document_no || "").trim();
@@ -2496,6 +2536,10 @@ export const approvePpeDocument = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const id = String(data.id || "");
     if (!id) throw new Error("Save form before approval.");
+    const documentType = String(data.document_type || "");
+    const protectedFormKey = documentType === "splc" ? "semi_splc" : documentType === "ppe-ledger" ? "ppe_ppelc" : documentType === "rspi" ? "semi_rspi" : null;
+    if (protectedFormKey) await assertFormAccessFromRequest(protectedFormKey, "approve");
+    else await assertInventoryWriteFromRequest();
     return withDbFallback(
       async (sql) => sql.begin(async (tx: any) => {
         const [doc] = await tx`SELECT * FROM ppe_documents WHERE id = ${id} FOR UPDATE`;

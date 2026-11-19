@@ -7,7 +7,7 @@ export const supabase = createClient(url, key, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
 
-export type AppRole = "admin" | "staff" | "accounting" | "viewer";
+export type AppRole = "admin" | "regular_user" | "permanent_employee" | "supply_officer" | "inspection_officer" | "financial_analyst";
 export type TxType = "IN" | "OUT";
 
 export interface Item {

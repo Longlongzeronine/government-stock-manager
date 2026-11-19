@@ -37,6 +37,8 @@ const adminOnlyFunctions = new Set([
   "updateCategory",
   "deleteCategory",
   "deleteSupplier",
+  "listAuditLogs",
+  "createFormsFlowBackup",
 ]);
 
 const inventoryAuthMiddleware = createMiddleware({ type: "function" })
@@ -57,6 +59,7 @@ const inventoryAuthMiddleware = createMiddleware({ type: "function" })
       await import("./lib/developer-session.server");
     const developerIdentity = await readDeveloperSession();
     let role = developerIdentity ? "admin" : "";
+    const assignedRoles = new Set<string>(developerIdentity ? ["admin"] : []);
 
     if (!developerIdentity) {
       const authorization = getRequestHeader("authorization") || "";
@@ -94,11 +97,11 @@ const inventoryAuthMiddleware = createMiddleware({ type: "function" })
 
       const { data: profile, error: profileError } = await client
         .from("profiles")
-        .select("status")
+        .select("status,disabled")
         .eq("id", user.id)
         .maybeSingle();
       if (profileError) throw new Error("Could not verify account status.");
-      if (["pending", "declined", "disabled"].includes(profile?.status ?? "")) {
+      if (["pending", "declined", "disabled"].includes(profile?.status ?? "") || profile?.disabled) {
         throw new Error("Account is not approved for access.");
       }
 
@@ -107,24 +110,20 @@ const inventoryAuthMiddleware = createMiddleware({ type: "function" })
         .select("role")
         .eq("user_id", user.id);
       if (rolesError) throw new Error("Could not verify account permissions.");
-      const roleOrder: Record<string, number> = {
-        admin: 1,
-        staff: 2,
-        accounting: 3,
-        viewer: 4,
-      };
-      role =
-        [...(roles ?? [])].sort(
-          (left, right) =>
-            (roleOrder[left.role] ?? 9) - (roleOrder[right.role] ?? 9),
-        )[0]?.role ?? "viewer";
+      (roles ?? []).forEach((row: { role: string }) => assignedRoles.add(row.role));
+      role = assignedRoles.has("admin") ? "admin" : [...assignedRoles][0] ?? "regular_user";
+
     }
 
-    if (method !== "GET" && role !== "admin" && role !== "staff") {
-      throw new Error("Write access required.");
+    // These endpoints perform their own role or form permission checks. Let
+    // them reach that authorization instead of rejecting them as inventory writes.
+    const formGuardedFunctions = new Set(["createIarForm", "createIarItem", "postIar", "updateIarPriceLots", "createRisForm", "createRisItem", "updateRisFormStatus", "savePpeDocument", "approvePpeDocument", "createTransaction", "setRoleFormPermission"]);
+    const canWrite = ["admin", "supply_officer", "inspection_officer", "financial_analyst"].some((candidate) => assignedRoles.has(candidate));
+    if (method !== "GET" && !canWrite && !formGuardedFunctions.has(serverFnMeta.name)) {
+      throw Object.assign(new Error("Forbidden: write access required."), { statusCode: 403 });
     }
     if (adminOnlyFunctions.has(serverFnMeta.name) && role !== "admin") {
-      throw new Error("Admin access required.");
+      throw Object.assign(new Error("Forbidden: administrator access required."), { statusCode: 403 });
     }
     return next();
   });

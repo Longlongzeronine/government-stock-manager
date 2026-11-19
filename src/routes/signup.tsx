@@ -45,7 +45,7 @@ function SignupPage() {
         <div>
           <h1 className="text-2xl">Request access</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            New accounts start as viewers. An admin can upgrade access from Users & Roles.
+            New accounts start as Regular User with Casual employment status. An admin can update roles and employment status from Users & Roles.
           </p>
         </div>
         <div className="space-y-3">

@@ -19,19 +19,21 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
-type R = "admin" | "staff" | "accounting" | "viewer";
+type R = import("@/integrations/supabase/client").AppRole;
+const allRoles: R[] = ["admin", "regular_user", "permanent_employee", "supply_officer", "inspection_officer", "financial_analyst"];
+const operationsRoles: R[] = ["admin", "supply_officer", "inspection_officer", "financial_analyst"];
 export const nav: { to: string; label: string; icon: any; roles: R[]; developerOnly?: boolean }[] = [
   {
     to: "/dashboard",
     label: "Dashboard",
     icon: LayoutDashboard,
-    roles: ["admin", "staff", "accounting", "viewer"],
+    roles: allRoles,
   },
   {
     to: "/inventory",
     label: "Inventory",
     icon: Package,
-    roles: ["admin", "staff", "accounting", "viewer"],
+    roles: allRoles,
   },
   {
     to: "/developer",
@@ -51,25 +53,25 @@ export const nav: { to: string; label: string; icon: any; roles: R[]; developerO
     to: "/scanner",
     label: "Scanner",
     icon: ScanLine,
-    roles: ["admin", "staff", "accounting", "viewer"],
+    roles: allRoles,
   },
   {
     to: "/approval",
     label: "Approval",
     icon: Shield,
-    roles: ["admin", "staff"],
+    roles: operationsRoles,
   },
   {
     to: "/ris-history",
     label: "RIS History",
     icon: History,
-    roles: ["admin", "staff", "accounting", "viewer"],
+    roles: allRoles,
   },
   {
     to: "/forms",
     label: "Forms Flow",
     icon: FileStack,
-    roles: ["admin", "staff", "accounting"],
+    roles: allRoles,
   },
   {
     to: "/stock",
@@ -83,7 +85,7 @@ export const nav: { to: string; label: string; icon: any; roles: R[]; developerO
     to: "/suppliers",
     label: "Suppliers",
     icon: Building2,
-    roles: ["admin", "staff", "accounting", "viewer"],
+    roles: allRoles,
   },
   { to: "/users", label: "Users", icon: Users, roles: ["admin"] },
   { to: "/audit", label: "Audit Log", icon: ScrollText, roles: ["admin"] },

@@ -11,6 +11,8 @@ interface AuthCtx {
   user: User | null;
   session: Session | null;
   role: AppRole | null;
+  roles: AppRole[];
+  employmentStatus: string | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signUp: (email: string, password: string, fullName: string) => Promise<{ error: string | null }>;
@@ -80,6 +82,8 @@ async function runAuthRequest(
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
+  const [roles, setRoles] = useState<AppRole[]>([]);
+  const [employmentStatus, setEmploymentStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [developerUsername, setDeveloperUsername] = useState<string | null>(null);
 
@@ -95,6 +99,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setTimeout(() => loadRole(s.user.id), 0);
       } else {
         setRole(null);
+        setRoles([]);
+        setEmploymentStatus(null);
       }
     });
     void supabase.auth.getSession().then(({ data }) => {
@@ -134,14 +140,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function loadRole(uid: string) {
-    const { data } = await supabase.from("user_roles").select("role").eq("user_id", uid);
-    if (!data || data.length === 0) {
-      setRole("viewer");
-      return;
-    }
-    const order: Record<string, number> = { admin: 1, staff: 2, accounting: 3, viewer: 4 };
-    const top = [...data].sort((a: any, b: any) => (order[a.role] ?? 9) - (order[b.role] ?? 9))[0];
-    setRole((top as any).role as AppRole);
+    const [{ data }, { data: profile }] = await Promise.all([
+      supabase.from("user_roles").select("role").eq("user_id", uid),
+      supabase.from("profiles").select("employment_status").eq("id", uid).maybeSingle(),
+    ]);
+    const order: Record<string, number> = { admin: 0, supply_officer: 1, inspection_officer: 2, financial_analyst: 3, permanent_employee: 4, regular_user: 5 };
+    const assigned = [...new Set((data ?? []).map((row: any) => row.role as AppRole))];
+    assigned.sort((a, b) => (order[a] ?? 10) - (order[b] ?? 10));
+    setRoles(assigned.length ? assigned : ["regular_user"]);
+    setRole(assigned[0] ?? "regular_user");
+    setEmploymentStatus(profile?.employment_status ?? "Casual");
   }
 
   const developerMode = developerUsername !== null && session === null;
@@ -150,9 +158,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     session,
     role,
     loading,
-    isAdmin: role === "admin" || developerMode,
-    isStaff: role === "staff",
-    canWrite: developerMode || role === "admin" || role === "staff",
+    roles,
+    employmentStatus,
+    isAdmin: roles.includes("admin") || developerMode,
+    isStaff: roles.includes("supply_officer") || roles.includes("inspection_officer"),
+    canWrite: developerMode || roles.some((assignedRole) => assignedRole !== "regular_user" && assignedRole !== "permanent_employee"),
     developerMode,
     developerUsername,
     signInAsDeveloper: async (username, password) => {
@@ -161,6 +171,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (result.error) return { error: result.error };
         await supabase.auth.signOut();
         setRole(null);
+        setRoles([]);
+        setEmploymentStatus(null);
         setDeveloperUsername(result.username ?? username);
         return { error: null };
       } catch (error: any) {
@@ -192,7 +204,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (data?.user) {
             const { data: profile } = await supabase
               .from("profiles")
-              .select("status")
+              .select("status,disabled")
               .eq("id", data.user.id)
               .single();
 
@@ -204,6 +216,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (profile?.status === "declined") {
               await supabase.auth.signOut();
               return { error: "Your account request has been declined. Contact an administrator." };
+            }
+            if (profile?.disabled) {
+              await supabase.auth.signOut();
+              return { error: "Your account is inactive. Contact an administrator." };
             }
           }
 
@@ -241,7 +257,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const signUpPromise = supabase.auth.signUp({
             email: normalizeEmail(email),
             password,
-            options: { data: { full_name: fullName.trim(), requested_role: "viewer" } },
+            options: { data: { full_name: fullName.trim(), requested_role: "regular_user" } },
           });
           const timeoutPromise = new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error("Request timed out")), 10000)

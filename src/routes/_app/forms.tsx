@@ -30,6 +30,7 @@ import { ItemDialog } from "@/components/inventory/ItemDialog";
 import { PpeDocumentFlow, type PpeDocumentType } from "@/components/forms/PpeDocumentFlow";
 import { exportCSV } from "@/lib/export";
 import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/integrations/supabase/client";
 import {
   postIar,
   createIcsForm,
@@ -67,6 +68,7 @@ type FlowTab = "iar" | "stock-card" | "ris" | "ics" | "rsmi" | "rpci" | "rspi" |
 type PropertyFlow = "supplies" | "semi-expendable" | "ppe";
 type ViewMode = "preview" | "split";
 type Orientation = "portrait" | "landscape";
+const FORM_ACCESS_KEYS = ["supplies_ris", "supplies_iar", "supplies_rsmi", "supplies_rpci", "semi_ris", "semi_iar", "semi_splc", "semi_rspi", "ppe_ris", "ppe_iar", "ppe_ppelc"];
 
 type Item = {
   id: string;
@@ -314,7 +316,7 @@ const FORM_DEFAULTS = {
 };
 
 function FormsFlow() {
-  const { canWrite, user } = useAuth();
+  const { canWrite: hasAnyWrite, user, developerMode, isAdmin } = useAuth();
   const queryClient = useQueryClient();
   const userName = user?.user_metadata?.full_name || user?.email || "";
   const today = new Date().toISOString().slice(0, 10);
@@ -322,8 +324,34 @@ function FormsFlow() {
 
   const [propertyFlow, setPropertyFlow] = useState<PropertyFlow>("supplies");
   const [tab, setTab] = useState<FlowTab>("iar");
+  const { data: permittedForms = [], isFetched: accessLoaded } = useQuery({
+    queryKey: ["form-access", user?.id],
+    enabled: Boolean(user?.id),
+    queryFn: async () => {
+      const results = await Promise.all(FORM_ACCESS_KEYS.map(async (formKey) => {
+        const { data, error } = await supabase.rpc("user_can_access_form", { _user_id: user!.id, _form_key: formKey });
+        if (error) throw error;
+        return data ? formKey : null;
+      }));
+      return results.filter((key): key is string => Boolean(key));
+    },
+  });
+  const effectivePermittedForms = developerMode ? FORM_ACCESS_KEYS : permittedForms;
+  const flowPrefix = propertyFlow === "semi-expendable" ? "semi" : propertyFlow === "ppe" ? "ppe" : "supplies";
+  const activeFormKey = ({ iar: `${flowPrefix}_iar`, ris: `${flowPrefix}_ris`, rsmi: "supplies_rsmi", rpci: "supplies_rpci", splc: "semi_splc", rspi: "semi_rspi", "ppe-ledger": "ppe_ppelc" } as Record<string, string>)[tab];
+  const canWrite = hasAnyWrite || (tab === "ris" && Boolean(activeFormKey && effectivePermittedForms.includes(activeFormKey)));
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [orientation, setOrientation] = useState<Orientation>("portrait");
+  useEffect(() => {
+    if ((!accessLoaded && !developerMode) || !activeFormKey || developerMode) return;
+    if (effectivePermittedForms.includes(activeFormKey)) {
+      void supabase.rpc("check_and_log_form_access", { _form_key: activeFormKey, _action: "open" });
+    } else {
+      void supabase.rpc("check_and_log_form_access", { _form_key: activeFormKey, _action: "open" });
+      setSelectedItemId("");
+      toast.error("You do not have access to this form.");
+    }
+  }, [accessLoaded, activeFormKey, effectivePermittedForms, developerMode]);
   useEffect(() => {
     if (["regspi", "ppe-ledger", "splc", "rpcppe", "rpcsp", "iirup"].includes(tab)) setOrientation("landscape");
     else if (["par", "ptr", "itr", "rlsddp", "rrpe"].includes(tab)) setOrientation("portrait");
@@ -1011,7 +1039,7 @@ function FormsFlow() {
     setSaving(true);
     try {
       await postIar({ data: {
-        iar_no: iar.iarNo, supplier: iar.supplier || null,
+        iar_no: iar.iarNo, property_flow: propertyFlow, supplier: iar.supplier || null,
         invoice_no: iar.invoiceNo || null, accepted_by: iar.acceptedBy || null,
         created_by: user?.id, created_by_name: userName,
         form_data: {
@@ -1214,6 +1242,7 @@ function FormsFlow() {
             staff_id: user?.id,
             staff_name: userName,
             source_form_type: "RIS",
+            property_flow: propertyFlow,
             source_form_id: risRecord.id,
             source_line_id: lot?.id || null,
             remarks: [
@@ -1229,6 +1258,7 @@ function FormsFlow() {
           } });
           await createRisItem({ data: {
             ris_id: risRecord.id,
+            property_flow: propertyFlow,
             item_id: line.item_id,
             quantity: issuedQty,
             remarks: line.remarks || null,
@@ -1463,12 +1493,14 @@ function FormsFlow() {
         />
 
         {propertyFlow === "supplies" ? (
-          <WorkflowStepper active={tab} onChange={setTab} />
+          <WorkflowStepper active={tab} onChange={setTab} permittedForms={effectivePermittedForms} canWrite={hasAnyWrite} />
         ) : (
           <FoundationStepper
             propertyFlow={propertyFlow}
             active={tab}
             onChange={setTab}
+            permittedForms={effectivePermittedForms}
+            canWrite={hasAnyWrite}
           />
         )}
 
@@ -1583,6 +1615,9 @@ function FormsFlow() {
           }
         >
           <main className="min-w-0">
+            {activeFormKey && !accessLoaded && !developerMode ? <div className="rounded-lg border border-border bg-card p-8 text-sm text-muted-foreground">Checking form access…</div>
+              : activeFormKey && !effectivePermittedForms.includes(activeFormKey) ? <div className="rounded-lg border border-destructive/40 bg-card p-8 text-sm text-destructive">You do not have access to this form.</div>
+              : <>
             {isPpeDocumentTab(tab) && (propertyFlow === "ppe" || (propertyFlow === "semi-expendable" && ["splc", "itr", "iirup", "rlsddp", "rrpe", "rpcsp"].includes(tab))) ? (
               <PpeDocumentFlow
                 key={tab}
@@ -1837,6 +1872,7 @@ function FormsFlow() {
                 </div>
               </div>
             )}
+              </>}
           </main>
 
           <FlowSupportPanel
@@ -1850,6 +1886,7 @@ function FormsFlow() {
             onSelectRisIssue={loadRisIssue}
             loadingRisIssueId={loadingRisIssueId}
             onBackup={createFormsFlowBackup}
+            canBackup={isAdmin}
           />
         </div>
       </div>
@@ -1949,10 +1986,14 @@ function FoundationStepper({
   propertyFlow,
   active,
   onChange,
+  permittedForms,
+  canWrite,
 }: {
   propertyFlow: Exclude<PropertyFlow, "supplies">;
   active: FlowTab;
   onChange: (tab: FlowTab) => void;
+  permittedForms: string[];
+  canWrite: boolean;
 }) {
   const isSemiExpendable = propertyFlow === "semi-expendable";
   const title = isSemiExpendable
@@ -1991,11 +2032,19 @@ function FoundationStepper({
         { label: "PAR", detail: "Property Acknowledgment Receipt", icon: FileCheck2 },
         { label: "RCPPE", detail: "Annual physical count report", icon: FileSpreadsheet },
       ];
+  const formKeys: Partial<Record<FlowTab, string>> = propertyFlow === "semi-expendable"
+    ? { iar: "semi_iar", ris: "semi_ris", splc: "semi_splc", rspi: "semi_rspi" }
+    : { iar: "ppe_iar", ris: "ppe_ris", "ppe-ledger": "ppe_ppelc" };
+  const visibleStages = stages.filter((stage) => {
+    if (!stage.tab) return canWrite;
+    const key = formKeys[stage.tab];
+    return key ? permittedForms.includes(key) : canWrite;
+  });
 
   return (
     <section className="rounded-xl border border-border bg-card p-2 shadow-sm">
       <div className={`grid gap-2 ${propertyFlow === "ppe" ? "md:grid-cols-5 xl:grid-cols-10" : "lg:grid-cols-6"}`}>
-        {stages.map((stage) => {
+        {visibleStages.map((stage) => {
           const Icon = stage.icon;
           const isActive = stage.tab === active;
           const enabled = Boolean(stage.tab);
@@ -2034,9 +2083,13 @@ function FoundationStepper({
 function WorkflowStepper({
   active,
   onChange,
+  permittedForms,
+  canWrite,
 }: {
   active: FlowTab;
   onChange: (tab: FlowTab) => void;
+  permittedForms: string[];
+  canWrite: boolean;
 }) {
   const steps: { value: FlowTab; label: string; detail: string; icon: any }[] =
     [
@@ -2069,7 +2122,10 @@ function WorkflowStepper({
 
   return (
     <div className="grid gap-2 rounded-lg border border-border bg-card p-2 md:grid-cols-5">
-      {steps.map((step) => {
+      {steps.filter((step) => {
+        const key = ({ iar: "supplies_iar", ris: "supplies_ris", rsmi: "supplies_rsmi", rpci: "supplies_rpci" } as Partial<Record<FlowTab, string>>)[step.value];
+        return key ? permittedForms.includes(key) : canWrite;
+      }).map((step) => {
         const Icon = step.icon;
         const isActive = active === step.value;
         return (
@@ -5106,6 +5162,7 @@ function FlowSupportPanel({
   onSelectRisIssue,
   loadingRisIssueId,
   onBackup,
+  canBackup,
 }: {
   placement: "side" | "bottom";
   stats: FlowStats;
@@ -5117,6 +5174,7 @@ function FlowSupportPanel({
   onSelectRisIssue: (transaction: Transaction) => Promise<void>;
   loadingRisIssueId: string;
   onBackup: () => Promise<Record<string, unknown[]>>;
+  canBackup: boolean;
 }) {
   const isBottom = placement === "bottom";
   const [backupBusy, setBackupBusy] = useState(false);
@@ -5176,7 +5234,7 @@ function FlowSupportPanel({
           <div className="text-xs text-muted-foreground">Quick actions for this form dashboard</div>
         </div>
         <div className="flex items-center gap-1">
-          <button
+          {canBackup && <button
             type="button"
             onClick={() => void downloadBackup()}
             disabled={backupBusy}
@@ -5184,7 +5242,7 @@ function FlowSupportPanel({
             title="Download Forms Flow data backup"
           >
             <Download className="h-3.5 w-3.5" /> {backupBusy ? "Backing up…" : "Backup"}
-          </button>
+          </button>}
           <SummaryActions onExport={exportSummary} onPrint={() => window.print()} />
         </div>
       </div>

@@ -28,6 +28,7 @@ type SortField = "total" | "submittedAt" | "priority";
 
 type RequestRow = {
   id: string;
+  propertyFlow: string;
   risNo: string;
   item: string;
   category: string;
@@ -46,6 +47,7 @@ type RequestRow = {
 
 type RisApprovalRow = {
   id: string;
+  property_flow: string | null;
   ris_no: string;
   office: string | null;
   requested_by: string | null;
@@ -322,6 +324,7 @@ function ApprovalPage() {
         const unitCost = Number(row.acquisition_cost || 0);
         return {
           id: row.id,
+          propertyFlow: row.property_flow || "supplies",
           risNo: row.ris_no,
           item: row.item_name || "Unknown item",
           category: row.category_name || "Uncategorized",
@@ -413,7 +416,7 @@ function ApprovalPage() {
   ) {
     try {
       await updateRisFormStatus({
-        data: { id: request.id, status, review_note: note },
+        data: { id: request.id, status, review_note: note, property_flow: request.propertyFlow },
       });
       await queryClient.invalidateQueries({
         queryKey: ["risForms", "approval"],
@@ -450,7 +453,7 @@ function ApprovalPage() {
 
   return (
     <RoleGate
-      allow={["admin", "staff"]}
+      allow={["admin", "supply_officer", "inspection_officer"]}
       fallback={
         <div className="p-8 text-sm text-muted-foreground">
           You do not have permission to view approvals.

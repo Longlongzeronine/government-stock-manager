@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 
-type Role = "viewer" | "staff" | "accounting" | "admin";
-const roles = new Set<Role>(["viewer", "staff", "accounting", "admin"]);
+export type Role = "admin" | "regular_user" | "permanent_employee" | "supply_officer" | "inspection_officer" | "financial_analyst";
+const roles = new Set<Role>(["admin", "regular_user", "permanent_employee", "supply_officer", "inspection_officer", "financial_analyst"]);
 
 interface AdminRequest {
   accessToken: string;
@@ -9,8 +9,11 @@ interface AdminRequest {
 
 interface RoleRequest extends AdminRequest {
   userId: string;
-  role: Role;
+  roles: Role[];
+  employmentStatus: EmploymentStatus;
 }
+type EmploymentStatus = "Permanent" | "Casual" | "Contractual" | "Job Order";
+const employmentStatuses = new Set<EmploymentStatus>(["Permanent", "Casual", "Contractual", "Job Order"]);
 
 interface PasswordRequest extends AdminRequest {
   userId: string;
@@ -30,12 +33,26 @@ interface CreateUserRequest extends AdminRequest {
   email: string;
   password: string;
   fullName: string;
-  role: Role;
+  roles: Role[];
+  employmentStatus: EmploymentStatus;
 }
 
 function assertRole(role: string): asserts role is Role {
   if (!roles.has(role as Role)) throw new Error("Invalid role");
 }
+
+function assertRoles(input: string[]) {
+  if (!input.length || input.some((role) => !roles.has(role as Role))) {
+    throw new Error("Choose at least one valid role");
+  }
+  return [...new Set(input)] as Role[];
+}
+
+function assertEmploymentStatus(status: string): asserts status is EmploymentStatus {
+  if (!employmentStatuses.has(status as EmploymentStatus)) throw new Error("Invalid employment status");
+}
+
+export const userRoles: Role[] = ["regular_user", "permanent_employee", "supply_officer", "inspection_officer", "financial_analyst", "admin"];
 
 function getSupabaseConfig() {
   const workerEnv = (
@@ -127,7 +144,7 @@ export const listAdminUsers = createServerFn({ method: "POST" })
     ] = await Promise.all([
       adminClient
         .from("profiles")
-        .select("id, full_name, email, created_at, status")
+        .select("id, full_name, email, created_at, status, employment_status, disabled")
         .limit(5000),
       adminClient.from("user_roles").select("user_id, role").limit(5000),
     ]);
@@ -136,17 +153,20 @@ export const listAdminUsers = createServerFn({ method: "POST" })
     if (rolesError)
       throw new Error(`Could not load user roles: ${rolesError.message}`);
 
-    const roleById = new Map<string, Role>();
+    const roleById = new Map<string, Role[]>();
     (roleRows ?? []).forEach((row: { user_id: string; role: Role }) => {
-      roleById.set(row.user_id, roles.has(row.role) ? row.role : "viewer");
+      const current = roleById.get(row.user_id) ?? [];
+      if (roles.has(row.role) && !current.includes(row.role)) current.push(row.role);
+      roleById.set(row.user_id, current);
     });
 
     return (profiles ?? []).map((profile: any) => ({
       id: profile.id,
       email: profile.email ?? "",
       full_name: profile.full_name ?? null,
-      role: roleById.get(profile.id) ?? "viewer",
-      disabled: false,
+      roles: roleById.get(profile.id) ?? ["regular_user"],
+      employment_status: profile.employment_status ?? "Casual",
+      disabled: profile.disabled ?? false,
       status: profile.status ?? "pending",
       created_at: profile.created_at,
     }));
@@ -155,7 +175,8 @@ export const listAdminUsers = createServerFn({ method: "POST" })
 export const createAdminUser = createServerFn({ method: "POST" })
   .inputValidator((d: CreateUserRequest) => d)
   .handler(async ({ data }) => {
-    assertRole(data.role);
+    const assignedRoles = assertRoles(data.roles);
+    assertEmploymentStatus(data.employmentStatus);
     const adminClient = await getAdminClient(data.accessToken);
     const { data: created, error } = await adminClient.auth.admin.createUser({
       email: data.email.trim().toLowerCase(),
@@ -163,7 +184,8 @@ export const createAdminUser = createServerFn({ method: "POST" })
       email_confirm: true,
       user_metadata: {
         full_name: data.fullName.trim(),
-        requested_role: data.role,
+        requested_role: "regular_user",
+        employment_status: data.employmentStatus,
       },
     });
     if (error) throw new Error(error.message);
@@ -174,14 +196,13 @@ export const createAdminUser = createServerFn({ method: "POST" })
       email: created.user.email,
       full_name: data.fullName.trim(),
       status: "active",
+      employment_status: data.employmentStatus,
     });
-    await adminClient
-      .from("user_roles")
-      .delete()
-      .eq("user_id", created.user.id);
-    const { error: roleError } = await adminClient
-      .from("user_roles")
-      .insert({ user_id: created.user.id, role: data.role });
+    const { data: actor, error: actorError } = await adminClient.auth.getUser(data.accessToken);
+    if (actorError || !actor.user) throw new Error("Could not identify administrator");
+    const { error: roleError } = await adminClient.rpc("admin_replace_user_roles", {
+      _changed_by: actor.user.id, _user_id: created.user.id, _roles: assignedRoles, _employment_status: data.employmentStatus,
+    });
     if (roleError) throw new Error(roleError.message);
     return { ok: true };
   });
@@ -189,12 +210,40 @@ export const createAdminUser = createServerFn({ method: "POST" })
 export const setUserRole = createServerFn({ method: "POST" })
   .inputValidator((d: RoleRequest) => d)
   .handler(async ({ data }) => {
+    const assignedRoles = assertRoles(data.roles);
+    assertEmploymentStatus(data.employmentStatus);
+    const adminClient = await getAdminClient(data.accessToken);
+    const { data: actor, error: actorError } = await adminClient.auth.getUser(data.accessToken);
+    if (actorError || !actor.user) throw new Error("Could not identify administrator");
+    const { error } = await adminClient.rpc("admin_replace_user_roles", {
+      _changed_by: actor.user.id, _user_id: data.userId, _roles: assignedRoles, _employment_status: data.employmentStatus,
+    });
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+export const listRoleMatrix = createServerFn({ method: "POST" })
+  .inputValidator((d: AdminRequest) => d)
+  .handler(async ({ data }) => {
+    const adminClient = await getAdminClient(data.accessToken);
+    const [{ data: roleRows, error: roleError }, { data: forms, error: formsError }, { data: permissionRows, error: permissionError }] = await Promise.all([
+      adminClient.from("roles").select("code,label,is_system_admin").order("label"),
+      adminClient.from("forms").select("form_key,section,label,sort_order").order("sort_order"),
+      adminClient.from("role_form_permissions").select("role_code,form_key,can_access"),
+    ]);
+    if (roleError || formsError || permissionError) throw new Error(roleError?.message ?? formsError?.message ?? permissionError?.message);
+    return { roles: roleRows ?? [], forms: forms ?? [], permissions: permissionRows ?? [] };
+  });
+
+export const setRoleFormPermission = createServerFn({ method: "POST" })
+  .inputValidator((d: AdminRequest & { role: Role; formKey: string; canAccess: boolean }) => d)
+  .handler(async ({ data }) => {
     assertRole(data.role);
     const adminClient = await getAdminClient(data.accessToken);
-    await adminClient.from("user_roles").delete().eq("user_id", data.userId);
-    const { error } = await adminClient
-      .from("user_roles")
-      .insert({ user_id: data.userId, role: data.role });
+    if (data.role === "admin" && !data.canAccess) throw new Error("Administrator access cannot be removed");
+    const { error } = await adminClient.from("role_form_permissions").upsert({
+      role_code: data.role, form_key: data.formKey, can_access: data.canAccess,
+    }, { onConflict: "role_code,form_key" });
     if (error) throw new Error(error.message);
     return { ok: true };
   });
@@ -220,6 +269,8 @@ export const setUserDisabled = createServerFn({ method: "POST" })
       ban_duration: data.disabled ? "876000h" : "none",
     });
     if (error) throw new Error(error.message);
+    const { error: profileError } = await adminClient.from("profiles").update({ disabled: data.disabled }).eq("id", data.userId);
+    if (profileError) throw new Error(profileError.message);
     return { ok: true };
   });
 
