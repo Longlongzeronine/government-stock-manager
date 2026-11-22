@@ -21,17 +21,36 @@ create table if not exists public.forms (
 );
 
 insert into public.forms (form_key, section, label, sort_order) values
-  ('supplies_ris', 'Supplies', 'RIS', 10),
-  ('supplies_iar', 'Supplies', 'IAR', 20),
+  -- Supplies & Materials
+  ('supplies_iar', 'Supplies', 'IAR', 10),
+  ('supplies_stock_card', 'Supplies', 'Stock Card', 12),
+  ('supplies_ris', 'Supplies', 'RIS', 14),
   ('supplies_rsmi', 'Supplies', 'RSMI', 30),
   ('supplies_rpci', 'Supplies', 'RPCI', 40),
-  ('semi_ris', 'Semi-Expendable Property', 'RIS', 50),
-  ('semi_iar', 'Semi-Expendable Property', 'IAR', 60),
-  ('semi_splc', 'Semi-Expendable Property', 'SPLC', 70),
+  -- Semi-Expendable Property
+  ('semi_iar', 'Semi-Expendable Property', 'IAR', 50),
+  ('semi_splc', 'Semi-Expendable Property', 'SPLC', 52),
+  ('semi_spc', 'Semi-Expendable Property', 'SPC', 54),
+  ('semi_ris', 'Semi-Expendable Property', 'RIS', 56),
+  ('semi_ics', 'Semi-Expendable Property', 'ICS', 58),
+  ('semi_itr', 'Semi-Expendable Property', 'ITR', 60),
   ('semi_rspi', 'Semi-Expendable Property', 'RSPI', 80),
-  ('ppe_ris', 'PPE', 'RIS', 90),
+  ('semi_regspi', 'Semi-Expendable Property', 'RegSPI', 82),
+  ('semi_iirup', 'Semi-Expendable Property', 'IIRUP', 84),
+  ('semi_rlsddp', 'Semi-Expendable Property', 'RLSDDP', 86),
+  ('semi_rrpe', 'Semi-Expendable Property', 'RRPE', 88),
+  ('semi_rpcsp', 'Semi-Expendable Property', 'RPCSP', 90),
+  -- Property, Plant & Equipment
   ('ppe_iar', 'PPE', 'IAR', 100),
-  ('ppe_ppelc', 'PPE', 'PPELC', 110)
+  ('ppe_ppelc', 'PPE', 'PPELC', 102),
+  ('ppe_pc', 'PPE', 'PC', 104),
+  ('ppe_ris', 'PPE', 'RIS', 106),
+  ('ppe_par', 'PPE', 'PAR', 108),
+  ('ppe_ptr', 'PPE', 'PTR', 110),
+  ('ppe_rpcppe', 'PPE', 'RPCPPE', 112),
+  ('ppe_iirup', 'PPE', 'IIRUP', 114),
+  ('ppe_rlsddp', 'PPE', 'RLSDDP', 116),
+  ('ppe_rrpe', 'PPE', 'RRPE', 118)
 on conflict (form_key) do update set section = excluded.section, label = excluded.label, sort_order = excluded.sort_order;
 
 create table if not exists public.role_form_permissions (
