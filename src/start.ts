@@ -118,11 +118,11 @@ const inventoryAuthMiddleware = createMiddleware({ type: "function" })
     // These endpoints perform their own role or form permission checks. Let
     // them reach that authorization instead of rejecting them as inventory writes.
     const formGuardedFunctions = new Set(["createIarForm", "createIarItem", "postIar", "updateIarPriceLots", "createRisForm", "createRisItem", "updateRisFormStatus", "savePpeDocument", "approvePpeDocument", "createTransaction", "setRoleFormPermission"]);
-    const canWrite = ["admin", "supply_officer", "inspection_officer", "financial_analyst"].some((candidate) => assignedRoles.has(candidate));
+    const canWrite = ["admin", "super_admin", "supply_officer", "inspection_officer", "financial_analyst"].some((candidate) => assignedRoles.has(candidate));
     if (method !== "GET" && !canWrite && !formGuardedFunctions.has(serverFnMeta.name)) {
       throw Object.assign(new Error("Forbidden: write access required."), { statusCode: 403 });
     }
-    if (adminOnlyFunctions.has(serverFnMeta.name) && role !== "admin") {
+    if (adminOnlyFunctions.has(serverFnMeta.name) && role !== "admin" && role !== "super_admin") {
       throw Object.assign(new Error("Forbidden: administrator access required."), { statusCode: 403 });
     }
     return next();
