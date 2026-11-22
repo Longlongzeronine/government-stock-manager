@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 
-export type Role = "admin" | "regular_user" | "permanent_employee" | "supply_officer" | "inspection_officer" | "financial_analyst";
-const roles = new Set<Role>(["admin", "regular_user", "permanent_employee", "supply_officer", "inspection_officer", "financial_analyst"]);
+export type Role = "admin" | "super_admin" | "regular_user" | "permanent_employee" | "supply_officer" | "inspection_officer" | "financial_analyst";
+const roles = new Set<Role>(["admin", "super_admin", "regular_user", "permanent_employee", "supply_officer", "inspection_officer", "financial_analyst"]);
 
 interface AdminRequest {
   accessToken: string;
@@ -52,7 +52,11 @@ function assertEmploymentStatus(status: string): asserts status is EmploymentSta
   if (!employmentStatuses.has(status as EmploymentStatus)) throw new Error("Invalid employment status");
 }
 
-export const userRoles: Role[] = ["regular_user", "permanent_employee", "supply_officer", "inspection_officer", "financial_analyst", "admin"];
+export const userRoles: Role[] = ["regular_user", "permanent_employee", "supply_officer", "inspection_officer", "financial_analyst", "admin", "super_admin"];
+
+function isSystemAdmin(role: Role): boolean {
+  return role === "admin" || role === "super_admin";
+}
 
 function getSupabaseConfig() {
   const workerEnv = (
@@ -177,6 +181,16 @@ export const createAdminUser = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const assignedRoles = assertRoles(data.roles);
     assertEmploymentStatus(data.employmentStatus);
+
+    // Pre-check Super Admin limit before creating the auth account.
+    if (assignedRoles.includes("super_admin")) {
+      const adminClient = await getAdminClient(data.accessToken);
+      const { data: actor, error: actorError } = await adminClient.auth.getUser(data.accessToken);
+      if (actorError || !actor.user) throw new Error("Could not identify administrator");
+      // enforce_super_admin_limit counts active Super Admins; throws if at max.
+      await adminClient.rpc("enforce_super_admin_limit", { _target_user_id: actor.user.id });
+    }
+
     const adminClient = await getAdminClient(data.accessToken);
     const { data: created, error } = await adminClient.auth.admin.createUser({
       email: data.email.trim().toLowerCase(),
@@ -239,12 +253,98 @@ export const setRoleFormPermission = createServerFn({ method: "POST" })
   .inputValidator((d: AdminRequest & { role: Role; formKey: string; canAccess: boolean }) => d)
   .handler(async ({ data }) => {
     assertRole(data.role);
+    if (data.role === "super_admin")
+      throw new Error("Super Admin permissions cannot be changed through the matrix.");
+    if (data.role === "admin" && !data.canAccess)
+      throw new Error("Administrator access cannot be removed");
     const adminClient = await getAdminClient(data.accessToken);
-    if (data.role === "admin" && !data.canAccess) throw new Error("Administrator access cannot be removed");
-    const { error } = await adminClient.from("role_form_permissions").upsert({
-      role_code: data.role, form_key: data.formKey, can_access: data.canAccess,
-    }, { onConflict: "role_code,form_key" });
+
+    // Capture old value before upsert.
+    const { data: existing } = await adminClient
+      .from("role_form_permissions")
+      .select("can_access")
+      .eq("role_code", data.role)
+      .eq("form_key", data.formKey)
+      .maybeSingle();
+
+    const { error } = await adminClient.from("role_form_permissions").upsert(
+      {
+        role_code: data.role,
+        form_key: data.formKey,
+        can_access: data.canAccess,
+      },
+      { onConflict: "role_code,form_key" },
+    );
     if (error) throw new Error(error.message);
+
+    // Audit log entry for the matrix change.
+    const { data: actor } = await adminClient.auth.getUser(data.accessToken);
+    await adminClient.from("audit_logs").insert({
+      actor_id: actor?.user?.id ?? null,
+      actor_email: actor?.user?.email ?? null,
+      action: "set_form_permission",
+      table_name: "role_form_permissions",
+      row_id: `${data.role}:${data.formKey}`,
+      payload: {
+        role: data.role,
+        form_key: data.formKey,
+        old_can_access: existing?.can_access ?? null,
+        new_can_access: data.canAccess,
+      },
+    });
+    return { ok: true };
+  });
+
+interface BatchFormPermissionRequest extends AdminRequest {
+  changes: Array<{ role: Role; formKey: string; canAccess: boolean }>;
+}
+
+export const batchSetRoleFormPermissions = createServerFn({ method: "POST" })
+  .inputValidator((d: BatchFormPermissionRequest) => d)
+  .handler(async ({ data }) => {
+    const adminClient = await getAdminClient(data.accessToken);
+    const { data: actor } = await adminClient.auth.getUser(data.accessToken);
+    const actorId = actor?.user?.id ?? null;
+    const actorEmail = actor?.user?.email ?? null;
+
+    for (const change of data.changes) {
+      assertRole(change.role);
+      if (change.role === "super_admin")
+        throw new Error("Super Admin permissions cannot be changed through the matrix.");
+      if (change.role === "admin" && !change.canAccess)
+        throw new Error("Administrator access cannot be removed");
+
+      const { data: existing } = await adminClient
+        .from("role_form_permissions")
+        .select("can_access")
+        .eq("role_code", change.role)
+        .eq("form_key", change.formKey)
+        .maybeSingle();
+
+      const { error } = await adminClient.from("role_form_permissions").upsert(
+        {
+          role_code: change.role,
+          form_key: change.formKey,
+          can_access: change.canAccess,
+        },
+        { onConflict: "role_code,form_key" },
+      );
+      if (error) throw new Error(error.message);
+
+      await adminClient.from("audit_logs").insert({
+        actor_id: actorId,
+        actor_email: actorEmail,
+        action: "set_form_permission",
+        table_name: "role_form_permissions",
+        row_id: `${change.role}:${change.formKey}`,
+        payload: {
+          role: change.role,
+          form_key: change.formKey,
+          old_can_access: existing?.can_access ?? null,
+          new_can_access: change.canAccess,
+        },
+      });
+    }
     return { ok: true };
   });
 
