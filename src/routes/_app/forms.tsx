@@ -59,6 +59,7 @@ import {
   rememberFormPersonnel,
   reserveNextFormNumber,
 } from "@/lib/data.functions";
+import { FORM_ACCESS_KEYS, FORM_DEFINITIONS } from "@/lib/form-definitions";
 
 export const Route = createFileRoute("/_app/forms")({
   head: () => ({ meta: [{ title: "Forms Flow - Supplify" }] }),
@@ -68,8 +69,6 @@ type FlowTab = "iar" | "stock-card" | "ris" | "ics" | "rsmi" | "rpci" | "rspi" |
 type PropertyFlow = "supplies" | "semi-expendable" | "ppe";
 type ViewMode = "preview" | "split";
 type Orientation = "portrait" | "landscape";
-const FORM_ACCESS_KEYS = ["supplies_ris", "supplies_iar", "supplies_rsmi", "supplies_rpci", "semi_ris", "semi_iar", "semi_splc", "semi_rspi", "ppe_ris", "ppe_iar", "ppe_ppelc"];
-
 type Item = {
   id: string;
   name: string;
@@ -1982,6 +1981,74 @@ function PropertyFlowSwitcher({
   );
 }
 
+const TAB_ICONS: Record<string, any> = {
+  iar: PackageCheck,
+  "stock-card": FileSpreadsheet,
+  splc: FileSpreadsheet,
+  ris: Send,
+  ics: FileCheck2,
+  itr: Send,
+  rspi: FileSpreadsheet,
+  regspi: FileSpreadsheet,
+  iirup: FileText,
+  rlsddp: FileText,
+  rrpe: FileCheck2,
+  rpcsp: FileSpreadsheet,
+  "ppe-ledger": FileSpreadsheet,
+  par: FileCheck2,
+  ptr: Send,
+  rpcppe: FileSpreadsheet,
+};
+
+const TAB_DETAILS: Record<string, string> = {
+  iar: "Inspection and acceptance",
+  "stock-card": "Property card",
+  splc: "Semi-expendable property ledger card",
+  ris: "Property issuance request",
+  ics: "Inventory Custodian Slip",
+  itr: "Inventory Transfer Report",
+  rspi: "Registry of Semi-Expendable Property Issued",
+  regspi: "Registry of Semi-Expendable Property",
+  iirup: "Unserviceable property report",
+  rlsddp: "Lost/damaged property report",
+  rrpe: "Return/receipt of property",
+  rpcsp: "Physical count of semi-expendable property",
+  "ppe-ledger": "PPE ledger card",
+  par: "Property acknowledgment receipt",
+  ptr: "Property transfer report",
+  rpcppe: "Physical count report",
+};
+
+const FORM_KEY_BY_TAB: Record<string, string> = {
+  "supplies_iar": "iar",
+  "supplies_stock_card": "stock-card",
+  "supplies_ris": "ris",
+  "supplies_rsmi": "rsmi",
+  "supplies_rpci": "rpci",
+  "semi_iar": "iar",
+  "semi_splc": "splc",
+  "semi_spc": "stock-card",
+  "semi_ris": "ris",
+  "semi_ics": "ics",
+  "semi_itr": "itr",
+  "semi_rspi": "rspi",
+  "semi_regspi": "regspi",
+  "semi_iirup": "iirup",
+  "semi_rlsddp": "rlsddp",
+  "semi_rrpe": "rrpe",
+  "semi_rpcsp": "rpcsp",
+  "ppe_iar": "iar",
+  "ppe_ppelc": "ppe-ledger",
+  "ppe_pc": "stock-card",
+  "ppe_ris": "ris",
+  "ppe_par": "par",
+  "ppe_ptr": "ptr",
+  "ppe_rpcppe": "rpcppe",
+  "ppe_iirup": "iirup",
+  "ppe_rlsddp": "rlsddp",
+  "ppe_rrpe": "rrpe",
+};
+
 function FoundationStepper({
   propertyFlow,
   active,
@@ -1999,46 +2066,37 @@ function FoundationStepper({
   const title = isSemiExpendable
     ? "Semi-Expendable Property"
     : "Property, Plant & Equipment";
-  const stages = isSemiExpendable
-    ? [
-        { label: "IAR", detail: "Inspection and acceptance", tab: "iar" as const, icon: PackageCheck },
-        { label: "SPLC", detail: "Semi-expendable property ledger card", tab: "splc" as const, icon: FileSpreadsheet },
-        { label: "SPC", detail: "Semi-expendable property card", tab: "stock-card" as const, icon: FileSpreadsheet },
-        { label: "RIS", detail: "Property issuance request", tab: "ris" as const, icon: Send },
-        { label: "ICS", detail: "Inventory Custodian Slip", tab: "ics" as const, icon: FileCheck2 },
-        { label: "ITR", detail: "Inventory Transfer Report", tab: "itr" as const, icon: Send },
-        { label: "RSPI", detail: "Registry of Semi-Expendable Property Issued", tab: "rspi" as const, icon: FileSpreadsheet },
-        { label: "RegSPI", detail: "Registry of Semi-Expendable Property", tab: "regspi" as const, icon: FileSpreadsheet },
-        { label: "IIRUP", detail: "Unserviceable property report", tab: "iirup" as const, icon: FileText },
-        { label: "RLSDDP", detail: "Lost/damaged property report", tab: "rlsddp" as const, icon: FileText },
-        { label: "RRPE", detail: "Return/receipt of property", tab: "rrpe" as const, icon: FileCheck2 },
-        { label: "RPCSP", detail: "Physical count of semi-expendable property", tab: "rpcsp" as const, icon: FileSpreadsheet },
-      ]
-    : propertyFlow === "ppe" ? [
-        { label: "IAR", detail: "Inspection and acceptance", tab: "iar" as const, icon: PackageCheck },
-        { label: "PPELC", detail: "PPE ledger card", tab: "ppe-ledger" as const, icon: FileSpreadsheet },
-        { label: "PC", detail: "Property card", tab: "stock-card" as const, icon: FileSpreadsheet },
-        { label: "RIS", detail: "Property issuance request", tab: "ris" as const, icon: Send },
-        { label: "PAR", detail: "Property acknowledgment receipt", tab: "par" as const, icon: FileCheck2 },
-        { label: "PTR", detail: "Property transfer report", tab: "ptr" as const, icon: Send },
-        { label: "RPCPPE", detail: "Physical count report", tab: "rpcppe" as const, icon: FileSpreadsheet },
-        { label: "IIRUP", detail: "Unserviceable property report", tab: "iirup" as const, icon: FileText },
-        { label: "RLSDDP", detail: "Lost/damaged property report", tab: "rlsddp" as const, icon: FileText },
-        { label: "RRPE", detail: "Return/receipt of property", tab: "rrpe" as const, icon: FileCheck2 },
-      ] : [
-        { label: "IAR", detail: "Inspection and acceptance", tab: "iar" as const, icon: PackageCheck },
-        { label: "Property Card", detail: "Individual property ledger", tab: "stock-card" as const, icon: FileSpreadsheet },
-        { label: "RIS", detail: "Property issuance request", tab: "ris" as const, icon: Send },
-        { label: "PAR", detail: "Property Acknowledgment Receipt", icon: FileCheck2 },
-        { label: "RCPPE", detail: "Annual physical count report", icon: FileSpreadsheet },
-      ];
-  const formKeys: Partial<Record<FlowTab, string>> = propertyFlow === "semi-expendable"
-    ? { iar: "semi_iar", ris: "semi_ris", splc: "semi_splc", rspi: "semi_rspi" }
-    : { iar: "ppe_iar", ris: "ppe_ris", "ppe-ledger": "ppe_ppelc" };
+  const section = isSemiExpendable ? "Semi-Expendable Property" : "PPE";
+  const stageDefs = FORM_DEFINITIONS.filter((def) => def.section === section).sort((a, b) => a.sortOrder - b.sortOrder);
+
+  interface StageDef {
+    label: string;
+    detail: string;
+    tab: FlowTab | undefined;
+    icon: any;
+  }
+
+  const stages: StageDef[] = stageDefs.map((def): StageDef => {
+    const tab = FORM_KEY_BY_TAB[def.formKey] as FlowTab | undefined;
+    return {
+      label: def.label,
+      detail: TAB_DETAILS[tab ?? ""] ?? "",
+      tab,
+      icon: TAB_ICONS[tab ?? ""],
+    };
+  });
+  // Reverse lookup: tab -> form key, scoped to the current property flow.
+  const formKeys: Partial<Record<FlowTab, string>> = {};
+  for (const def of stageDefs) {
+    const tab = FORM_KEY_BY_TAB[def.formKey];
+    if (tab) formKeys[tab as FlowTab] = def.formKey;
+  }
   const visibleStages = stages.filter((stage) => {
     if (!stage.tab) return canWrite;
     const key = formKeys[stage.tab];
-    return key ? permittedForms.includes(key) : canWrite;
+    // Staff/admin (canWrite) can always open a stage; otherwise the form key
+    // must be in the user's permitted form set.
+    return key ? permittedForms.includes(key) || canWrite : canWrite;
   });
 
   return (
