@@ -22,6 +22,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 
 type AssignableRole = Role;
 const assignableRoles: { value: AssignableRole; label: string }[] = [
+  { value: "super_admin", label: "Super Admin" },
   { value: "regular_user", label: "Regular User" },
   { value: "permanent_employee", label: "Permanent Employee" },
   { value: "supply_officer", label: "Supply Officer" },
