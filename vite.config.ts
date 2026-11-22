@@ -9,6 +9,9 @@ import { loadEnv } from "vite";
 
 // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
 // @cloudflare/vite-plugin builds from this — wrangler.jsonc main alone is insufficient.
+// The wrapper's runtime supports Vite's config callback although its published
+// TypeScript overload currently exposes only the object form.
+// @ts-expect-error callback form is supported by @lovable.dev/vite-tanstack-config
 export default defineConfig(({ mode }) => {
   // Local Node dev server can read server-only values from .env at runtime.
   // Never define these into the production bundle; Cloudflare supplies secrets

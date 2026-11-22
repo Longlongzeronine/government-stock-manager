@@ -127,7 +127,7 @@ function ChangeDetails({ row }: { row: any }) {
 }
 
 function Audit() {
-  const { isAdmin, developerMode } = useAuth();
+  const { canAccess } = useAuth();
   const { data: rows = [], isLoading, error } = useQuery({
     queryKey: ["audit"],
     queryFn: () => listAuditLogs(),
@@ -164,7 +164,7 @@ function Audit() {
     });
   }
 
-  if (!isAdmin && !developerMode) {
+  if (!canAccess("audit_logs", "view")) {
     return <div className="p-8 text-sm text-muted-foreground">Admin access required.</div>;
   }
 

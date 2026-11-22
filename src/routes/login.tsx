@@ -32,7 +32,7 @@ function LoginPage() {
         return;
       }
       toast.success("Welcome back");
-      navigate({ to: "/dashboard" });
+      navigate({ to: isDeveloperAccount ? "/migrations" : "/dashboard" });
     } finally {
       submitLockRef.current = false;
       setLoading(false);

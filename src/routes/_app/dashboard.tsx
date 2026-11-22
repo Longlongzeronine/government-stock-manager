@@ -24,7 +24,7 @@ export const Route = createFileRoute("/_app/dashboard")({
 });
 
 function Dashboard() {
-  const { canWrite, isAdmin, developerMode } = useAuth();
+  const { canAccess } = useAuth();
   const { data: items = [], refetch: rItems } = useQuery({
     queryKey: ["items"],
     queryFn: () => listItems(),
@@ -118,7 +118,7 @@ function Dashboard() {
           <div className="bg-card border border-border rounded-lg p-4 sm:p-5">
             <h2 className="text-lg mb-3">Quick Actions</h2>
             <div className="space-y-2">
-              {isAdmin && (
+              {canAccess("inventory", "create") && (
                 <Link
                   to="/inventory"
                   search={{ add: true }}
@@ -127,7 +127,7 @@ function Dashboard() {
                   + Add new item
                 </Link>
               )}
-              {developerMode && (
+              {canAccess("stock", "create") && (
                 <Link
                   to="/stock"
                   className="block rounded-md border border-border px-3 py-2 text-sm hover:bg-accent"
@@ -135,7 +135,7 @@ function Dashboard() {
                   Record stock movement
                 </Link>
               )}
-              {canWrite && (
+              {canAccess("suppliers", "view") && (
                 <Link
                   to="/suppliers"
                   className="block rounded-md border border-border px-3 py-2 text-sm hover:bg-accent"
@@ -143,12 +143,7 @@ function Dashboard() {
                   Manage suppliers
                 </Link>
               )}
-              <Link
-                to="/assistant"
-                className="block rounded-md border border-border px-3 py-2 text-sm hover:bg-accent"
-              >
-                Ask the AI assistant
-              </Link>
+              {canAccess("assistant", "view") && <Link to="/assistant" className="block rounded-md border border-border px-3 py-2 text-sm hover:bg-accent">Ask the AI assistant</Link>}
             </div>
           </div>
         </div>

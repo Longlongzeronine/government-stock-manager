@@ -1970,6 +1970,8 @@ export const updateRisFormStatus = createServerFn({ method: "POST" })
     }) => d,
   )
   .handler(async ({ data }) => {
+    const { assertAccessFromRequest } = await import("@/lib/access-control.server");
+    await assertAccessFromRequest("approvals", data.status === "rejected" || data.status === "cancelled" ? "reject" : data.status === "approved" || data.status === "issued" ? "approve" : "review");
     const prefix = data.property_flow === "semi-expendable" ? "semi" : data.property_flow === "ppe" ? "ppe" : "supplies";
     await assertFormAccessFromRequest(`${prefix}_ris`, "review");
     const status = data.status;

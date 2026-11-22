@@ -15,7 +15,10 @@ export const Route = createFileRoute("/_app/categories")({
 });
 
 function Categories() {
-  const { isAdmin, developerMode } = useAuth();
+  const { canAccess } = useAuth();
+  const canCreate = canAccess("categories", "create");
+  const canUpdate = canAccess("categories", "update");
+  const canDelete = canAccess("categories", "delete");
   const qc = useQueryClient();
   const { data: cats = [] } = useQuery({
     queryKey: ["categories"],
@@ -44,7 +47,7 @@ function Categories() {
         title="Categories"
         subtitle={`${cats.length} categories`}
         actions={
-          (isAdmin || developerMode) && (
+          canCreate && (
             <button
               onClick={() => {
                 setEditing(null);
@@ -75,9 +78,9 @@ function Categories() {
                     <td className="px-4 py-3 font-medium">{c.name}</td>
                     <td className="px-4 py-3 text-muted-foreground">{c.description ?? "—"}</td>
                     <td className="px-4 py-3 text-right">
-                      {(isAdmin || developerMode) && (
+                      {(canUpdate || canDelete) && (
                         <div className="inline-flex gap-1">
-                          <button
+                          {canUpdate && <button
                             onClick={() => {
                               setEditing(c);
                               setOpen(true);
@@ -85,13 +88,13 @@ function Categories() {
                             className="p-1.5 rounded hover:bg-accent"
                           >
                             <Pencil className="h-3.5 w-3.5" />
-                          </button>
-                          <button
+                          </button>}
+                          {canDelete && <button
                             onClick={() => del(c.id)}
                             className="p-1.5 rounded hover:bg-destructive/10 text-destructive"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
-                          </button>
+                          </button>}
                         </div>
                       )}
                     </td>
@@ -116,9 +119,9 @@ function Categories() {
               <MobileCard key={c.id}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="font-medium text-base">{c.name}</div>
-                  {(isAdmin || developerMode) && (
+                  {(canUpdate || canDelete) && (
                     <div className="flex gap-1 shrink-0">
-                      <button
+                      {canUpdate && <button
                         onClick={() => {
                           setEditing(c);
                           setOpen(true);
@@ -126,13 +129,13 @@ function Categories() {
                         className="p-1.5 rounded hover:bg-accent"
                       >
                         <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                      <button
+                      </button>}
+                      {canDelete && <button
                         onClick={() => del(c.id)}
                         className="p-1.5 rounded hover:bg-destructive/10 text-destructive"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      </button>}
                     </div>
                   )}
                 </div>

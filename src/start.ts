@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { supabase } from "./integrations/supabase/client";
 
 import { renderErrorPage } from "./lib/error-page";
+import { ACCESS_PRESETS, canAccess, isAccessSchemaUnavailable, normalizeAccess, SERVER_FUNCTION_ACCESS } from "./lib/access-control";
 
 const errorMiddleware = createMiddleware().server(async ({ next }) => {
   try {
@@ -27,20 +28,6 @@ const publicServerFunctions = new Set([
   "getRisVerification",
 ]);
 
-const adminOnlyFunctions = new Set([
-  "createItem",
-  "importItems",
-  "updateItem",
-  "updateItemMonthlyQuantity",
-  "deleteItem",
-  "createCategory",
-  "updateCategory",
-  "deleteCategory",
-  "deleteSupplier",
-  "listAuditLogs",
-  "createFormsFlowBackup",
-]);
-
 const inventoryAuthMiddleware = createMiddleware({ type: "function" })
   .client(async ({ next }) => {
     const {
@@ -58,10 +45,13 @@ const inventoryAuthMiddleware = createMiddleware({ type: "function" })
     const { readDeveloperSession } =
       await import("./lib/developer-session.server");
     const developerIdentity = await readDeveloperSession();
-    let role = developerIdentity ? "admin" : "";
-    const assignedRoles = new Set<string>(developerIdentity ? ["admin"] : []);
 
-    if (!developerIdentity) {
+    // The separately authenticated developer identity is intentionally scoped
+    // to server functions through the same central middleware. Supabase account
+    // administration still requires a Supabase access token in its handler.
+    if (developerIdentity) return next();
+
+    {
       const authorization = getRequestHeader("authorization") || "";
       const accessToken = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
       if (!accessToken) throw new Error("Authentication required.");
@@ -105,25 +95,29 @@ const inventoryAuthMiddleware = createMiddleware({ type: "function" })
         throw new Error("Account is not approved for access.");
       }
 
-      const { data: roles, error: rolesError } = await client
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", user.id);
-      if (rolesError) throw new Error("Could not verify account permissions.");
-      (roles ?? []).forEach((row: { role: string }) => assignedRoles.add(row.role));
-      role = assignedRoles.has("admin") ? "admin" : [...assignedRoles][0] ?? "regular_user";
-
-    }
-
-    // These endpoints perform their own role or form permission checks. Let
-    // them reach that authorization instead of rejecting them as inventory writes.
-    const formGuardedFunctions = new Set(["createIarForm", "createIarItem", "postIar", "updateIarPriceLots", "createRisForm", "createRisItem", "updateRisFormStatus", "savePpeDocument", "approvePpeDocument", "createTransaction", "setRoleFormPermission"]);
-    const canWrite = ["admin", "super_admin", "supply_officer", "inspection_officer", "financial_analyst"].some((candidate) => assignedRoles.has(candidate));
-    if (method !== "GET" && !canWrite && !formGuardedFunctions.has(serverFnMeta.name)) {
-      throw Object.assign(new Error("Forbidden: write access required."), { statusCode: 403 });
-    }
-    if (adminOnlyFunctions.has(serverFnMeta.name) && role !== "admin" && role !== "super_admin") {
-      throw Object.assign(new Error("Forbidden: administrator access required."), { statusCode: 403 });
+      const requirements = SERVER_FUNCTION_ACCESS[serverFnMeta.name];
+      if (!requirements?.length) {
+        console.error(`Access map missing for server function: ${serverFnMeta.name}`);
+        throw Object.assign(new Error("Forbidden: this operation is not registered in the access-control map."), { statusCode: 403 });
+      }
+      const { data: rawAccess, error: accessError } = await client.rpc("get_my_access");
+      let access;
+      if (accessError) {
+        if (!isAccessSchemaUnavailable(accessError)) throw new Error(`Could not verify account access: ${accessError.message}`);
+        const { data: legacyRoles, error: rolesError } = await client.from("user_roles").select("role").eq("user_id", user.id);
+        if (rolesError) throw new Error("Could not verify bootstrap account permissions.");
+        const isLegacyAdministrator = (legacyRoles ?? []).some((row: { role: string }) => row.role === "admin" || row.role === "super_admin");
+        access = isLegacyAdministrator ? normalizeAccess(ACCESS_PRESETS.admin.access) : { dashboard: ["view"] };
+      } else {
+        access = normalizeAccess(rawAccess);
+      }
+      const allowed = requirements.some((requirement) =>
+        canAccess(access, requirement.module, requirement.action ?? "view"),
+      );
+      if (!allowed) {
+        const expected = requirements.map((requirement) => `${requirement.module}.${requirement.action ?? "view"}`).join(" or ");
+        throw Object.assign(new Error(`Forbidden: ${expected} permission required.`), { statusCode: 403 });
+      }
     }
     return next();
   });

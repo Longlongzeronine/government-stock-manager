@@ -11,12 +11,12 @@ export type RoleCode =
 
 export const ROLE_CODES: RoleCode[] = [
   "super_admin",
-  "admin",
   "regular_user",
   "permanent_employee",
   "supply_officer",
   "inspection_officer",
   "financial_analyst",
+  "admin",
 ];
 
 export const ROLE_LABELS: Record<RoleCode, string> = {

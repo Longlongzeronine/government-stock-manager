@@ -18,7 +18,8 @@ export const Route = createFileRoute("/_app/stock")({
 });
 
 function Stock() {
-  const { canWrite, user } = useAuth();
+  const { canAccess, user } = useAuth();
+  const canWrite = canAccess("stock", "create");
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<"all" | "issued">("issued");

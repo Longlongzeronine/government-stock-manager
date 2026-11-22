@@ -15,7 +15,10 @@ export const Route = createFileRoute("/_app/suppliers")({
 });
 
 function Suppliers() {
-  const { canWrite, isAdmin } = useAuth();
+  const { canAccess } = useAuth();
+  const canCreate = canAccess("suppliers", "create");
+  const canUpdate = canAccess("suppliers", "update");
+  const canDelete = canAccess("suppliers", "delete");
   const qc = useQueryClient();
   const { data: rows = [] } = useQuery({
     queryKey: ["suppliers"],
@@ -40,7 +43,7 @@ function Suppliers() {
 
   return (
     <div>
-      <PageHeader title="Suppliers" subtitle={`${rows.length} suppliers on file`} actions={canWrite && (
+      <PageHeader title="Suppliers" subtitle={`${rows.length} suppliers on file`} actions={canCreate && (
         <button onClick={() => { setEditing(null); setOpen(true); }} className="inline-flex items-center gap-2 rounded-md bg-primary text-primary-foreground px-3 py-2 text-sm font-medium hover:bg-primary/90"><Plus className="h-4 w-4" /> Add supplier</button>
       )} />
       <div className="p-4 sm:p-6 lg:p-8">
@@ -57,9 +60,9 @@ function Suppliers() {
                     <td className="px-4 py-3 text-muted-foreground">{s.address ?? "—"}</td>
                     <td className="px-4 py-3 text-muted-foreground">{s.notes ?? "—"}</td>
                     <td className="px-4 py-3 text-right">
-                      {canWrite && (<div className="inline-flex gap-1">
-                        <button onClick={() => { setEditing(s); setOpen(true); }} className="p-1.5 rounded hover:bg-accent"><Pencil className="h-3.5 w-3.5" /></button>
-                        {isAdmin && <button onClick={() => del(s.id)} className="p-1.5 rounded hover:bg-destructive/10 text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>}
+                      {(canUpdate || canDelete) && (<div className="inline-flex gap-1">
+                        {canUpdate && <button onClick={() => { setEditing(s); setOpen(true); }} className="p-1.5 rounded hover:bg-accent"><Pencil className="h-3.5 w-3.5" /></button>}
+                        {canDelete && <button onClick={() => del(s.id)} className="p-1.5 rounded hover:bg-destructive/10 text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>}
                       </div>)}
                     </td>
                   </tr>
@@ -77,10 +80,10 @@ function Suppliers() {
               <MobileCard key={s.id}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="font-medium text-base">{s.name}</div>
-                  {canWrite && (
+                  {(canUpdate || canDelete) && (
                     <div className="flex gap-1 shrink-0">
-                      <button onClick={() => { setEditing(s); setOpen(true); }} className="p-1.5 rounded hover:bg-accent"><Pencil className="h-3.5 w-3.5" /></button>
-                      {isAdmin && <button onClick={() => del(s.id)} className="p-1.5 rounded hover:bg-destructive/10 text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>}
+                      {canUpdate && <button onClick={() => { setEditing(s); setOpen(true); }} className="p-1.5 rounded hover:bg-accent"><Pencil className="h-3.5 w-3.5" /></button>}
+                      {canDelete && <button onClick={() => del(s.id)} className="p-1.5 rounded hover:bg-destructive/10 text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>}
                     </div>
                   )}
                 </div>

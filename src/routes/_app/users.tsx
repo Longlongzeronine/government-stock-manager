@@ -19,17 +19,10 @@ import {
 } from "@/lib/admin.functions";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { ROLE_CODES, ROLE_LABELS } from "@/lib/form-definitions";
 
 type AssignableRole = Role;
-const assignableRoles: { value: AssignableRole; label: string }[] = [
-  { value: "super_admin", label: "Super Admin" },
-  { value: "regular_user", label: "Regular User" },
-  { value: "permanent_employee", label: "Permanent Employee" },
-  { value: "supply_officer", label: "Supply Officer" },
-  { value: "inspection_officer", label: "Inspection Officer" },
-  { value: "financial_analyst", label: "Financial Analyst" },
-  { value: "admin", label: "Administrator" },
-];
+const assignableRoles: { value: AssignableRole; label: string }[] = ROLE_CODES.map((value) => ({ value, label: ROLE_LABELS[value] }));
 const employmentStatuses = ["Permanent", "Casual", "Contractual", "Job Order"] as const;
 
 export const Route = createFileRoute("/_app/users")({

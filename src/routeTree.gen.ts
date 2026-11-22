@@ -14,14 +14,17 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppUsersRouteImport } from './routes/_app/users'
+import { Route as AppUserAccessRouteImport } from './routes/_app/user-access'
 import { Route as AppSuppliersRouteImport } from './routes/_app/suppliers'
 import { Route as AppStockRouteImport } from './routes/_app/stock'
 import { Route as AppScannerRouteImport } from './routes/_app/scanner'
 import { Route as AppRisHistoryRouteImport } from './routes/_app/ris-history'
 import { Route as AppRequisitionsRouteImport } from './routes/_app/requisitions'
+import { Route as AppMigrationsRouteImport } from './routes/_app/migrations'
 import { Route as AppInventoryRouteImport } from './routes/_app/inventory'
 import { Route as AppFormsRouteImport } from './routes/_app/forms'
 import { Route as AppDeveloperRouteImport } from './routes/_app/developer'
+import { Route as AppDevSpaceRouteImport } from './routes/_app/dev-space'
 import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
 import { Route as AppCategoriesRouteImport } from './routes/_app/categories'
 import { Route as AppAuditRouteImport } from './routes/_app/audit'
@@ -53,6 +56,11 @@ const AppUsersRoute = AppUsersRouteImport.update({
   path: '/users',
   getParentRoute: () => AppRoute,
 } as any)
+const AppUserAccessRoute = AppUserAccessRouteImport.update({
+  id: '/user-access',
+  path: '/user-access',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppSuppliersRoute = AppSuppliersRouteImport.update({
   id: '/suppliers',
   path: '/suppliers',
@@ -78,6 +86,11 @@ const AppRequisitionsRoute = AppRequisitionsRouteImport.update({
   path: '/requisitions',
   getParentRoute: () => AppRoute,
 } as any)
+const AppMigrationsRoute = AppMigrationsRouteImport.update({
+  id: '/migrations',
+  path: '/migrations',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppInventoryRoute = AppInventoryRouteImport.update({
   id: '/inventory',
   path: '/inventory',
@@ -91,6 +104,11 @@ const AppFormsRoute = AppFormsRouteImport.update({
 const AppDeveloperRoute = AppDeveloperRouteImport.update({
   id: '/developer',
   path: '/developer',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppDevSpaceRoute = AppDevSpaceRouteImport.update({
+  id: '/dev-space',
+  path: '/dev-space',
   getParentRoute: () => AppRoute,
 } as any)
 const AppDashboardRoute = AppDashboardRouteImport.update({
@@ -133,14 +151,17 @@ export interface FileRoutesByFullPath {
   '/audit': typeof AppAuditRoute
   '/categories': typeof AppCategoriesRoute
   '/dashboard': typeof AppDashboardRoute
+  '/dev-space': typeof AppDevSpaceRoute
   '/developer': typeof AppDeveloperRoute
   '/forms': typeof AppFormsRoute
   '/inventory': typeof AppInventoryRoute
+  '/migrations': typeof AppMigrationsRoute
   '/requisitions': typeof AppRequisitionsRoute
   '/ris-history': typeof AppRisHistoryRoute
   '/scanner': typeof AppScannerRoute
   '/stock': typeof AppStockRoute
   '/suppliers': typeof AppSuppliersRoute
+  '/user-access': typeof AppUserAccessRoute
   '/users': typeof AppUsersRoute
   '/verify/ris/$token': typeof AppVerifyRisTokenRoute
 }
@@ -153,14 +174,17 @@ export interface FileRoutesByTo {
   '/audit': typeof AppAuditRoute
   '/categories': typeof AppCategoriesRoute
   '/dashboard': typeof AppDashboardRoute
+  '/dev-space': typeof AppDevSpaceRoute
   '/developer': typeof AppDeveloperRoute
   '/forms': typeof AppFormsRoute
   '/inventory': typeof AppInventoryRoute
+  '/migrations': typeof AppMigrationsRoute
   '/requisitions': typeof AppRequisitionsRoute
   '/ris-history': typeof AppRisHistoryRoute
   '/scanner': typeof AppScannerRoute
   '/stock': typeof AppStockRoute
   '/suppliers': typeof AppSuppliersRoute
+  '/user-access': typeof AppUserAccessRoute
   '/users': typeof AppUsersRoute
   '/verify/ris/$token': typeof AppVerifyRisTokenRoute
 }
@@ -175,14 +199,17 @@ export interface FileRoutesById {
   '/_app/audit': typeof AppAuditRoute
   '/_app/categories': typeof AppCategoriesRoute
   '/_app/dashboard': typeof AppDashboardRoute
+  '/_app/dev-space': typeof AppDevSpaceRoute
   '/_app/developer': typeof AppDeveloperRoute
   '/_app/forms': typeof AppFormsRoute
   '/_app/inventory': typeof AppInventoryRoute
+  '/_app/migrations': typeof AppMigrationsRoute
   '/_app/requisitions': typeof AppRequisitionsRoute
   '/_app/ris-history': typeof AppRisHistoryRoute
   '/_app/scanner': typeof AppScannerRoute
   '/_app/stock': typeof AppStockRoute
   '/_app/suppliers': typeof AppSuppliersRoute
+  '/_app/user-access': typeof AppUserAccessRoute
   '/_app/users': typeof AppUsersRoute
   '/_app/verify/ris/$token': typeof AppVerifyRisTokenRoute
 }
@@ -197,14 +224,17 @@ export interface FileRouteTypes {
     | '/audit'
     | '/categories'
     | '/dashboard'
+    | '/dev-space'
     | '/developer'
     | '/forms'
     | '/inventory'
+    | '/migrations'
     | '/requisitions'
     | '/ris-history'
     | '/scanner'
     | '/stock'
     | '/suppliers'
+    | '/user-access'
     | '/users'
     | '/verify/ris/$token'
   fileRoutesByTo: FileRoutesByTo
@@ -217,14 +247,17 @@ export interface FileRouteTypes {
     | '/audit'
     | '/categories'
     | '/dashboard'
+    | '/dev-space'
     | '/developer'
     | '/forms'
     | '/inventory'
+    | '/migrations'
     | '/requisitions'
     | '/ris-history'
     | '/scanner'
     | '/stock'
     | '/suppliers'
+    | '/user-access'
     | '/users'
     | '/verify/ris/$token'
   id:
@@ -238,14 +271,17 @@ export interface FileRouteTypes {
     | '/_app/audit'
     | '/_app/categories'
     | '/_app/dashboard'
+    | '/_app/dev-space'
     | '/_app/developer'
     | '/_app/forms'
     | '/_app/inventory'
+    | '/_app/migrations'
     | '/_app/requisitions'
     | '/_app/ris-history'
     | '/_app/scanner'
     | '/_app/stock'
     | '/_app/suppliers'
+    | '/_app/user-access'
     | '/_app/users'
     | '/_app/verify/ris/$token'
   fileRoutesById: FileRoutesById
@@ -294,6 +330,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppUsersRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/user-access': {
+      id: '/_app/user-access'
+      path: '/user-access'
+      fullPath: '/user-access'
+      preLoaderRoute: typeof AppUserAccessRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/suppliers': {
       id: '/_app/suppliers'
       path: '/suppliers'
@@ -329,6 +372,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRequisitionsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/migrations': {
+      id: '/_app/migrations'
+      path: '/migrations'
+      fullPath: '/migrations'
+      preLoaderRoute: typeof AppMigrationsRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/inventory': {
       id: '/_app/inventory'
       path: '/inventory'
@@ -348,6 +398,13 @@ declare module '@tanstack/react-router' {
       path: '/developer'
       fullPath: '/developer'
       preLoaderRoute: typeof AppDeveloperRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/dev-space': {
+      id: '/_app/dev-space'
+      path: '/dev-space'
+      fullPath: '/dev-space'
+      preLoaderRoute: typeof AppDevSpaceRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/dashboard': {
@@ -401,14 +458,17 @@ interface AppRouteChildren {
   AppAuditRoute: typeof AppAuditRoute
   AppCategoriesRoute: typeof AppCategoriesRoute
   AppDashboardRoute: typeof AppDashboardRoute
+  AppDevSpaceRoute: typeof AppDevSpaceRoute
   AppDeveloperRoute: typeof AppDeveloperRoute
   AppFormsRoute: typeof AppFormsRoute
   AppInventoryRoute: typeof AppInventoryRoute
+  AppMigrationsRoute: typeof AppMigrationsRoute
   AppRequisitionsRoute: typeof AppRequisitionsRoute
   AppRisHistoryRoute: typeof AppRisHistoryRoute
   AppScannerRoute: typeof AppScannerRoute
   AppStockRoute: typeof AppStockRoute
   AppSuppliersRoute: typeof AppSuppliersRoute
+  AppUserAccessRoute: typeof AppUserAccessRoute
   AppUsersRoute: typeof AppUsersRoute
   AppVerifyRisTokenRoute: typeof AppVerifyRisTokenRoute
 }
@@ -419,14 +479,17 @@ const AppRouteChildren: AppRouteChildren = {
   AppAuditRoute: AppAuditRoute,
   AppCategoriesRoute: AppCategoriesRoute,
   AppDashboardRoute: AppDashboardRoute,
+  AppDevSpaceRoute: AppDevSpaceRoute,
   AppDeveloperRoute: AppDeveloperRoute,
   AppFormsRoute: AppFormsRoute,
   AppInventoryRoute: AppInventoryRoute,
+  AppMigrationsRoute: AppMigrationsRoute,
   AppRequisitionsRoute: AppRequisitionsRoute,
   AppRisHistoryRoute: AppRisHistoryRoute,
   AppScannerRoute: AppScannerRoute,
   AppStockRoute: AppStockRoute,
   AppSuppliersRoute: AppSuppliersRoute,
+  AppUserAccessRoute: AppUserAccessRoute,
   AppUsersRoute: AppUsersRoute,
   AppVerifyRisTokenRoute: AppVerifyRisTokenRoute,
 }

@@ -31,7 +31,11 @@ export const Route = createFileRoute("/_app/inventory")({
 });
 
 function Inventory() {
-  const { isAdmin } = useAuth();
+  const { canAccess } = useAuth();
+  const canCreate = canAccess("inventory", "create");
+  const canUpdate = canAccess("inventory", "update");
+  const canDelete = canAccess("inventory", "delete");
+  const canImport = canAccess("inventory", "import");
   const qc = useQueryClient();
   const navigate = useNavigate();
   const searchParams = Route.useSearch();
@@ -51,11 +55,11 @@ function Inventory() {
   }, []);
 
   useEffect(() => {
-    if (!searchParams.add || !isAdmin) return;
+    if (!searchParams.add || !canCreate) return;
     setEditing(null);
     setOpen(true);
     navigate({ to: "/inventory", search: {} as { add: boolean } });
-  }, [isAdmin, navigate, searchParams.add]);
+  }, [canCreate, navigate, searchParams.add]);
 
   const { data: items = [] } = useQuery({
     queryKey: ["items"],
@@ -147,7 +151,10 @@ function Inventory() {
         items={items}
         cats={cats}
         sups={sups}
-        canEdit={isAdmin}
+        canEdit={canUpdate}
+        canCreate={canCreate}
+        canDelete={canDelete}
+        canImport={canImport}
         onItemsChanged={updateItemsCache}
         onCategoryCreated={() => qc.invalidateQueries({ queryKey: ["categories"] })}
       />
@@ -167,7 +174,7 @@ function Inventory() {
         actions={
           <>
             <ExportMenu rows={exportRows()} title="Inventory Report" />
-            {isAdmin && (
+            {canCreate && (
               <button
                 onClick={() => {
                   setEditing(null);
@@ -321,7 +328,7 @@ function Inventory() {
                       <StatusBadge quantity={i.quantity} reorder={i.reorder_level} />
                     </Td>
                     <Td className="text-right">
-                      {isAdmin && (
+                      {canUpdate && (
                         <div className="inline-flex gap-1">
                           <button onClick={() => { setEditing(i); setOpen(true); }} className="p-1.5 rounded hover:bg-accent" title="Edit">
                             <Pencil className="h-3.5 w-3.5" />
@@ -369,7 +376,7 @@ function Inventory() {
                     <MobileCardRow label="Reorder" value={i.reorder_level} align="right" />
                   </div>
                 </div>
-                {isAdmin && (
+                {canUpdate && (
                   <div className="flex gap-2 pt-2 border-t border-border">
                     <button onClick={() => { setEditing(i); setOpen(true); }} className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-sm rounded-md border border-input hover:bg-accent">
                       <Pencil className="h-3.5 w-3.5" /> Edit
@@ -409,7 +416,7 @@ function Inventory() {
 // Items created within this window (24h) get a visible NEW badge so newly added/imported items are easy to spot.
 const NEW_ITEM_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCategoryCreated }: any) {
+function SpreadsheetInventory({ items, cats, sups, canEdit, canCreate, canDelete, canImport, onItemsChanged, onCategoryCreated }: any) {
   const headings = ["Jan", "Feb", "Mar", "Q1", "Q1\nAMOUNT", "April", "May", "June", "Q2", "Q2\nAMOUNT", "July", "Aug", "Sept", "Q3", "Q3\nAMOUNT", "Oct", "Nov", "Dec", "Q4", "Q4\nAMOUNT"];
   const peso = (value: number) => value.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const cells = (months: readonly number[], price: number) => [0, 3, 6, 9].flatMap((start) => {
@@ -586,7 +593,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
     return next;
   });
   const startLongPress = (id: string) => {
-    if (!canEdit) return;
+    if (!canDelete) return;
     pressTimer.current = setTimeout(() => toggleSelected(id), 550);
   };
   const cancelLongPress = () => {
@@ -742,8 +749,8 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
   const toolbar = (
     <div className="app-cse-import">
       <input ref={importInput} type="file" accept=".xlsx,.xls" onChange={importXlsx} />
-      {canEdit && <button className="app-cse-add" onClick={() => setAddOpen(true)} title="Add a new item to the list"><Plus className="h-4 w-4" /> Add item</button>}
-      <button disabled={importing} onClick={() => importInput.current?.click()} title="Import APP-CSE XLSX file"><Upload className="h-4 w-4" /> {importing ? "Importing…" : "Import XLSX"}</button>
+      {canCreate && <button className="app-cse-add" onClick={() => setAddOpen(true)} title="Add a new item to the list"><Plus className="h-4 w-4" /> Add item</button>}
+      {canImport && <button disabled={importing} onClick={() => importInput.current?.click()} title="Import APP-CSE XLSX file"><Upload className="h-4 w-4" /> {importing ? "Importing…" : "Import XLSX"}</button>}
       <button className="app-cse-export-xlsx" onClick={() => exportAppCseXlsx(items, monthlyPlan, fields)} title="Download APP-CSE 2026 as Excel (.xlsx)"><FileSpreadsheet className="h-4 w-4" /> Export Excel</button>
       <button className="app-cse-export-pdf" onClick={() => exportAppCsePdf(items, monthlyPlan, fields)} title="Download APP-CSE 2026 as PDF (.pdf)"><FileText className="h-4 w-4" /> Export PDF</button>
       <div className="app-cse-layout-wrap" ref={layoutWrapRef}>
@@ -771,7 +778,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
       <span>Existing name/code: skip. New product: add.</span>
     </div>
   );
-  const bulkActions = canEdit && selected.size > 0 ? (
+  const bulkActions = canDelete && selected.size > 0 ? (
     <div className="app-cse-bulk-actions"><span><i />Selection mode · {selected.size} selected</span><button onClick={() => setSelected(new Set(compactPart1.concat(compactPart2).map((item: any) => item.id)))}>Select all</button><button onClick={() => setSelected(new Set())}>Clear</button><button className="danger" onClick={deleteSelected}>Delete selected</button></div>
   ) : null;
   const agencyFields = (
@@ -840,7 +847,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
       <summary>{category} <em>{categoryItems.length} item{categoryItems.length === 1 ? "" : "s"}</em></summary>
       <div className="app-cse-compact-table-wrap">
         <table className="app-cse-compact-table">
-          <thead><tr><th>#</th><th>Stock No.</th><th>Code</th><th>Item &amp; Specifications</th><th>Unit</th><th>Monthly Quantity (Jan–Dec)</th><th>Total Qty</th><th>Unit Price</th><th>Total Amount</th>{canEdit && <th>Actions</th>}</tr></thead>
+          <thead><tr><th>#</th><th>Stock No.</th><th>Code</th><th>Item &amp; Specifications</th><th>Unit</th><th>Monthly Quantity (Jan–Dec)</th><th>Total Qty</th><th>Unit Price</th><th>Total Amount</th>{(canEdit || canDelete) && <th>Actions</th>}</tr></thead>
           <tbody>
             {categoryItems.map((item: any, catIndex: number) => {
               const months = monthsFor(item);
@@ -850,7 +857,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
               const qrValue = item.qr_code_value || item.barcode_value || item.id;
               return (
                 <tr key={item.id || code} className={`${selected.has(item.id) ? "is-selected" : ""}`} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}>
-                  <td>{canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td>
+                  <td>{canDelete && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : catIndex + 1}{selected.has(item.id) && <i className="app-cse-selected-dot" />}</td>
                   <td className="font-mono text-xs font-semibold">{item.stock_number || "—"}</td>
                   <td><input disabled={!canEdit} defaultValue={code} placeholder={item.category?.name || "Code"} onBlur={(event) => saveItem(item, { barcode_value: event.target.value })} /></td>
                   <td>
@@ -871,11 +878,11 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
                   <td>{totalQty}</td>
                   <td><input disabled={!canEdit} type="number" min="0" step=".01" defaultValue={price} onBlur={(event) => saveItem(item, { acquisition_cost: Number(event.target.value) || 0 })} /></td>
                   <td>{peso(totalQty * price)}</td>
-                  {canEdit && (
+                  {(canEdit || canDelete) && (
                     <td className="app-cse-compact-actions-cell">
                       <span className="app-cse-compact-actions">
-                        <button type="button" className="app-cse-action-btn" title="Edit item" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setEditItem(item); }}><Pencil className="h-3.5 w-3.5" /></button>
-                        <button type="button" className="app-cse-action-btn danger" title="Delete item" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); deleteSingleItem(item); }}><Trash2 className="h-3.5 w-3.5" /></button>
+                        {canEdit && <button type="button" className="app-cse-action-btn" title="Edit item" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setEditItem(item); }}><Pencil className="h-3.5 w-3.5" /></button>}
+                        {canDelete && <button type="button" className="app-cse-action-btn danger" title="Delete item" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); deleteSingleItem(item); }}><Trash2 className="h-3.5 w-3.5" /></button>}
                       </span>
                     </td>
                   )}
@@ -900,7 +907,7 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
     return (
       <article key={item.id || code} className={`app-cse-easy-card ${selected.has(item.id) ? "is-selected" : ""}`} onPointerDown={() => startLongPress(item.id)} onPointerUp={cancelLongPress} onPointerLeave={cancelLongPress} onPointerCancel={cancelLongPress}>
         <div className="app-cse-easy-card-top">
-          {canEdit && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : <span className="app-cse-easy-card-count">{rowIndex + 1}</span>}
+          {canDelete && selected.size > 0 ? <input className="app-cse-select-box" type="checkbox" checked={selected.has(item.id)} onPointerDown={(event) => event.stopPropagation()} onChange={() => toggleSelected(item.id)} aria-label={`Select ${item.name}`} /> : <span className="app-cse-easy-card-count">{rowIndex + 1}</span>}
           <span className="app-cse-easy-card-code">Stock No. {item.stock_number || "—"} · {code || item.category?.name || "—"}</span>
           {isNewItem(item) && <i className="app-cse-new-badge" title="Added in the last 24 hours">New</i>}
           <button type="button" className="app-cse-qr-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setQrItem(item); }} aria-label={`View QR code for ${item.name}`}><img src={`https://api.qrserver.com/v1/create-qr-code/?size=96x96&format=svg&data=${encodeURIComponent(qrValue)}`} alt="" title={qrValue} loading="lazy" /></button>
@@ -911,10 +918,10 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
           <div><dt>Unit</dt><dd>{item.unit || "—"}</dd></div>
           <div><dt>Total Qty</dt><dd>{totalQty}</dd></div>
         </dl>
-        {canEdit && (
+        {(canEdit || canDelete) && (
           <div className="app-cse-easy-card-actions">
-            <button type="button" className="app-cse-action-btn" title="Edit item" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setEditItem(item); }}><Pencil className="h-3.5 w-3.5" /> Edit</button>
-            <button type="button" className="app-cse-action-btn danger" title="Delete item" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); deleteSingleItem(item); }}><Trash2 className="h-3.5 w-3.5" /> Delete</button>
+            {canEdit && <button type="button" className="app-cse-action-btn" title="Edit item" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setEditItem(item); }}><Pencil className="h-3.5 w-3.5" /> Edit</button>}
+            {canDelete && <button type="button" className="app-cse-action-btn danger" title="Delete item" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); deleteSingleItem(item); }}><Trash2 className="h-3.5 w-3.5" /> Delete</button>}
           </div>
         )}
       </article>

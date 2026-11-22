@@ -1,4 +1,5 @@
 import { Link, useRouterState, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import {
   LayoutDashboard,
   Package,
@@ -15,95 +16,149 @@ import {
   Shield,
   History,
   X,
+  Code2,
+  KeyRound,
+  ChevronDown,
+  Database,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
-type R = import("@/integrations/supabase/client").AppRole;
-const allRoles: R[] = ["admin", "super_admin", "regular_user", "permanent_employee", "supply_officer", "inspection_officer", "financial_analyst"];
-const operationsRoles: R[] = ["admin", "super_admin", "supply_officer", "inspection_officer", "financial_analyst"];
-export const nav: { to: string; label: string; icon: any; roles: R[]; developerOnly?: boolean }[] = [
+type NavItem = { to: string; label: string; icon: any; module: string; action?: string; section?: "dev-space" };
+
+export const nav: NavItem[] = [
   {
     to: "/dashboard",
     label: "Dashboard",
     icon: LayoutDashboard,
-    roles: allRoles,
+    module: "dashboard",
   },
   {
     to: "/inventory",
     label: "Inventory",
     icon: Package,
-    roles: allRoles,
-  },
-  {
-    to: "/developer",
-    label: "Developer Mode",
-    icon: Shield,
-    roles: [],
-    developerOnly: true,
+    module: "inventory",
   },
   {
     to: "/requisitions",
     label: "Requisitions",
     icon: ClipboardList,
-    roles: [],
-    developerOnly: true,
+    module: "requisitions",
   },
   {
     to: "/scanner",
     label: "Scanner",
     icon: ScanLine,
-    roles: allRoles,
+    module: "scanner",
   },
   {
     to: "/approval",
     label: "Approval",
     icon: Shield,
-    roles: operationsRoles,
+    module: "approvals",
   },
   {
     to: "/ris-history",
     label: "RIS History",
     icon: History,
-    roles: allRoles,
+    module: "ris_history",
   },
   {
     to: "/forms",
     label: "Forms Flow",
     icon: FileStack,
-    roles: allRoles,
+    module: "forms",
   },
   {
     to: "/stock",
     label: "Stock In / Out",
     icon: ArrowLeftRight,
-    roles: [],
-    developerOnly: true,
+    module: "stock",
   },
-  { to: "/categories", label: "Categories", icon: Tags, roles: ["admin"] },
+  { to: "/categories", label: "Categories", icon: Tags, module: "categories" },
   {
     to: "/suppliers",
     label: "Suppliers",
     icon: Building2,
-    roles: allRoles,
+    module: "suppliers",
   },
-  { to: "/users", label: "Users", icon: Users, roles: ["admin", "super_admin"] },
-  { to: "/audit", label: "Audit Log", icon: ScrollText, roles: ["admin", "super_admin"] },
+  { to: "/assistant", label: "AI Assistant", icon: Sparkles, module: "assistant" },
+  { to: "/users", label: "Accounts", icon: Users, module: "user_access", action: "manage" },
+  { to: "/user-access", label: "User Access", icon: KeyRound, module: "user_access", action: "manage" },
+  { to: "/audit", label: "Audit Log", icon: ScrollText, module: "audit_logs" },
+  { to: "/migrations", label: "Migrations", icon: Database, module: "migrations", section: "dev-space" },
 ];
+
+const primaryNav = nav.filter((item) => !item.section);
+const devSpaceNav = nav.filter((item) => item.section === "dev-space");
 
 interface SidebarProps {
   mobileOpen?: boolean;
   onMobileOpenChange?: (open: boolean) => void;
 }
 
+function DevSpaceSection({ path, canAccess, onNavigate }: {
+  path: string;
+  canAccess: (module: string, action?: string) => boolean;
+  onNavigate?: () => void;
+}) {
+  const sectionActive = path === "/migrations" || path.startsWith("/migrations/");
+  const [open, setOpen] = useState(true);
+  const children = devSpaceNav.filter((item) => canAccess(item.module, item.action ?? "view"));
+  const visible = canAccess("dev_space", "view") && children.length > 0;
+
+  useEffect(() => {
+    if (sectionActive) setOpen(true);
+  }, [sectionActive]);
+
+  if (!visible) return null;
+
+  return (
+    <div className="mt-3 border-t border-sidebar-border pt-3">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        aria-controls="dev-space-navigation"
+        className={cn(
+          "flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-semibold uppercase tracking-[0.12em] transition-colors",
+          sectionActive ? "text-sidebar-accent-foreground" : "text-sidebar-foreground/60 hover:text-sidebar-accent-foreground",
+        )}
+      >
+        <Code2 className="h-4 w-4" />
+        <span className="flex-1">Dev Space</span>
+        <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} />
+      </button>
+      {open && <div id="dev-space-navigation" className="mt-1 space-y-1 pb-1">
+        {children.map((item) => {
+          const active = path === item.to || path.startsWith(item.to + "/");
+          const Icon = item.icon;
+          return <Link
+            key={item.to}
+            to={item.to}
+            onClick={onNavigate}
+            className={cn(
+              "mx-3 flex items-center gap-3 rounded-md border border-transparent px-3 py-2.5 text-sm font-medium transition-colors",
+              active
+                ? "border-sidebar-border bg-sidebar-accent text-sidebar-accent-foreground"
+                : "text-sidebar-foreground/75 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
+            )}
+          >
+            <Icon className="h-4 w-4" />
+            {item.label}
+          </Link>;
+        })}
+      </div>}
+    </div>
+  );
+}
+
 export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps = {}) {
-  const { role, user, signOut, developerMode, developerUsername } = useAuth();
+  const { role, user, signOut, developerMode, developerUsername, canAccess } = useAuth();
   const navigate = useNavigate();
   const path = useRouterState({ select: (s) => s.location.pathname });
 
-  const filteredNav = nav.filter((n) =>
-    developerMode || (!n.developerOnly && role && n.roles.includes(role)),
-  );
+  const filteredNav = primaryNav.filter((item) => canAccess(item.module, item.action ?? "view"));
 
   // If mobileOpen is provided, render mobile drawer
   if (mobileOpen !== undefined && onMobileOpenChange) {
@@ -162,6 +217,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps = {}) {
                 </Link>
               );
             })}
+            <DevSpaceSection path={path} canAccess={canAccess} onNavigate={() => onMobileOpenChange(false)} />
           </nav>
 
           <div className="border-t border-sidebar-border p-4 text-xs">
@@ -203,10 +259,8 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps = {}) {
         </div>
       </div>
       <nav className="flex-1 overflow-y-auto py-3">
-        {nav
-          .filter((n) =>
-            developerMode || (!n.developerOnly && role && n.roles.includes(role)),
-          )
+        {primaryNav
+          .filter((item) => canAccess(item.module, item.action ?? "view"))
           .map((n) => {
             const active = path === n.to || path.startsWith(n.to + "/");
             const Icon = n.icon;
@@ -226,6 +280,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps = {}) {
               </Link>
             );
           })}
+        <DevSpaceSection path={path} canAccess={canAccess} />
       </nav>
       <div className="border-t border-sidebar-border p-4 text-xs">
         <div className="truncate font-medium">{user?.email ?? developerUsername}</div>

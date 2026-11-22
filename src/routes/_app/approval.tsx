@@ -16,6 +16,7 @@ import { RoleGate } from "@/components/common/RoleGate";
 import { SummaryActions } from "@/components/common/SummaryActions";
 import { exportCSV } from "@/lib/export";
 import { listRisForms, updateRisFormStatus } from "@/lib/data.functions";
+import { useAuth } from "@/contexts/AuthContext";
 
 export const Route = createFileRoute("/_app/approval")({
   head: () => ({ meta: [{ title: "Approvals - Supplify" }] }),
@@ -192,10 +193,14 @@ function DetailModal({
   request,
   onClose,
   onDecision,
+  canApprove,
+  canReject,
 }: {
   request: RequestRow;
   onClose: () => void;
   onDecision: (status: "approved" | "rejected", note: string) => Promise<void>;
+  canApprove: boolean;
+  canReject: boolean;
 }) {
   const [note, setNote] = useState(request.notes || "");
   const [saving, setSaving] = useState(false);
@@ -261,7 +266,7 @@ function DetailModal({
             </div>
           ))}
         </div>
-        {request.status === "pending" && (
+        {request.status === "pending" && (canApprove || canReject) && (
           <div className="px-5 pb-5 pt-4">
             <label className="block text-[11px] text-muted-foreground mb-1">
               REVIEW NOTE
@@ -274,22 +279,22 @@ function DetailModal({
               disabled={saving}
             />
             <div className="flex gap-2">
-              <button
+              {canReject && <button
                 type="button"
                 disabled={saving}
                 onClick={() => void decide("rejected")}
                 className="flex-1 py-2 rounded-md border border-destructive/30 text-destructive text-xs font-semibold hover:bg-destructive/10 disabled:opacity-50"
               >
                 REJECT
-              </button>
-              <button
+              </button>}
+              {canApprove && <button
                 type="button"
                 disabled={saving}
                 onClick={() => void decide("approved")}
                 className="flex-[2] py-2 rounded-md bg-navy text-navy-foreground text-xs font-semibold hover:opacity-90 disabled:opacity-50"
               >
                 {saving ? "SAVING..." : "APPROVE REQUEST"}
-              </button>
+              </button>}
             </div>
           </div>
         )}
@@ -299,6 +304,9 @@ function DetailModal({
 }
 
 function ApprovalPage() {
+  const { canAccess } = useAuth();
+  const canApprove = canAccess("approvals", "approve");
+  const canReject = canAccess("approvals", "reject");
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<RequestRow | null>(null);
   const [statusFilter, setStatusFilter] = useState("pending");
@@ -453,7 +461,7 @@ function ApprovalPage() {
 
   return (
     <RoleGate
-      allow={["admin", "supply_officer", "inspection_officer"]}
+      module="approvals"
       fallback={
         <div className="p-8 text-sm text-muted-foreground">
           You do not have permission to view approvals.
@@ -667,6 +675,8 @@ function ApprovalPage() {
         <DetailModal
           request={selected}
           onClose={() => setSelected(null)}
+          canApprove={canApprove}
+          canReject={canReject}
           onDecision={(status, note) => decide(selected, status, note)}
         />
       )}

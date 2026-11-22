@@ -115,7 +115,7 @@ async function getAdminClient(accessToken: string) {
     .select("role")
     .eq("user_id", auth.user.id);
   if (roleError) throw new Error(roleError.message);
-  if (!roleRows?.some((row: { role: string }) => row.role === "admin")) {
+  if (!roleRows?.some((row: { role: string }) => row.role === "admin" || row.role === "super_admin")) {
     throw new Error("Admin access required");
   }
 
@@ -139,7 +139,7 @@ export const listAdminUsers = createServerFn({ method: "POST" })
       .select("role")
       .eq("user_id", auth.user.id);
     if (ownRolesError) throw new Error(ownRolesError.message);
-    if (!ownRoles?.some((row) => row.role === "admin")) {
+    if (!ownRoles?.some((row) => row.role === "admin" || row.role === "super_admin")) {
       throw new Error("Admin access required");
     }
     const [

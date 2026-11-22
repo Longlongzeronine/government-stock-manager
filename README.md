@@ -105,9 +105,12 @@ npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
 npx wrangler secret put DEVELOPER_USERNAME
 npx wrangler secret put DEVELOPER_PASSWORD
 npx wrangler secret put DEVELOPER_SESSION_SECRET
+npx wrangler secret put MIGRATION_DATABASE_URL
 ```
 
-Paste each value when Wrangler prompts. These values must be Cloudflare Worker
+`MIGRATION_DATABASE_URL` is the direct or pooler PostgreSQL URL used only by
+Dev Space's migration runner. It is never sent to the browser. Paste each value
+when Wrangler prompts. These values must be Cloudflare Worker
 secrets; `.env` is local-only and is not uploaded by `npm run deploy`. The
 Supabase URL and publishable key are already configured as non-secret Worker
 variables in `wrangler.jsonc`. Add `LOVABLE_API_KEY` as a Worker secret only if

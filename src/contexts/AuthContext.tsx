@@ -6,6 +6,13 @@ import {
   signInDeveloper,
   signOutDeveloper,
 } from "@/lib/developer-auth.functions";
+import {
+  canAccess as matrixCanAccess,
+  ACCESS_PRESETS,
+  isAccessSchemaUnavailable,
+  normalizeAccess,
+  type AccessMatrix,
+} from "@/lib/access-control";
 
 interface AuthCtx {
   user: User | null;
@@ -13,6 +20,8 @@ interface AuthCtx {
   role: AppRole | null;
   roles: AppRole[];
   employmentStatus: string | null;
+  access: AccessMatrix | null;
+  accessLoading: boolean;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signUp: (email: string, password: string, fullName: string) => Promise<{ error: string | null }>;
@@ -20,6 +29,7 @@ interface AuthCtx {
   isAdmin: boolean;
   isStaff: boolean;
   canWrite: boolean;
+  canAccess: (module: string, action?: string) => boolean;
   developerMode: boolean;
   developerUsername: string | null;
   signInAsDeveloper: (username: string, password: string) => Promise<{ error: string | null }>;
@@ -84,6 +94,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<AppRole | null>(null);
   const [roles, setRoles] = useState<AppRole[]>([]);
   const [employmentStatus, setEmploymentStatus] = useState<string | null>(null);
+  const [access, setAccess] = useState<AccessMatrix | null>(null);
+  const [accessLoading, setAccessLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [developerUsername, setDeveloperUsername] = useState<string | null>(null);
 
@@ -94,6 +106,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(s);
       setLoading(false);
       if (s?.user) {
+        setAccessLoading(true);
         setDeveloperUsername(null);
         void signOutDeveloper();
         setTimeout(() => loadRole(s.user.id), 0);
@@ -101,12 +114,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setRole(null);
         setRoles([]);
         setEmploymentStatus(null);
+        setAccess(null);
+        setAccessLoading(false);
       }
     });
     void supabase.auth.getSession().then(({ data }) => {
       if (authStateChanged) return;
       setSession(data.session);
-      if (data.session?.user) loadRole(data.session.user.id);
+      if (data.session?.user) {
+        setAccessLoading(true);
+        void loadRole(data.session.user.id);
+      } else {
+        setAccessLoading(false);
+      }
 
       if (data.session) {
         setDeveloperUsername(null);
@@ -140,19 +160,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function loadRole(uid: string) {
-    const [{ data }, { data: profile }] = await Promise.all([
+    const [{ data }, { data: profile }, { data: accessData, error: accessError }] = await Promise.all([
       supabase.from("user_roles").select("role").eq("user_id", uid),
       supabase.from("profiles").select("employment_status").eq("id", uid).maybeSingle(),
+      supabase.rpc("get_my_access"),
     ]);
-    const order: Record<string, number> = { admin: 0, supply_officer: 1, inspection_officer: 2, financial_analyst: 3, permanent_employee: 4, regular_user: 5 };
+    const order: Record<string, number> = { super_admin: 0, admin: 1, supply_officer: 2, inspection_officer: 3, financial_analyst: 4, permanent_employee: 5, regular_user: 6 };
     const assigned = [...new Set((data ?? []).map((row: any) => row.role as AppRole))];
     assigned.sort((a, b) => (order[a] ?? 10) - (order[b] ?? 10));
     setRoles(assigned.length ? assigned : ["regular_user"]);
     setRole(assigned[0] ?? "regular_user");
     setEmploymentStatus(profile?.employment_status ?? "Casual");
+    const isLegacyAdministrator = assigned.includes("admin") || assigned.includes("super_admin");
+    setAccess(
+      accessError
+        ? isLegacyAdministrator && isAccessSchemaUnavailable(accessError)
+          ? normalizeAccess(ACCESS_PRESETS.admin.access)
+          : null
+        : normalizeAccess(accessData),
+    );
+    setAccessLoading(false);
   }
 
   const developerMode = developerUsername !== null && session === null;
+  const checkAccess = (module: string, action = "view") =>
+    developerMode || matrixCanAccess(access, module, action);
   const value: AuthCtx = {
     user: session?.user ?? null,
     session,
@@ -160,9 +192,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loading,
     roles,
     employmentStatus,
-    isAdmin: roles.includes("admin") || developerMode,
+    access,
+    accessLoading: developerMode ? false : accessLoading,
+    isAdmin: roles.includes("admin") || roles.includes("super_admin") || developerMode,
     isStaff: roles.includes("supply_officer") || roles.includes("inspection_officer"),
-    canWrite: developerMode || roles.some((assignedRole) => assignedRole !== "regular_user" && assignedRole !== "permanent_employee"),
+    canWrite: developerMode || [
+      ["inventory", "create"], ["inventory", "update"], ["stock", "create"],
+      ["forms", "create"], ["forms", "update"], ["suppliers", "create"],
+    ].some(([module, action]) => checkAccess(module, action)),
+    canAccess: checkAccess,
     developerMode,
     developerUsername,
     signInAsDeveloper: async (username, password) => {
@@ -173,6 +211,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setRole(null);
         setRoles([]);
         setEmploymentStatus(null);
+        setAccess(null);
+        setAccessLoading(false);
         setDeveloperUsername(result.username ?? username);
         return { error: null };
       } catch (error: any) {

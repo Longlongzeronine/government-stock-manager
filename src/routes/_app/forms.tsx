@@ -315,7 +315,9 @@ const FORM_DEFAULTS = {
 };
 
 function FormsFlow() {
-  const { canWrite: hasAnyWrite, user, developerMode, isAdmin } = useAuth();
+  const { canAccess, user, developerMode } = useAuth();
+  const hasAnyWrite = canAccess("forms", "create") || canAccess("forms", "update");
+  const canExport = canAccess("forms", "export");
   const queryClient = useQueryClient();
   const userName = user?.user_metadata?.full_name || user?.email || "";
   const today = new Date().toISOString().slice(0, 10);
@@ -1885,7 +1887,7 @@ function FormsFlow() {
             onSelectRisIssue={loadRisIssue}
             loadingRisIssueId={loadingRisIssueId}
             onBackup={createFormsFlowBackup}
-            canBackup={isAdmin}
+            canBackup={canExport}
           />
         </div>
       </div>
@@ -2687,7 +2689,7 @@ function EntryPanel({
               disabled={saving}
               onClick={async () => {
                 const nextIcsNo = await reserveNextIcsNumber(today) || incrementIcsNumber(ics.icsNo, today);
-                setIcs((current) => ({ ...current, icsNo: nextIcsNo, risNo: "" }));
+                setIcs({ ...ics, icsNo: nextIcsNo, risNo: "" });
                 setIcsLines(Array.from({ length: 3 }, blankLine));
                 setIcsValidationAttempted(false);
               }}
