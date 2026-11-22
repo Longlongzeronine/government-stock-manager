@@ -58,10 +58,39 @@ export function exportAppCseXlsx(
     const d = new Date();
     return `${d.getMonth() + 1}-${d.getDate()}-${d.getFullYear()}`;
   })();
-  const monthsFor = (item: any): number[] =>
-    monthlyPlan[item.id] ||
-    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
-      .map((m, i) => Number(item[`${m}_quantity`] ?? (i === 0 ? item.quantity : 0)) || 0);
+  /** "Date Prepared" as a real Excel date (the official template stores a date serial there).
+   *  Accepts "M-D-YYYY", ISO or any Date-parseable string; unparseable values fall back to today. */
+  const preparedDateValue = (): Date => {
+    const raw = String(fields.preparedDate || "").trim();
+    const match = raw.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);
+    if (match) {
+      const year = Number(match[3]) < 100 ? 2000 + Number(match[3]) : Number(match[3]);
+      const parsed = new Date(year, Number(match[1]) - 1, Number(match[2]));
+      if (!Number.isNaN(parsed.getTime())) return parsed;
+    }
+    if (raw) {
+      const parsed = new Date(raw);
+      if (!Number.isNaN(parsed.getTime())) return parsed;
+    }
+    return new Date();
+  };
+  /** Always returns 12 numbers (Jan..Dec): live monthly-plan edits win, then the stored
+   *  monthly columns, then the single `quantity` field (booked in January, which is how
+   *  the import reads flat "Quantity" columns back). */
+  const monthsFor = (item: any): number[] => {
+    const planned = monthlyPlan?.[item.id] as number[] | undefined;
+    return ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].map((month, index) => {
+      const raw = planned ? planned[index] : (item[`${month}_quantity`] ?? (index === 0 ? item.quantity : 0));
+      return Math.max(0, Number(raw) || 0);
+    });
+  };
+  /** "name\nspecification" — the importer splits the first line back into `name`. */
+  const itemLabel = (item: any): string => {
+    const name = String(item.name || "").trim();
+    const description = String(item.description || "").trim();
+    if (!description || description === name) return name;
+    return `${name}\n${description}`;
+  };
 
   const monthlyCols = (months: number[], price: number): (string | number)[] => {
     return [0, 3, 6, 9].flatMap((start) => {
@@ -239,8 +268,14 @@ export function exportAppCseXlsx(
   merges.push(merge(hdrR, 25, hdrR + 1, 25)); // Unit Price (Z)
   merges.push(merge(hdrR, 26, hdrR + 1, 26)); // Total Amount (AA)
 
-  // Sub-header: month columns at E(4)..X(23)
+  // Sub-header: month columns at E(4)..X(23); the first four labels mirror the
+  // official template (# / Code / Item & Specifications / Unit) so the importer
+  // can map columns by name instead of by fixed position.
   const subHdr = Array(COL_COUNT).fill("");
+  subHdr[0] = "#";
+  subHdr[1] = "Code";
+  subHdr[2] = "Item & Specifications";
+  subHdr[3] = "Unit";
   const monthSubs = [
     "Jan", "Feb", "Mar", "Q1", "Q1\r\nAMOUNT",
     "April ", "May ", "June", "Q2", "Q2\r\nAMOUNT",
@@ -270,7 +305,7 @@ export function exportAppCseXlsx(
         n += 1;
         const itemRow = data.length;
         data.push([
-          n, code, item.name || "", item.unit || "",
+          n, code, itemLabel(item), item.unit || "",
           ...monthlyCols(months, price),
           totalQty, price, FMT(totalQty * price),
         ]);
@@ -383,7 +418,7 @@ export function exportAppCseXlsx(
   heights[blank4] = 21.75;
   const dateRow = push([]);
   data[dateRow][1] = "Date Prepared:";
-  data[dateRow][2] = fields.preparedDate || dateStr;
+  data[dateRow][2] = preparedDateValue();
   heights[dateRow] = 15.75;
 
   // ── Write workbook ──
@@ -502,6 +537,26 @@ export function exportAppCseXlsx(
     { wch: 13.67 }, // Unit Price
     { wch: 53.67 }, // Total Amount
   ];
+
+  // ── Excel data types / number formats ──
+  // Quantities are whole numbers, money keeps 2 decimals (the template stores raw
+  // floats such as 667.4399999999999 — those display badly in Excel).
+  const setNumberFormat = (r: number, c: number, z: string) => {
+    const cell = ws[XLSX.utils.encode_cell({ r, c })];
+    if (!cell || typeof cell.v !== "number") return;
+    cell.z = z;
+    cell.s = { ...(cell.s || {}), numFmt: z };
+  };
+  marks.item.forEach((r) => {
+    setNumberFormat(r, 0, "0"); // #
+    [4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 17, 19, 20, 21, 22].forEach((c) => setNumberFormat(r, c, "0")); // Jan..Dec
+    [8, 13, 18, 23].forEach((c) => setNumberFormat(r, c, "#,##0.00")); // quarterly amounts
+    setNumberFormat(r, 24, "0"); // total qty
+    [25, 26].forEach((c) => setNumberFormat(r, c, "#,##0.00")); // unit price + total amount
+  });
+  marks.sumLabel.forEach((r) => [24, 25, 26].forEach((c) => setNumberFormat(r, c, "#,##0.00")));
+  marks.grand.forEach((r) => [24, 25, 26].forEach((c) => setNumberFormat(r, c, "#,##0.00")));
+  setNumberFormat(dateRow, 2, "m-d-yyyy");
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "APP-CSE 2026 FORM");

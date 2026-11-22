@@ -10,14 +10,27 @@ import {
   declineUser,
   deleteAdminUser,
   listAdminUsers,
+  listRoleMatrix,
   resetUserPassword,
+  setRoleFormPermission,
   setUserDisabled,
   setUserRole,
+  type Role,
 } from "@/lib/admin.functions";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-mobile";
 
-type AssignableRole = "viewer" | "staff" | "accounting" | "admin";
+type AssignableRole = Role;
+const assignableRoles: { value: AssignableRole; label: string }[] = [
+  { value: "super_admin", label: "Super Admin" },
+  { value: "regular_user", label: "Regular User" },
+  { value: "permanent_employee", label: "Permanent Employee" },
+  { value: "supply_officer", label: "Supply Officer" },
+  { value: "inspection_officer", label: "Inspection Officer" },
+  { value: "financial_analyst", label: "Financial Analyst" },
+  { value: "admin", label: "Administrator" },
+];
+const employmentStatuses = ["Permanent", "Casual", "Contractual", "Job Order"] as const;
 
 export const Route = createFileRoute("/_app/users")({
   head: () => ({ meta: [{ title: "User Roles — Supplify" }] }),
@@ -25,33 +38,41 @@ export const Route = createFileRoute("/_app/users")({
 });
 
 function UsersPage() {
-  const { isAdmin, session } = useAuth();
+  const { isAdmin, developerMode, session } = useAuth();
   const accessToken = session?.access_token ?? "";
   const [creating, setCreating] = useState(false);
   const [resetTarget, setResetTarget] = useState<{ id: string; email: string } | null>(null);
   const [newPassword, setNewPassword] = useState("");
   const [resetting, setResetting] = useState(false);
+  const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState<AssignableRole | "all">("all");
   const [form, setForm] = useState({
     email: "",
     fullName: "",
     password: "",
-    role: "viewer" as AssignableRole,
+    roles: ["regular_user"] as AssignableRole[],
+    employmentStatus: "Casual" as typeof employmentStatuses[number],
+  });
+  const { data: matrix, refetch: refetchMatrix } = useQuery({
+    queryKey: ["roles", "form-matrix"],
+    enabled: Boolean(isAdmin && accessToken),
+    queryFn: async () => listRoleMatrix({ data: { accessToken } }),
   });
 
-  const { data: profiles = [], refetch } = useQuery({
+  const { data: profiles = [], refetch, isLoading, error } = useQuery({
     queryKey: ["profiles", "admin"],
     enabled: Boolean(isAdmin && accessToken),
     queryFn: async () => listAdminUsers({ data: { accessToken } }),
   });
 
-  if (!isAdmin) {
-    return <div className="p-8 text-sm text-muted-foreground">Admin access required.</div>;
+  if (!isAdmin || !accessToken) {
+    return <div className="p-8 text-sm text-muted-foreground">{developerMode ? "User management requires a signed-in Supabase admin account." : "Admin access required."}</div>;
   }
 
-  async function setRole(uid: string, role: AssignableRole) {
+  async function setUserAccess(uid: string, roles: AssignableRole[], employmentStatus: typeof employmentStatuses[number]) {
     try {
-      await setUserRole({ data: { accessToken, userId: uid, role } });
-      toast.success("Role updated");
+      await setUserRole({ data: { accessToken, userId: uid, roles, employmentStatus } });
+      toast.success("User access updated");
       refetch();
     } catch (e: any) {
       toast.error(e?.message ?? "Role update failed");
@@ -64,7 +85,7 @@ function UsersPage() {
     try {
       await createAdminUser({ data: { accessToken, ...form } });
       toast.success("User created");
-      setForm({ email: "", fullName: "", password: "", role: "viewer" });
+      setForm({ email: "", fullName: "", password: "", roles: ["regular_user"], employmentStatus: "Casual" });
       refetch();
     } catch (e: any) {
       toast.error(e?.message ?? "User creation failed");
@@ -113,14 +134,18 @@ function UsersPage() {
   }
 
   const isMobileView = useIsMobile();
+  const filteredProfiles = profiles.filter((u: any) => {
+    const matchesSearch = `${u.full_name ?? ""} ${u.email ?? ""}`.toLowerCase().includes(search.trim().toLowerCase());
+    return matchesSearch && (roleFilter === "all" || u.roles.includes(roleFilter));
+  });
 
   return (
     <div>
-      <PageHeader title="Users & Roles" subtitle="Manage access for personnel" />
+      <PageHeader title="Users & Roles" subtitle="Assign multiple roles, employment status, and form access" />
       <div className="p-4 sm:p-6 lg:p-8 space-y-4">
         <form
           onSubmit={createUser}
-          className="bg-card border border-border rounded-lg p-4 grid gap-3 md:grid-cols-5"
+          className="bg-card border border-border rounded-lg p-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6"
         >
           <input
             required
@@ -146,11 +171,10 @@ function UsersPage() {
             onChange={(e) => setForm({ ...form, password: e.target.value })}
             className="border border-input rounded-md bg-card px-3 py-2 text-sm w-full"
           />
-          <RoleSelect
-            value={form.role}
-            onChange={(role) => setForm({ ...form, role })}
-            className="border border-input rounded-md bg-card px-3 py-2 text-sm w-full"
-          />
+          <RoleMultiSelect value={form.roles} onChange={(roles) => setForm({ ...form, roles })} />
+          <select value={form.employmentStatus} onChange={(e) => setForm({ ...form, employmentStatus: e.target.value as typeof form.employmentStatus })} className="border border-input rounded-md bg-card px-3 py-2 text-sm w-full">
+            {employmentStatuses.map((status) => <option key={status}>{status}</option>)}
+          </select>
           <button
             disabled={creating}
             className="rounded-md bg-primary text-primary-foreground px-3 py-2 text-sm font-medium disabled:opacity-50 w-full md:w-auto"
@@ -159,6 +183,16 @@ function UsersPage() {
           </button>
         </form>
 
+        <section className="bg-card border border-border rounded-lg p-4 space-y-3">
+          <div><h2 className="font-semibold">Form access matrix</h2><p className="text-xs text-muted-foreground">Changes apply to next request. Administrator keeps full access.</p></div>
+          {!matrix ? <p className="text-sm text-muted-foreground">Loading permissions…</p> : <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr><th className="text-left p-2">Form</th>{matrix.roles.map((role: any) => <th key={role.code} className="p-2 text-center">{role.label}</th>)}</tr></thead><tbody>{matrix.forms.map((item: any) => <tr key={item.form_key} className="border-t border-border"><td className="p-2"><span className="text-xs text-muted-foreground">{item.section}</span><br />{item.label}</td>{matrix.roles.map((role: any) => { const allowed = matrix.permissions.some((permission: any) => permission.role_code === role.code && permission.form_key === item.form_key && permission.can_access); return <td className="p-2 text-center" key={role.code}><input aria-label={`${role.label} can access ${item.section} ${item.label}`} type="checkbox" checked={allowed} disabled={role.is_system_admin} onChange={async (event) => { try { await setRoleFormPermission({ data: { accessToken, role: role.code, formKey: item.form_key, canAccess: event.target.checked } }); await refetchMatrix(); } catch (e: any) { toast.error(e?.message ?? "Permission update failed"); } }} /></td>; })}</tr>)}</tbody></table></div>}
+        </section>
+
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name or email" className="border border-input rounded-md bg-card px-3 py-2 text-sm" />
+          <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value as AssignableRole | "all")} className="border border-input rounded-md bg-card px-3 py-2 text-sm"><option value="all">All roles</option>{assignableRoles.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}</select>
+        </div>
+
         {/* Desktop Table View */}
         {!isMobileView && (
           <div className="bg-card border border-border rounded-lg overflow-hidden">
@@ -166,31 +200,28 @@ function UsersPage() {
               <thead className="bg-muted/60 text-xs uppercase tracking-wider text-muted-foreground">
                 <tr>
                   <th className="text-left px-4 py-3">Name</th>
-                  <th className="text-left px-4 py-3">Email</th>
-                  <th className="text-left px-4 py-3">Role</th>
+                  <th className="text-left px-4 py-3">Employment Status</th>
+                  <th className="text-left px-4 py-3">Roles</th>
                   <th className="text-left px-4 py-3">Status</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {profiles.map((u: any) => (
+                {isLoading ? (
+                  <tr><td colSpan={5} className="p-12 text-center text-sm text-muted-foreground">Loading users...</td></tr>
+                ) : error ? (
+                  <tr><td colSpan={5} className="p-8 text-center text-sm text-destructive">Could not load users: {error.message}</td></tr>
+                ) : null}
+                {filteredProfiles.map((u: any) => (
                   <tr key={u.id} className="border-t border-border">
-                    <td className="px-4 py-3 font-medium">{u.full_name ?? "-"}</td>
-                    <td className="px-4 py-3">{u.email}</td>
-                    <td className="px-4 py-3">
-                      <RoleSelect
-                        value={u.role}
-                        onChange={(role) => setRole(u.id, role)}
-                        className="border border-input rounded-md bg-card px-2 py-1 text-sm"
-                      />
-                    </td>
+                    <td className="px-4 py-3"><div className="font-medium">{u.full_name ?? "-"}</div><div className="text-xs text-muted-foreground">{u.email}</div></td>
+                    <td className="px-4 py-3"><select value={u.employment_status} onChange={(e) => setUserAccess(u.id, u.roles, e.target.value as typeof employmentStatuses[number])} className="border border-input rounded-md bg-card px-2 py-1 text-sm">{employmentStatuses.map((status) => <option key={status}>{status}</option>)}</select></td>
+                    <td className="px-4 py-3"><RoleMultiSelect value={u.roles} onChange={(roles) => setUserAccess(u.id, roles, u.employment_status)} /></td>
                     <td className="px-4 py-3">
                       {u.status === "pending" ? (
                         <span className="text-xs px-2 py-0.5 rounded-md bg-warning/15 text-warning-foreground border border-warning/30">pending</span>
-                      ) : u.status === "declined" ? (
-                        <span className="text-xs px-2 py-0.5 rounded-md bg-destructive/15 text-destructive border border-destructive/30">declined</span>
-                      ) : u.disabled ? (
-                        <span className="text-xs px-2 py-0.5 rounded-md bg-muted text-muted-foreground border border-border">disabled</span>
+                      ) : u.status === "declined" || u.disabled ? (
+                        <span className="text-xs px-2 py-0.5 rounded-md bg-muted text-muted-foreground border border-border">inactive</span>
                       ) : (
                         <span className="text-xs px-2 py-0.5 rounded-md bg-success/15 text-success border border-success/30">active</span>
                       )}
@@ -257,7 +288,7 @@ function UsersPage() {
                     </td>
                   </tr>
                 ))}
-                {profiles.length === 0 && (
+                {!isLoading && !error && filteredProfiles.length === 0 && (
                   <tr>
                     <td colSpan={5} className="p-12 text-center text-sm text-muted-foreground">
                       No users found.
@@ -272,30 +303,24 @@ function UsersPage() {
         {/* Mobile Card View */}
         {isMobileView && (
           <div className="space-y-3">
-            {profiles.map((u: any) => (
+            {isLoading && <div className="p-12 text-center text-sm text-muted-foreground bg-card border border-border rounded-lg">Loading users...</div>}
+            {error && <div className="p-8 text-center text-sm text-destructive bg-card border border-border rounded-lg">Could not load users: {error.message}</div>}
+            {filteredProfiles.map((u: any) => (
               <MobileCard key={u.id}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="font-medium text-base">{u.full_name ?? "-"}</div>
                   {u.status === "pending" ? (
                     <span className="text-xs px-2 py-1 rounded-md shrink-0 bg-warning/15 text-warning-foreground border border-warning/30">pending</span>
-                  ) : u.status === "declined" ? (
-                    <span className="text-xs px-2 py-1 rounded-md shrink-0 bg-destructive/15 text-destructive border border-destructive/30">declined</span>
-                  ) : u.disabled ? (
-                    <span className="text-xs px-2 py-1 rounded-md shrink-0 bg-muted text-muted-foreground border border-border">disabled</span>
+                  ) : u.status === "declined" || u.disabled ? (
+                    <span className="text-xs px-2 py-1 rounded-md shrink-0 bg-muted text-muted-foreground border border-border">inactive</span>
                   ) : (
                     <span className="text-xs px-2 py-1 rounded-md shrink-0 bg-success/15 text-success border border-success/30">active</span>
                   )}
                 </div>
                 <div className="border-t border-border pt-2 space-y-2">
                   <MobileCardRow label="Email" value={u.email} />
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs uppercase tracking-wider text-muted-foreground">Role</span>
-                    <RoleSelect
-                      value={u.role}
-                      onChange={(role) => setRole(u.id, role)}
-                      className="border border-input rounded-md bg-card px-2 py-1 text-sm"
-                    />
-                  </div>
+                  <div><span className="text-xs uppercase tracking-wider text-muted-foreground">Employment Status</span><select value={u.employment_status} onChange={(e) => setUserAccess(u.id, u.roles, e.target.value as typeof employmentStatuses[number])} className="mt-1 w-full border border-input rounded-md bg-card px-2 py-1 text-sm">{employmentStatuses.map((status) => <option key={status}>{status}</option>)}</select></div>
+                  <RoleMultiSelect value={u.roles} onChange={(roles) => setUserAccess(u.id, roles, u.employment_status)} />
                 </div>
                 <div className="flex flex-col gap-2 pt-2 border-t border-border">
                   {u.status === "pending" ? (
@@ -361,7 +386,7 @@ function UsersPage() {
                 </div>
               </MobileCard>
             ))}
-            {profiles.length === 0 && (
+            {!isLoading && !error && filteredProfiles.length === 0 && (
               <div className="p-12 text-center text-sm text-muted-foreground bg-card border border-border rounded-lg">
                 No users found.
               </div>
@@ -415,25 +440,19 @@ function UsersPage() {
   );
 }
 
-function RoleSelect({
+function RoleMultiSelect({
   value,
   onChange,
-  className,
 }: {
-  value: AssignableRole;
-  onChange: (role: AssignableRole) => void;
-  className: string;
+  value: AssignableRole[];
+  onChange: (roles: AssignableRole[]) => void;
 }) {
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value as AssignableRole)}
-      className={className}
-    >
-      <option value="viewer">viewer</option>
-      <option value="staff">staff</option>
-      <option value="accounting">accounting</option>
-      <option value="admin">admin</option>
-    </select>
+    <details className="relative min-w-40 rounded-md border border-input bg-card px-2 py-1">
+      <summary className="cursor-pointer text-sm">{value.map((role) => assignableRoles.find((item) => item.value === role)?.label ?? role).join(", ") || "Select roles"}</summary>
+      <div className="absolute left-0 top-full z-20 mt-1 max-h-64 min-w-56 overflow-auto rounded-md border border-border bg-card p-2 shadow-lg">
+        {assignableRoles.map((role) => <label key={role.value} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent"><input type="checkbox" checked={value.includes(role.value)} disabled={value.length === 1 && value[0] === role.value} onChange={(event) => onChange(event.target.checked ? [...value, role.value] : value.filter((selected) => selected !== role.value))} />{role.label}</label>)}
+      </div>
+    </details>
   );
 }

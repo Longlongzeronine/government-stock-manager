@@ -1,11 +1,18 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase, type AppRole } from "@/integrations/supabase/client";
+import {
+  getDeveloperSession,
+  signInDeveloper,
+  signOutDeveloper,
+} from "@/lib/developer-auth.functions";
 
 interface AuthCtx {
   user: User | null;
   session: Session | null;
   role: AppRole | null;
+  roles: AppRole[];
+  employmentStatus: string | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signUp: (email: string, password: string, fullName: string) => Promise<{ error: string | null }>;
@@ -13,6 +20,9 @@ interface AuthCtx {
   isAdmin: boolean;
   isStaff: boolean;
   canWrite: boolean;
+  developerMode: boolean;
+  developerUsername: string | null;
+  signInAsDeveloper: (username: string, password: string) => Promise<{ error: string | null }>;
 }
 
 const Ctx = createContext<AuthCtx | undefined>(undefined);
@@ -72,44 +82,103 @@ async function runAuthRequest(
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
+  const [roles, setRoles] = useState<AppRole[]>([]);
+  const [employmentStatus, setEmploymentStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [developerUsername, setDeveloperUsername] = useState<string | null>(null);
 
   useEffect(() => {
+    let authStateChanged = false;
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
+      authStateChanged = true;
       setSession(s);
+      setLoading(false);
       if (s?.user) {
+        setDeveloperUsername(null);
+        void signOutDeveloper();
         setTimeout(() => loadRole(s.user.id), 0);
       } else {
         setRole(null);
+        setRoles([]);
+        setEmploymentStatus(null);
       }
     });
-    supabase.auth.getSession().then(({ data }) => {
+    void supabase.auth.getSession().then(({ data }) => {
+      if (authStateChanged) return;
       setSession(data.session);
       if (data.session?.user) loadRole(data.session.user.id);
+
+      if (data.session) {
+        setDeveloperUsername(null);
+        setLoading(false);
+        void getDeveloperSession().then((developerSession) => {
+          if (developerSession) void signOutDeveloper();
+        }).catch(() => undefined);
+        return;
+      }
+
+      // Bound the separate developer-cookie request so an unavailable server
+      // function cannot leave the app stuck on its loading screen.
+      const lookupTimeout = new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), 5000);
+      });
+      void Promise.race([getDeveloperSession(), lookupTimeout]).then((developerSession) => {
+        if (authStateChanged) return;
+        setDeveloperUsername(developerSession?.username ?? null);
+        setLoading(false);
+      }).catch(() => {
+        if (!authStateChanged) {
+          setDeveloperUsername(null);
+          setLoading(false);
+        }
+      });
+    }).catch(() => {
+      if (!authStateChanged) setSession(null);
       setLoading(false);
     });
     return () => sub.subscription.unsubscribe();
   }, []);
 
   async function loadRole(uid: string) {
-    const { data } = await supabase.from("user_roles").select("role").eq("user_id", uid);
-    if (!data || data.length === 0) {
-      setRole("viewer");
-      return;
-    }
-    const order: Record<string, number> = { admin: 1, staff: 2, accounting: 3, viewer: 4 };
-    const top = [...data].sort((a: any, b: any) => (order[a.role] ?? 9) - (order[b.role] ?? 9))[0];
-    setRole((top as any).role as AppRole);
+    const [{ data }, { data: profile }] = await Promise.all([
+      supabase.from("user_roles").select("role").eq("user_id", uid),
+      supabase.from("profiles").select("employment_status").eq("id", uid).maybeSingle(),
+    ]);
+    const order: Record<string, number> = { admin: 0, supply_officer: 1, inspection_officer: 2, financial_analyst: 3, permanent_employee: 4, regular_user: 5 };
+    const assigned = [...new Set((data ?? []).map((row: any) => row.role as AppRole))];
+    assigned.sort((a, b) => (order[a] ?? 10) - (order[b] ?? 10));
+    setRoles(assigned.length ? assigned : ["regular_user"]);
+    setRole(assigned[0] ?? "regular_user");
+    setEmploymentStatus(profile?.employment_status ?? "Casual");
   }
 
+  const developerMode = developerUsername !== null && session === null;
   const value: AuthCtx = {
     user: session?.user ?? null,
     session,
     role,
     loading,
-    isAdmin: role === "admin",
-    isStaff: role === "staff",
-    canWrite: role === "admin" || role === "staff",
+    roles,
+    employmentStatus,
+    isAdmin: roles.includes("admin") || developerMode,
+    isStaff: roles.includes("supply_officer") || roles.includes("inspection_officer"),
+    canWrite: developerMode || roles.some((assignedRole) => assignedRole !== "regular_user" && assignedRole !== "permanent_employee"),
+    developerMode,
+    developerUsername,
+    signInAsDeveloper: async (username, password) => {
+      try {
+        const result = await signInDeveloper({ data: { username, password } });
+        if (result.error) return { error: result.error };
+        await supabase.auth.signOut();
+        setRole(null);
+        setRoles([]);
+        setEmploymentStatus(null);
+        setDeveloperUsername(result.username ?? username);
+        return { error: null };
+      } catch (error: any) {
+        return { error: error?.message ?? "Developer sign in failed." };
+      }
+    },
     signIn: async (email, password) => {
       const key = `signin:${normalizeEmail(email)}`;
       const rateLimit = checkRateLimit(key);
@@ -135,7 +204,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (data?.user) {
             const { data: profile } = await supabase
               .from("profiles")
-              .select("status")
+              .select("status,disabled")
               .eq("id", data.user.id)
               .single();
 
@@ -148,7 +217,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               await supabase.auth.signOut();
               return { error: "Your account request has been declined. Contact an administrator." };
             }
+            if (profile?.disabled) {
+              await supabase.auth.signOut();
+              return { error: "Your account is inactive. Contact an administrator." };
+            }
           }
+
+          await signOutDeveloper();
+          setDeveloperUsername(null);
 
           return { error: null };
         } catch (err: any) {
@@ -181,7 +257,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const signUpPromise = supabase.auth.signUp({
             email: normalizeEmail(email),
             password,
-            options: { data: { full_name: fullName.trim(), requested_role: "viewer" } },
+            options: { data: { full_name: fullName.trim(), requested_role: "regular_user" } },
           });
           const timeoutPromise = new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error("Request timed out")), 10000)
@@ -206,7 +282,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
     },
     signOut: async () => {
-      await supabase.auth.signOut();
+      await Promise.all([supabase.auth.signOut(), signOutDeveloper()]);
+      setDeveloperUsername(null);
     },
   };
 

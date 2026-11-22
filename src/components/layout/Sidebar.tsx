@@ -19,65 +19,76 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
-type R = "admin" | "staff" | "accounting" | "viewer";
-export const nav: { to: string; label: string; icon: any; roles: R[] }[] = [
+type R = import("@/integrations/supabase/client").AppRole;
+const allRoles: R[] = ["admin", "super_admin", "regular_user", "permanent_employee", "supply_officer", "inspection_officer", "financial_analyst"];
+const operationsRoles: R[] = ["admin", "super_admin", "supply_officer", "inspection_officer", "financial_analyst"];
+export const nav: { to: string; label: string; icon: any; roles: R[]; developerOnly?: boolean }[] = [
   {
     to: "/dashboard",
     label: "Dashboard",
     icon: LayoutDashboard,
-    roles: ["admin", "staff", "accounting", "viewer"],
+    roles: allRoles,
   },
   {
     to: "/inventory",
     label: "Inventory",
     icon: Package,
-    roles: ["admin", "staff", "accounting", "viewer"],
+    roles: allRoles,
+  },
+  {
+    to: "/developer",
+    label: "Developer Mode",
+    icon: Shield,
+    roles: [],
+    developerOnly: true,
   },
   {
     to: "/requisitions",
     label: "Requisitions",
     icon: ClipboardList,
-    roles: ["admin", "staff"],
+    roles: [],
+    developerOnly: true,
   },
   {
     to: "/scanner",
     label: "Scanner",
     icon: ScanLine,
-    roles: ["admin", "staff", "accounting", "viewer"],
+    roles: allRoles,
   },
   {
     to: "/approval",
     label: "Approval",
     icon: Shield,
-    roles: ["admin", "staff"],
+    roles: operationsRoles,
   },
   {
     to: "/ris-history",
     label: "RIS History",
     icon: History,
-    roles: ["admin", "staff", "accounting", "viewer"],
+    roles: allRoles,
   },
   {
     to: "/forms",
     label: "Forms Flow",
     icon: FileStack,
-    roles: ["admin", "staff", "accounting"],
+    roles: allRoles,
   },
   {
     to: "/stock",
     label: "Stock In / Out",
     icon: ArrowLeftRight,
-    roles: ["admin", "staff", "accounting"],
+    roles: [],
+    developerOnly: true,
   },
   { to: "/categories", label: "Categories", icon: Tags, roles: ["admin"] },
   {
     to: "/suppliers",
     label: "Suppliers",
     icon: Building2,
-    roles: ["admin", "staff", "accounting", "viewer"],
+    roles: allRoles,
   },
-  { to: "/users", label: "Users", icon: Users, roles: ["admin"] },
-  { to: "/audit", label: "Audit Log", icon: ScrollText, roles: ["admin"] },
+  { to: "/users", label: "Users", icon: Users, roles: ["admin", "super_admin"] },
+  { to: "/audit", label: "Audit Log", icon: ScrollText, roles: ["admin", "super_admin"] },
 ];
 
 interface SidebarProps {
@@ -86,11 +97,13 @@ interface SidebarProps {
 }
 
 export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps = {}) {
-  const { role, user, signOut } = useAuth();
+  const { role, user, signOut, developerMode, developerUsername } = useAuth();
   const navigate = useNavigate();
   const path = useRouterState({ select: (s) => s.location.pathname });
 
-  const filteredNav = nav.filter((n) => role && n.roles.includes(role));
+  const filteredNav = nav.filter((n) =>
+    developerMode || (!n.developerOnly && role && n.roles.includes(role)),
+  );
 
   // If mobileOpen is provided, render mobile drawer
   if (mobileOpen !== undefined && onMobileOpenChange) {
@@ -152,9 +165,9 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps = {}) {
           </nav>
 
           <div className="border-t border-sidebar-border p-4 text-xs">
-            <div className="truncate font-medium">{user?.email}</div>
+            <div className="truncate font-medium">{user?.email ?? developerUsername}</div>
             <div className="text-sidebar-foreground/60 uppercase tracking-wider">
-              {role}
+              {developerMode ? "Developer Mode" : role}
             </div>
             <button
               onClick={async () => {
@@ -191,7 +204,9 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps = {}) {
       </div>
       <nav className="flex-1 overflow-y-auto py-3">
         {nav
-          .filter((n) => role && n.roles.includes(role))
+          .filter((n) =>
+            developerMode || (!n.developerOnly && role && n.roles.includes(role)),
+          )
           .map((n) => {
             const active = path === n.to || path.startsWith(n.to + "/");
             const Icon = n.icon;
@@ -213,9 +228,9 @@ export function Sidebar({ mobileOpen, onMobileOpenChange }: SidebarProps = {}) {
           })}
       </nav>
       <div className="border-t border-sidebar-border p-4 text-xs">
-        <div className="truncate font-medium">{user?.email}</div>
+        <div className="truncate font-medium">{user?.email ?? developerUsername}</div>
         <div className="text-sidebar-foreground/60 uppercase tracking-wider">
-          {role}
+          {developerMode ? "Developer Mode" : role}
         </div>
         <button
           onClick={async () => {

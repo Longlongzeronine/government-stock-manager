@@ -71,7 +71,7 @@ function RootShell({ children }: { children: React.ReactNode }) {
   const routerState = useRouterState();
   const isLoading = routerState.status === "pending";
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head><HeadContent /></head>
       <body>
         {/* Route navigation loader bar */}

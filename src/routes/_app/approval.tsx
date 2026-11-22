@@ -12,7 +12,6 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { PageHeader } from "@/components/layout/AppShell";
 import { RoleGate } from "@/components/common/RoleGate";
 import { SummaryActions } from "@/components/common/SummaryActions";
 import { exportCSV } from "@/lib/export";
@@ -29,6 +28,7 @@ type SortField = "total" | "submittedAt" | "priority";
 
 type RequestRow = {
   id: string;
+  propertyFlow: string;
   risNo: string;
   item: string;
   category: string;
@@ -47,6 +47,7 @@ type RequestRow = {
 
 type RisApprovalRow = {
   id: string;
+  property_flow: string | null;
   ris_no: string;
   office: string | null;
   requested_by: string | null;
@@ -323,6 +324,7 @@ function ApprovalPage() {
         const unitCost = Number(row.acquisition_cost || 0);
         return {
           id: row.id,
+          propertyFlow: row.property_flow || "supplies",
           risNo: row.ris_no,
           item: row.item_name || "Unknown item",
           category: row.category_name || "Uncategorized",
@@ -414,7 +416,7 @@ function ApprovalPage() {
   ) {
     try {
       await updateRisFormStatus({
-        data: { id: request.id, status, review_note: note },
+        data: { id: request.id, status, review_note: note, property_flow: request.propertyFlow },
       });
       await queryClient.invalidateQueries({
         queryKey: ["risForms", "approval"],
@@ -451,18 +453,18 @@ function ApprovalPage() {
 
   return (
     <RoleGate
-      allow={["admin", "staff"]}
+      allow={["admin", "supply_officer", "inspection_officer"]}
       fallback={
         <div className="p-8 text-sm text-muted-foreground">
           You do not have permission to view approvals.
         </div>
       }
     >
-      <PageHeader
-        title="Approvals"
-        subtitle="Review and act on pending requisition requests"
-      />
-      <div className="p-4 sm:p-6 lg:p-8 space-y-6">
+      <header className="border-b border-border bg-card px-5 py-5 sm:px-8">
+        <h1 className="font-serif text-2xl leading-tight text-foreground">Approvals</h1>
+        <p className="mt-1 text-sm text-muted-foreground">Review and act on pending requisition requests</p>
+      </header>
+      <div className="min-h-[calc(100vh-98px)] bg-[#f7f9fc] p-4 sm:p-6 lg:p-8 space-y-6">
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold">Approval Summary</div>
@@ -511,7 +513,7 @@ function ApprovalPage() {
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="Search requests..."
-                className="w-56 rounded-md border border-border bg-accent/40 pl-8 pr-3 py-1.5 text-sm outline-none"
+                className="w-56 rounded-md border border-border bg-[#f1f6fc] pl-8 pr-3 py-1.5 text-sm outline-none"
               />
             </div>
             <div className="flex items-center gap-1">
@@ -546,7 +548,7 @@ function ApprovalPage() {
             <select
               value={categoryFilter}
               onChange={(event) => setCategoryFilter(event.target.value)}
-              className="ml-auto text-sm rounded-md border border-border bg-accent/40 px-2.5 py-1.5 outline-none"
+              className="ml-auto w-[132px] shrink-0 text-sm rounded-md border border-border bg-[#f1f6fc] px-2.5 py-1.5 outline-none"
             >
               {categories.map((category) => (
                 <option key={category} value={category}>
@@ -557,7 +559,7 @@ function ApprovalPage() {
             <select
               value={priorityFilter}
               onChange={(event) => setPriorityFilter(event.target.value)}
-              className="text-sm rounded-md border border-border bg-accent/40 px-2.5 py-1.5 outline-none"
+              className="w-[122px] shrink-0 text-sm rounded-md border border-border bg-[#f1f6fc] px-2.5 py-1.5 outline-none"
             >
               <option value="all">All priorities</option>
               {PRIORITY_ORDER.map((priority) => (
@@ -574,7 +576,7 @@ function ApprovalPage() {
             </div>
           )}
           {isLoading ? (
-            <div className="p-12 text-center text-sm text-muted-foreground">
+            <div className="min-h-[116px] grid place-items-center p-8 text-center text-sm text-muted-foreground">
               Loading requests...
             </div>
           ) : filtered.length === 0 ? (

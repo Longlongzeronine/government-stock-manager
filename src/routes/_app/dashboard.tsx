@@ -24,7 +24,7 @@ export const Route = createFileRoute("/_app/dashboard")({
 });
 
 function Dashboard() {
-  const { canWrite, isAdmin } = useAuth();
+  const { canWrite, isAdmin, developerMode } = useAuth();
   const { data: items = [], refetch: rItems } = useQuery({
     queryKey: ["items"],
     queryFn: () => listItems(),
@@ -127,7 +127,7 @@ function Dashboard() {
                   + Add new item
                 </Link>
               )}
-              {canWrite && (
+              {developerMode && (
                 <Link
                   to="/stock"
                   className="block rounded-md border border-border px-3 py-2 text-sm hover:bg-accent"
