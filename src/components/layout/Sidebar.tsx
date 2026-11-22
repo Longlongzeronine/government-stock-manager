@@ -20,8 +20,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
 type R = import("@/integrations/supabase/client").AppRole;
-const allRoles: R[] = ["admin", "regular_user", "permanent_employee", "supply_officer", "inspection_officer", "financial_analyst"];
-const operationsRoles: R[] = ["admin", "supply_officer", "inspection_officer", "financial_analyst"];
+const allRoles: R[] = ["admin", "super_admin", "regular_user", "permanent_employee", "supply_officer", "inspection_officer", "financial_analyst"];
+const operationsRoles: R[] = ["admin", "super_admin", "supply_officer", "inspection_officer", "financial_analyst"];
 export const nav: { to: string; label: string; icon: any; roles: R[]; developerOnly?: boolean }[] = [
   {
     to: "/dashboard",
@@ -87,8 +87,8 @@ export const nav: { to: string; label: string; icon: any; roles: R[]; developerO
     icon: Building2,
     roles: allRoles,
   },
-  { to: "/users", label: "Users", icon: Users, roles: ["admin"] },
-  { to: "/audit", label: "Audit Log", icon: ScrollText, roles: ["admin"] },
+  { to: "/users", label: "Users", icon: Users, roles: ["admin", "super_admin"] },
+  { to: "/audit", label: "Audit Log", icon: ScrollText, roles: ["admin", "super_admin"] },
 ];
 
 interface SidebarProps {
