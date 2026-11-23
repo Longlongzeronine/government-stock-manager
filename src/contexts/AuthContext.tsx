@@ -6,6 +6,7 @@ import {
   signInDeveloper,
   signOutDeveloper,
 } from "@/lib/developer-auth.functions";
+import { recordUserAuditActivity } from "@/lib/audit.functions";
 
 interface AuthCtx {
   user: User | null;
@@ -32,6 +33,14 @@ const authInFlight = new Map<string, Promise<{ error: string | null }>>();
 const RATE_LIMIT_WINDOW_MS = 120000; // 2 minutes window
 const RATE_LIMIT_MAX_REQUESTS = 10; // Max 10 requests per window
 const authRequestTimestamps = new Map<string, number[]>();
+
+async function recordAuthEvent(action: "login" | "logout") {
+  try {
+    await recordUserAuditActivity({ data: { action } });
+  } catch (error) {
+    console.error(`Could not record ${action} audit event`, error);
+  }
+}
 
 function checkRateLimit(key: string): { allowed: boolean; retryAfterMs: number } {
   const now = Date.now();
@@ -223,6 +232,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           }
 
+          await recordAuthEvent("login");
           await signOutDeveloper();
           setDeveloperUsername(null);
 
@@ -282,6 +292,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
     },
     signOut: async () => {
+      if (session?.access_token) await recordAuthEvent("logout");
       await Promise.all([supabase.auth.signOut(), signOutDeveloper()]);
       setDeveloperUsername(null);
     },
