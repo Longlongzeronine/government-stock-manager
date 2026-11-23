@@ -2,6 +2,7 @@ import { createStart, createMiddleware } from "@tanstack/react-start";
 import { getRequestHeader } from "@tanstack/react-start/server";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "./integrations/supabase/client";
+import { writeAuditEvent } from "./lib/audit.server";
 
 import { renderErrorPage } from "./lib/error-page";
 
@@ -39,7 +40,54 @@ const adminOnlyFunctions = new Set([
   "deleteSupplier",
   "listAuditLogs",
   "createFormsFlowBackup",
+  "deleteAdminUser",
 ]);
+
+const auditSkippedFunctions = new Set(["recordUserAuditActivity", "listAdminUsers", "listRoleMatrix"]);
+
+function auditTableForFunction(name: string) {
+  if (/User|Role|Admin|Password|Disabled|Approval/i.test(name)) return "user_accounts";
+  if (/Iar|Ris|Ics|Par|Ppe|Itr|Rspi|Rpcsp|Form/i.test(name)) return "forms";
+  if (/Item|Inventory|Transaction|Category|Supplier|Stock/i.test(name)) return "inventory";
+  return "site";
+}
+
+function auditActionForFunction(name: string) {
+  const known: Record<string, string> = {
+    approveUser: "user_approved",
+    createAdminUser: "account_created",
+    createRisForm: "form_submitted",
+    declineUser: "user_declined",
+    deleteAdminUser: "account_deleted",
+    postIar: "form_submitted",
+    resetUserPassword: "password_reset",
+    setRoleFormPermission: "form_permission_changed",
+    setUserDisabled: "user_status_changed",
+    setUserRole: "user_role_changed",
+    updateRisFormStatus: "form_status_changed",
+  };
+  if (known[name]) return known[name];
+  if (/^create/.test(name)) return "record_created";
+  if (/^update|^set|^remember/.test(name)) return "record_updated";
+  if (/^delete/.test(name)) return "record_deleted";
+  if (/^approve/.test(name)) return "record_approved";
+  return `site_action_${name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase()}`;
+}
+
+function auditResultSummary(result: unknown) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return Array.isArray(result) ? { result_count: result.length } : {};
+  }
+  const source = result as Record<string, unknown>;
+  const summary: Record<string, unknown> = {};
+  for (const key of ["id", "userId", "email", "name", "ris_no", "iar_no", "document_no", "status", "disabled", "role", "roles", "formKey", "canAccess", "changesCount", "employmentStatus"]) {
+    const value = source[key];
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || (Array.isArray(value) && value.every((entry) => typeof entry === "string"))) {
+      summary[key] = value;
+    }
+  }
+  return summary;
+}
 
 const inventoryAuthMiddleware = createMiddleware({ type: "function" })
   .client(async ({ next }) => {
@@ -60,6 +108,9 @@ const inventoryAuthMiddleware = createMiddleware({ type: "function" })
     const developerIdentity = await readDeveloperSession();
     let role = developerIdentity ? "admin" : "";
     const assignedRoles = new Set<string>(developerIdentity ? ["admin"] : []);
+    let auditActorId = developerIdentity ? `developer:${developerIdentity.username}` : null;
+    let auditActorEmail = developerIdentity ? developerIdentity.username : null;
+    let auditActorName = developerIdentity?.username ?? null;
 
     if (!developerIdentity) {
       const authorization = getRequestHeader("authorization") || "";
@@ -94,6 +145,9 @@ const inventoryAuthMiddleware = createMiddleware({ type: "function" })
         error,
       } = await client.auth.getUser(accessToken);
       if (error || !user) throw new Error("Authentication required.");
+      auditActorId = user.id;
+      auditActorEmail = user.email ?? null;
+      auditActorName = user.user_metadata?.full_name ?? user.email?.split("@")[0] ?? null;
 
       const { data: profile, error: profileError } = await client
         .from("profiles")
@@ -117,15 +171,32 @@ const inventoryAuthMiddleware = createMiddleware({ type: "function" })
 
     // These endpoints perform their own role or form permission checks. Let
     // them reach that authorization instead of rejecting them as inventory writes.
-    const formGuardedFunctions = new Set(["createIarForm", "createIarItem", "postIar", "updateIarPriceLots", "createRisForm", "createRisItem", "updateRisFormStatus", "savePpeDocument", "approvePpeDocument", "createTransaction", "setRoleFormPermission"]);
+    const formGuardedFunctions = new Set(["createIarForm", "createIarItem", "postIar", "updateIarPriceLots", "createRisForm", "createRisItem", "updateRisFormStatus", "savePpeDocument", "approvePpeDocument", "createTransaction", "setRoleFormPermission", "recordUserAuditActivity"]);
     const canWrite = ["admin", "super_admin", "supply_officer", "inspection_officer", "financial_analyst"].some((candidate) => assignedRoles.has(candidate));
-    if (method !== "GET" && !canWrite && !formGuardedFunctions.has(serverFnMeta.name)) {
+    if (method !== "GET" && !canWrite && !formGuardedFunctions.has(serverFnMeta.name) && !adminOnlyFunctions.has(serverFnMeta.name)) {
       throw Object.assign(new Error("Forbidden: write access required."), { statusCode: 403 });
     }
     if (adminOnlyFunctions.has(serverFnMeta.name) && role !== "admin" && role !== "super_admin") {
       throw Object.assign(new Error("Forbidden: administrator access required."), { statusCode: 403 });
     }
-    return next();
+    const result = await next();
+    if ((!auditSkippedFunctions.has(serverFnMeta.name) && method !== "GET") || serverFnMeta.name === "createFormsFlowBackup") {
+      const summary = auditResultSummary(result);
+      const rowId = [summary.id, summary.userId].find((value): value is string => typeof value === "string") ?? null;
+      try {
+        await writeAuditEvent({
+          actorId: auditActorId,
+          actorEmail: auditActorEmail,
+          action: auditActionForFunction(serverFnMeta.name),
+          tableName: auditTableForFunction(serverFnMeta.name),
+          rowId,
+          payload: { actor_name: auditActorName, server_function: serverFnMeta.name, ...summary },
+        });
+      } catch (error) {
+        console.error(`Could not record ${serverFnMeta.name} audit event`, error);
+      }
+    }
+    return result;
   });
 
 export const startInstance = createStart(() => ({
