@@ -29,6 +29,7 @@ import { FUND_CLUSTER_OPTIONS, FundClusterControl } from "@/components/common/Fu
 import { ItemDialog } from "@/components/inventory/ItemDialog";
 import { PpeDocumentFlow, type PpeDocumentType } from "@/components/forms/PpeDocumentFlow";
 import { exportCSV } from "@/lib/export";
+import { recordUserAuditActivity } from "@/lib/audit.functions";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -336,21 +337,28 @@ function FormsFlow() {
     },
   });
   const effectivePermittedForms = developerMode ? FORM_ACCESS_KEYS : permittedForms;
-  const flowPrefix = propertyFlow === "semi-expendable" ? "semi" : propertyFlow === "ppe" ? "ppe" : "supplies";
-  const activeFormKey = ({ iar: `${flowPrefix}_iar`, ris: `${flowPrefix}_ris`, rsmi: "supplies_rsmi", rpci: "supplies_rpci", splc: "semi_splc", rspi: "semi_rspi", "ppe-ledger": "ppe_ppelc" } as Record<string, string>)[tab];
+  const activeSection = propertyFlow === "supplies" ? "Supplies" : propertyFlow === "semi-expendable" ? "Semi-Expendable Property" : "PPE";
+  const activeFormKey = FORM_DEFINITIONS.find((definition) => definition.section === activeSection && FORM_KEY_BY_TAB[definition.formKey] === tab)?.formKey;
   const canWrite = hasAnyWrite || (tab === "ris" && Boolean(activeFormKey && effectivePermittedForms.includes(activeFormKey)));
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [orientation, setOrientation] = useState<Orientation>("portrait");
   useEffect(() => {
     if ((!accessLoaded && !developerMode) || !activeFormKey || developerMode) return;
-    if (effectivePermittedForms.includes(activeFormKey)) {
-      void supabase.rpc("check_and_log_form_access", { _form_key: activeFormKey, _action: "open" });
-    } else {
-      void supabase.rpc("check_and_log_form_access", { _form_key: activeFormKey, _action: "open" });
-      setSelectedItemId("");
-      toast.error("You do not have access to this form.");
-    }
+    if (!effectivePermittedForms.includes(activeFormKey)) return;
+    void supabase.rpc("check_and_log_form_access", { _form_key: activeFormKey, _action: "open" });
+    void recordUserAuditActivity({ data: { action: "form_open", formKey: activeFormKey } }).catch((error) => {
+      console.error("Could not record form access audit event", error);
+    });
   }, [accessLoaded, activeFormKey, effectivePermittedForms, developerMode]);
+  useEffect(() => {
+    if ((!accessLoaded && !developerMode) || !activeFormKey || developerMode || effectivePermittedForms.includes(activeFormKey)) return;
+    const permittedTab = FORM_DEFINITIONS
+      .filter((definition) => definition.section === activeSection && effectivePermittedForms.includes(definition.formKey))
+      .map((definition) => FORM_KEY_BY_TAB[definition.formKey] as FlowTab | undefined)
+      .find((candidate): candidate is FlowTab => Boolean(candidate));
+    setSelectedItemId("");
+    if (permittedTab) setTab(permittedTab);
+  }, [accessLoaded, activeFormKey, effectivePermittedForms, developerMode, activeSection]);
   useEffect(() => {
     if (["regspi", "ppe-ledger", "splc", "rpcppe", "rpcsp", "iirup"].includes(tab)) setOrientation("landscape");
     else if (["par", "ptr", "itr", "rlsddp", "rrpe"].includes(tab)) setOrientation("portrait");
@@ -1615,7 +1623,7 @@ function FormsFlow() {
         >
           <main className="min-w-0">
             {activeFormKey && !accessLoaded && !developerMode ? <div className="rounded-lg border border-border bg-card p-8 text-sm text-muted-foreground">Checking form access…</div>
-              : activeFormKey && !effectivePermittedForms.includes(activeFormKey) ? <div className="rounded-lg border border-destructive/40 bg-card p-8 text-sm text-destructive">You do not have access to this form.</div>
+              : activeFormKey && !effectivePermittedForms.includes(activeFormKey) ? <div className="rounded-lg border border-border bg-card p-8 text-sm text-muted-foreground">No forms assigned to this role in this section.</div>
               : <>
             {isPpeDocumentTab(tab) && (propertyFlow === "ppe" || (propertyFlow === "semi-expendable" && ["splc", "itr", "iirup", "rlsddp", "rrpe", "rpcsp"].includes(tab))) ? (
               <PpeDocumentFlow
@@ -2096,7 +2104,7 @@ function FoundationStepper({
     const key = formKeys[stage.tab];
     // Staff/admin (canWrite) can always open a stage; otherwise the form key
     // must be in the user's permitted form set.
-    return key ? permittedForms.includes(key) || canWrite : canWrite;
+    return key ? permittedForms.includes(key) : canWrite;
   });
 
   return (
@@ -2181,7 +2189,7 @@ function WorkflowStepper({
   return (
     <div className="grid gap-2 rounded-lg border border-border bg-card p-2 md:grid-cols-5">
       {steps.filter((step) => {
-        const key = ({ iar: "supplies_iar", ris: "supplies_ris", rsmi: "supplies_rsmi", rpci: "supplies_rpci" } as Partial<Record<FlowTab, string>>)[step.value];
+        const key = ({ iar: "supplies_iar", "stock-card": "supplies_stock_card", ris: "supplies_ris", rsmi: "supplies_rsmi", rpci: "supplies_rpci" } as Partial<Record<FlowTab, string>>)[step.value];
         return key ? permittedForms.includes(key) : canWrite;
       }).map((step) => {
         const Icon = step.icon;
