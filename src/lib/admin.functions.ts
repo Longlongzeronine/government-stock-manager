@@ -218,7 +218,7 @@ export const createAdminUser = createServerFn({ method: "POST" })
       _changed_by: actor.user.id, _user_id: created.user.id, _roles: assignedRoles, _employment_status: data.employmentStatus,
     });
     if (roleError) throw new Error(roleError.message);
-    return { ok: true };
+    return { ok: true, userId: created.user.id, email: created.user.email };
   });
 
 export const setUserRole = createServerFn({ method: "POST" })
@@ -233,7 +233,7 @@ export const setUserRole = createServerFn({ method: "POST" })
       _changed_by: actor.user.id, _user_id: data.userId, _roles: assignedRoles, _employment_status: data.employmentStatus,
     });
     if (error) throw new Error(error.message);
-    return { ok: true };
+    return { ok: true, userId: data.userId, roles: assignedRoles, employmentStatus: data.employmentStatus };
   });
 
 export const listRoleMatrix = createServerFn({ method: "POST" })
@@ -255,17 +255,7 @@ export const setRoleFormPermission = createServerFn({ method: "POST" })
     assertRole(data.role);
     if (data.role === "super_admin")
       throw new Error("Super Admin permissions cannot be changed through the matrix.");
-    if (data.role === "admin" && !data.canAccess)
-      throw new Error("Administrator access cannot be removed");
     const adminClient = await getAdminClient(data.accessToken);
-
-    // Capture old value before upsert.
-    const { data: existing } = await adminClient
-      .from("role_form_permissions")
-      .select("can_access")
-      .eq("role_code", data.role)
-      .eq("form_key", data.formKey)
-      .maybeSingle();
 
     const { error } = await adminClient.from("role_form_permissions").upsert(
       {
@@ -276,23 +266,7 @@ export const setRoleFormPermission = createServerFn({ method: "POST" })
       { onConflict: "role_code,form_key" },
     );
     if (error) throw new Error(error.message);
-
-    // Audit log entry for the matrix change.
-    const { data: actor } = await adminClient.auth.getUser(data.accessToken);
-    await adminClient.from("audit_logs").insert({
-      actor_id: actor?.user?.id ?? null,
-      actor_email: actor?.user?.email ?? null,
-      action: "set_form_permission",
-      table_name: "role_form_permissions",
-      row_id: `${data.role}:${data.formKey}`,
-      payload: {
-        role: data.role,
-        form_key: data.formKey,
-        old_can_access: existing?.can_access ?? null,
-        new_can_access: data.canAccess,
-      },
-    });
-    return { ok: true };
+    return { ok: true, role: data.role, formKey: data.formKey, canAccess: data.canAccess };
   });
 
 interface BatchFormPermissionRequest extends AdminRequest {
@@ -303,24 +277,11 @@ export const batchSetRoleFormPermissions = createServerFn({ method: "POST" })
   .inputValidator((d: BatchFormPermissionRequest) => d)
   .handler(async ({ data }) => {
     const adminClient = await getAdminClient(data.accessToken);
-    const { data: actor } = await adminClient.auth.getUser(data.accessToken);
-    const actorId = actor?.user?.id ?? null;
-    const actorEmail = actor?.user?.email ?? null;
 
     for (const change of data.changes) {
       assertRole(change.role);
       if (change.role === "super_admin")
         throw new Error("Super Admin permissions cannot be changed through the matrix.");
-      if (change.role === "admin" && !change.canAccess)
-        throw new Error("Administrator access cannot be removed");
-
-      const { data: existing } = await adminClient
-        .from("role_form_permissions")
-        .select("can_access")
-        .eq("role_code", change.role)
-        .eq("form_key", change.formKey)
-        .maybeSingle();
-
       const { error } = await adminClient.from("role_form_permissions").upsert(
         {
           role_code: change.role,
@@ -330,22 +291,8 @@ export const batchSetRoleFormPermissions = createServerFn({ method: "POST" })
         { onConflict: "role_code,form_key" },
       );
       if (error) throw new Error(error.message);
-
-      await adminClient.from("audit_logs").insert({
-        actor_id: actorId,
-        actor_email: actorEmail,
-        action: "set_form_permission",
-        table_name: "role_form_permissions",
-        row_id: `${change.role}:${change.formKey}`,
-        payload: {
-          role: change.role,
-          form_key: change.formKey,
-          old_can_access: existing?.can_access ?? null,
-          new_can_access: change.canAccess,
-        },
-      });
     }
-    return { ok: true };
+    return { ok: true, changesCount: data.changes.length };
   });
 
 export const resetUserPassword = createServerFn({ method: "POST" })
@@ -358,7 +305,7 @@ export const resetUserPassword = createServerFn({ method: "POST" })
       password: data.password,
     });
     if (error) throw new Error(error.message);
-    return { ok: true };
+    return { ok: true, userId: data.userId };
   });
 
 export const setUserDisabled = createServerFn({ method: "POST" })
@@ -371,18 +318,20 @@ export const setUserDisabled = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     const { error: profileError } = await adminClient.from("profiles").update({ disabled: data.disabled }).eq("id", data.userId);
     if (profileError) throw new Error(profileError.message);
-    return { ok: true };
+    return { ok: true, userId: data.userId, disabled: data.disabled };
   });
 
 export const deleteAdminUser = createServerFn({ method: "POST" })
   .inputValidator((d: DeleteRequest) => d)
   .handler(async ({ data }) => {
     const adminClient = await getAdminClient(data.accessToken);
+    const { data: profile, error: profileLookupError } = await adminClient.from("profiles").select("email").eq("id", data.userId).maybeSingle();
+    if (profileLookupError) throw new Error(profileLookupError.message);
     await adminClient.from("user_roles").delete().eq("user_id", data.userId);
     await adminClient.from("profiles").delete().eq("id", data.userId);
     const { error } = await adminClient.auth.admin.deleteUser(data.userId);
     if (error) throw new Error(error.message);
-    return { ok: true };
+    return { ok: true, userId: data.userId, email: profile?.email ?? null };
   });
 
 interface ApproveRequest extends AdminRequest {
@@ -398,7 +347,7 @@ export const approveUser = createServerFn({ method: "POST" })
       .update({ status: "active" })
       .eq("id", data.userId);
     if (error) throw new Error(error.message);
-    return { ok: true };
+    return { ok: true, userId: data.userId, status: "active" };
   });
 
 export const declineUser = createServerFn({ method: "POST" })
@@ -410,5 +359,5 @@ export const declineUser = createServerFn({ method: "POST" })
       .update({ status: "declined" })
       .eq("id", data.userId);
     if (error) throw new Error(error.message);
-    return { ok: true };
+    return { ok: true, userId: data.userId, status: "declined" };
   });
