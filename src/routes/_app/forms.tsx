@@ -29,6 +29,7 @@ import { FUND_CLUSTER_OPTIONS, FundClusterControl } from "@/components/common/Fu
 import { ItemDialog } from "@/components/inventory/ItemDialog";
 import { PpeDocumentFlow, type PpeDocumentType } from "@/components/forms/PpeDocumentFlow";
 import { exportCSV } from "@/lib/export";
+import { displayItemName } from "@/lib/item-display";
 import { recordUserAuditActivity } from "@/lib/audit.functions";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -1181,11 +1182,11 @@ function FormsFlow() {
     }
     for (const { item, quantity: requestedQuantity, available } of requestedByLot.values()) {
       if (Number(item.quantity) <= 0) {
-        return toast.error(`${item.name} is out of stock.`);
+        return toast.error(`${displayItemName(item.name)} is out of stock.`);
       }
       if (requestedQuantity > available) {
         return toast.error(
-          `${item.name} has only ${available} ${item.unit} available at selected price.`,
+          `${displayItemName(item.name)} has only ${available} ${item.unit} available at selected price.`,
         );
       }
     }
@@ -5358,7 +5359,7 @@ function FlowSupportPanel({
               <tbody>
                 {inventoryItems.slice(0, 12).map((item) => (
                   <tr key={item.id}>
-                    <td>{item.name}</td>
+                    <td>{displayItemName(item.name)}</td>
                     <td>{item.unit}</td>
                     <td className="text-right tabular-nums">{item.quantity}</td>
                     <td>{item.quantity > 0 ? "Available" : "Out"}</td>
@@ -5686,7 +5687,7 @@ function ItemLookup({
   const popupRef = useRef<HTMLDivElement | null>(null);
   const isTypingRef = useRef(false);
   const selected = items.find((item) => item.id === value);
-  const displayLabel = (item?: Item | null) => displayNameOnly ? item?.name || "" : itemLabel(item);
+  const displayLabel = (item?: Item | null) => displayNameOnly ? displayItemName(item?.name) : itemLabel(item);
   const [text, setText] = useState(() => displayLabel(selected));
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -5752,7 +5753,7 @@ function ItemLookup({
       [item.stock_number, item.barcode_value, item.qr_code_value]
         .some((code) => String(code || "").toLocaleLowerCase() === normalized),
     );
-    const byName = items.filter((item) => item.name.trim().toLocaleLowerCase() === normalized);
+    const byName = items.filter((item) => displayItemName(item.name).toLocaleLowerCase() === normalized);
     const match = byLabel.length === 1 ? byLabel[0]
       : byCode.length === 1 ? byCode[0]
         : byName.length === 1 ? byName[0] : undefined;
@@ -5781,11 +5782,11 @@ function ItemLookup({
   const normalizedName = text.trim().toLocaleLowerCase();
   const normalizedDescription = productDescription.trim().toLocaleLowerCase();
   const exactCombinationExists = items.some((item) =>
-    item.name.trim().toLocaleLowerCase() === normalizedName &&
+    displayItemName(item.name).toLocaleLowerCase() === normalizedName &&
     (item.description || "").trim().toLocaleLowerCase() === normalizedDescription,
   );
   const canAddVariant = displayNameOnly && items.some((item) =>
-    item.name.trim().toLocaleLowerCase() === normalizedName,
+    displayItemName(item.name).toLocaleLowerCase() === normalizedName,
   ) && !exactCombinationExists;
   const showAddItem = Boolean(onAddMissingItem && text.trim() && (matches.length === 0 || canAddVariant));
 
@@ -5826,19 +5827,19 @@ function ItemLookup({
           {matches.length > 0 ? (
             <div role="listbox" aria-label="Matching inventory items" className="p-1">
               {matches.map((item, index) => (
-                <div key={item.id} role="option" aria-selected={item.id === value} className={`rounded px-2.5 py-2 text-left text-sm ${index === activeIndex ? "bg-accent" : ""}`}>
+                <div key={item.id} role="option" aria-selected={item.id === value} className={`cursor-pointer rounded px-2.5 py-2 text-left text-sm ${index === activeIndex ? "bg-accent" : ""}`}>
                   <button
                     type="button"
-                    className="block w-full text-left"
+                    className="block w-full cursor-pointer text-left"
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => { setText(displayLabel(item)); isTypingRef.current = false; onChange(item.id); setOpen(false); }}
                   >
-                    <span className="block truncate font-medium">{item.name}</span>
+                    <span className="block truncate font-medium">{displayItemName(item.name)}</span>
                     {item.description && <span className="block truncate text-xs text-muted-foreground">{item.description}</span>}
                     <span className="block truncate text-[11px] text-muted-foreground">Stock {item.stock_number || "unassigned"} · {item.unit} · {item.price_balances?.length ? `${item.price_balances.length} price identities` : peso(Number(item.acquisition_cost || 0))}</span>
                   </button>
                   {pricePicker && item.price_balances?.length ? (
-                    <div className="mt-2 space-y-1 border-t border-border pt-2" aria-label={`Available prices for ${item.name}`}>
+                    <div className="mt-2 space-y-1 border-t border-border pt-2" aria-label={`Available prices for ${displayItemName(item.name)}`}>
                       {priceGroups(item).map((group) => (
                         <button key={Math.round(group.unit_cost * 100)} type="button" className="flex min-h-11 w-full items-center justify-between gap-4 rounded-md border border-border/70 px-3 py-2 text-left text-sm hover:bg-accent" onMouseDown={(event) => event.preventDefault()} onClick={() => {
                           setText(displayLabel(item));
@@ -6053,12 +6054,12 @@ function itemDescription(item?: Item | null) {
 
 function combinedItemDescription(item?: Item | null) {
   if (!item) return "";
-  return [item.name?.trim(), item.description?.trim()].filter(Boolean).join(" — ");
+  return [displayItemName(item.name), item.description?.trim()].filter(Boolean).join(" — ");
 }
 
 function itemSearchText(item: Item): string {
   return [
-    item.name,
+    displayItemName(item.name),
     item.description || "",
     item.stock_number || "",
     item.barcode_value || "",
@@ -6094,8 +6095,8 @@ function selectedPriceLots(item?: Item | null, line?: Line) {
 function itemLabel(item?: Item | null) {
   if (!item) return "";
   return item.description?.trim()
-    ? `${item.name} — ${item.description.trim()}`
-    : item.name;
+    ? `${displayItemName(item.name)} — ${item.description.trim()}`
+    : displayItemName(item.name);
 }
 
 function isUniqueViolation(error: { code?: string; message?: string }) {
@@ -6570,7 +6571,7 @@ function getRpciRows(
         Number(item.acquisition_cost || 0);
       return {
         id: item.id,
-        article: item.name,
+        article: displayItemName(item.name),
         description: item.description || "",
         stockNo: item.stock_number || "",
         unit: item.unit.toUpperCase(),

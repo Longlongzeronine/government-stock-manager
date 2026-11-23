@@ -1,3 +1,6 @@
+import { createServerOnlyFn } from "@tanstack/react-start";
+import { getRequestHeader } from "@tanstack/react-start/server";
+
 /**
  * Server-side Supabase REST fallback for Cloudflare Workers.
  *
@@ -69,6 +72,11 @@ function headers(key: string, extra: Record<string, string> = {}) {
   };
 }
 
+const getCallerAccessToken = createServerOnlyFn(() => {
+  const authorization = getRequestHeader("authorization") || "";
+  return authorization.match(/^Bearer\s+(.+)$/i)?.[1] || "";
+});
+
 function throwIfError(res: Response, body: unknown, what: string) {
   if (res.ok) return;
   const msg =
@@ -84,9 +92,13 @@ export async function sbSelect<T = any>(
 ): Promise<T[]> {
   const cfg = getRestConfig();
   if (!cfg) throw new Error("Supabase REST config missing");
+  // The Worker executes PostgREST reads server-side, so the browser's Supabase
+  // session is not attached automatically. Forward the authenticated caller's
+  // JWT; otherwise RLS policies requiring auth.uid() return empty result sets.
+  const accessToken = getCallerAccessToken();
   const res = await fetch(
     `${cfg.url}/rest/v1/${table}${query ? `?${query}` : ""}`,
-    { headers: headers(cfg.key) },
+    { headers: headers(cfg.key, accessToken ? { Authorization: `Bearer ${accessToken}` } : {}) },
   );
   const body = await res.json().catch(() => null);
   throwIfError(res, body, `select ${table}`);

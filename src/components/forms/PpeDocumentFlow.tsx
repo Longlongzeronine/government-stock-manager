@@ -7,6 +7,7 @@ import {
   reserveNextFormNumber,
   savePpeDocument,
 } from "@/lib/data.functions";
+import { displayItemName } from "@/lib/item-display";
 
 export type PpeDocumentType =
   | "ppe-ledger"
@@ -1041,7 +1042,7 @@ export function PpeDocumentFlow({
                         {selectableItems.map((item) => (
                           <option key={item.id} value={item.id}>
                             {item.stock_number ? `${item.stock_number} — ` : ""}
-                            {item.name}
+                            {displayItemName(item.name)}
                           </option>
                         ))}
                       </select>
@@ -1155,7 +1156,7 @@ export function PpeDocumentFlow({
               {ppeItems.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.stock_number ? `${item.stock_number} — ` : ""}
-                  {item.name}
+                  {displayItemName(item.name)}
                 </option>
               ))}
             </select>
