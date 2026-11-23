@@ -1,13 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Search } from "lucide-react";
-import { Fragment, useMemo, useState } from "react";
+import { Search } from "lucide-react";
+import { useMemo, useState } from "react";
 import { format } from "date-fns";
 import { listAuditLogs } from "@/lib/data.functions";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
-import { MobileCard } from "@/components/common/MobileCard";
-import { useIsMobile } from "@/hooks/use-mobile";
 
 export const Route = createFileRoute("/_app/audit")({
   head: () => ({ meta: [{ title: "Audit Log - Supplify" }] }),
@@ -127,7 +125,7 @@ function ChangeDetails({ row }: { row: any }) {
 }
 
 function Audit() {
-  const { isAdmin, developerMode } = useAuth();
+  const { isAdmin, roles, developerMode } = useAuth();
   const { data: rows = [], isLoading, error } = useQuery({
     queryKey: ["audit"],
     queryFn: () => listAuditLogs(),
@@ -135,8 +133,6 @@ function Audit() {
   });
   const [search, setSearch] = useState("");
   const [range, setRange] = useState("48");
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const isMobileView = useIsMobile();
 
   const filteredRows = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -148,23 +144,12 @@ function Audit() {
       return [
         row.actor_email,
         row.action,
-        row.table_name,
-        row.row_id,
-        JSON.stringify(row.payload ?? ""),
+        row.actor_name,
       ].some((value) => String(value ?? "").toLowerCase().includes(term));
     });
   }, [rows, search, range]);
 
-  function toggleExpanded(id: string) {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  if (!isAdmin && !developerMode) {
+  if (!isAdmin && !roles.includes("super_admin") && !developerMode) {
     return <div className="p-8 text-sm text-muted-foreground">Admin access required.</div>;
   }
 
@@ -178,7 +163,7 @@ function Audit() {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search by email, action, or item..."
+              placeholder="Search by username, email, or action..."
               className="w-full rounded-md border border-input bg-background py-2 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring/30"
             />
           </label>
@@ -198,64 +183,27 @@ function Audit() {
           <div className="rounded-lg border border-border bg-card p-12 text-center text-sm text-muted-foreground">Loading events...</div>
         ) : error ? (
           <div className="rounded-lg border border-destructive/30 bg-card p-8 text-center text-sm text-destructive">Could not load audit events: {error.message}</div>
-        ) : isMobileView ? (
-          <div className="space-y-3">
-            {filteredRows.map((row: any) => (
-              <MobileCard key={row.id} className="p-0">
-                <button type="button" onClick={() => toggleExpanded(row.id)} className="flex w-full items-center gap-3 p-4 text-left hover:bg-muted/20">
-                  {expanded.has(row.id) ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className={`rounded border px-2 py-0.5 text-[11px] font-semibold ${actionStyle(row.action)}`}>{actionLabel(row.action)}</span>
-                      <span className="text-xs text-muted-foreground">{moduleLabel(row.table_name)}</span>
-                    </div>
-                    <div className="mt-1 truncate text-sm font-medium">{recordName(row)}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">{row.actor_email ?? "Unknown user"} · {displayTime(row.created_at)}</div>
-                  </div>
-                </button>
-                {expanded.has(row.id) && <div className="border-t border-border p-3"><ChangeDetails row={row} /></div>}
-              </MobileCard>
-            ))}
-            {filteredRows.length === 0 && <div className="rounded-lg border border-border bg-card p-12 text-center text-sm text-muted-foreground">No events match these filters.</div>}
-          </div>
         ) : (
           <div className="overflow-x-auto rounded-lg border border-border bg-card">
-            <table className="w-full min-w-[1100px] text-sm">
+            <table className="w-full min-w-[640px] text-sm">
               <thead className="bg-muted/60 text-[10px] uppercase tracking-wider text-muted-foreground">
                 <tr>
-                  <th className="w-8 px-2 py-3"></th>
                   <th className="w-44 px-3 py-3 text-left">Date &amp; time</th>
                   <th className="w-36 px-3 py-3 text-left">User action</th>
-                  <th className="w-36 px-3 py-3 text-left">Area</th>
+                  <th className="w-48 px-3 py-3 text-left">Username</th>
                   <th className="w-48 px-3 py-3 text-left">Email</th>
-                  <th className="w-36 px-3 py-3 text-left">Record type</th>
-                  <th className="px-3 py-3 text-left">Item / record</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((row: any) => (
-                  <Fragment key={row.id}>
-                    <tr key={row.id} className="border-t border-border hover:bg-muted/20">
-                      <td className="px-2 py-2">
-                        <button type="button" onClick={() => toggleExpanded(row.id)} aria-label={`${expanded.has(row.id) ? "Hide" : "Show"} event details`} className="rounded p-1 hover:bg-accent">
-                          {expanded.has(row.id) ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                        </button>
-                      </td>
+                {filteredRows.map((row: any, index: number) => (
+                    <tr key={`${row.created_at}-${row.action}-${index}`} className="border-t border-border hover:bg-muted/20">
                       <td className="px-3 py-3 text-xs tabular-nums">{displayTime(row.created_at)}</td>
                       <td className="px-3 py-3"><span className={`rounded border px-2 py-1 text-[10px] font-semibold ${actionStyle(row.action)}`}>{actionLabel(row.action)}</span></td>
-                      <td className="px-3 py-3 text-xs">{moduleLabel(row.table_name)}</td>
+                      <td className="px-3 py-3 text-xs">{row.actor_name || (row.actor_email ? row.actor_email.split("@")[0] : "—")}</td>
                       <td className="px-3 py-3 text-xs">{row.actor_email ?? "—"}</td>
-                      <td className="px-3 py-3 text-xs">{recordType(row)}</td>
-                      <td className="max-w-[260px] truncate px-3 py-3 text-xs font-medium" title={recordName(row)}>{recordName(row)}</td>
                     </tr>
-                    {expanded.has(row.id) && (
-                      <tr key={`${row.id}-details`} className="border-t border-border bg-muted/20">
-                        <td colSpan={7} className="p-3 sm:p-4"><ChangeDetails row={row} /></td>
-                      </tr>
-                    )}
-                  </Fragment>
                 ))}
-                {filteredRows.length === 0 && <tr><td colSpan={7} className="p-12 text-center text-sm text-muted-foreground">No events match these filters.</td></tr>}
+                {filteredRows.length === 0 && <tr><td colSpan={4} className="p-12 text-center text-sm text-muted-foreground">No events match these filters.</td></tr>}
               </tbody>
             </table>
           </div>
