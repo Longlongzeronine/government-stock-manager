@@ -491,3 +491,58 @@ export async function ensureSchema() {
   await s.unsafe(migration);
   return true;
 }
+
+let auditLogSchemaReady: Promise<void> | null = null;
+
+export async function ensureAuditLogSchema() {
+  auditLogSchemaReady ??= (async () => {
+    const s = getSql();
+    const [legacySchema] = await s`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'audit_logs' AND column_name = 'entity_type'
+      ) AS found
+    `;
+    await s.unsafe(`
+      ALTER TABLE audit_logs
+        ADD COLUMN IF NOT EXISTS actor_id TEXT DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS actor_email TEXT DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS table_name TEXT DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS row_id TEXT DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS payload JSONB DEFAULT NULL;
+
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'audit_logs' AND column_name = 'user_id') THEN
+          EXECUTE 'UPDATE audit_logs SET actor_id = COALESCE(actor_id, user_id::text)';
+          EXECUTE 'ALTER TABLE audit_logs ALTER COLUMN user_id DROP NOT NULL';
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'audit_logs' AND column_name = 'entity_type') THEN
+          EXECUTE 'UPDATE audit_logs SET table_name = COALESCE(table_name, entity_type)';
+          EXECUTE 'ALTER TABLE audit_logs ALTER COLUMN entity_type DROP NOT NULL';
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'audit_logs' AND column_name = 'entity_id') THEN
+          EXECUTE 'UPDATE audit_logs SET row_id = COALESCE(row_id, entity_id)';
+          EXECUTE 'ALTER TABLE audit_logs ALTER COLUMN entity_id DROP NOT NULL';
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'audit_logs' AND column_name = 'details') THEN
+          EXECUTE 'UPDATE audit_logs SET payload = COALESCE(payload, details), actor_email = COALESCE(actor_email, details->>''actor_email'')';
+          EXECUTE 'ALTER TABLE audit_logs ALTER COLUMN details DROP NOT NULL';
+        END IF;
+      END $$;
+    `);
+    if (legacySchema?.found) {
+      const [existingMarker] = await s`SELECT id FROM audit_logs WHERE action = 'audit_log_schema_repaired' LIMIT 1`;
+      if (!existingMarker) {
+        await s`INSERT INTO audit_logs ${s({
+          actor_id: "system",
+          actor_email: "system",
+          action: "audit_log_schema_repaired",
+          table_name: "audit_logs",
+          payload: { legacy_columns_mapped: true },
+        })}`;
+      }
+    }
+  })();
+  await auditLogSchemaReady;
+}
