@@ -972,6 +972,16 @@ export const deleteItem = createServerFn({ method: "POST" })
       async (sql) => {
         return sql.begin(async (tx: any) => {
           await tx`SELECT id FROM items WHERE id = ${data.id} FOR UPDATE`;
+          // SPLC is optional in older local schemas. Check its existence before
+          // querying it so an absent table does not block ordinary item edits/deletes.
+          const [splcTable] = await tx`SELECT to_regclass('public.splc_entries') AS table_name`;
+          let hasSplcHistory = false;
+          if (splcTable?.table_name) {
+            const [splc] = await tx`
+              SELECT EXISTS(SELECT 1 FROM splc_entries WHERE item_id = ${data.id}) AS referenced
+            `;
+            hasSplcHistory = Boolean(splc?.referenced);
+          }
           const [refs] = await tx`
             SELECT
               EXISTS(SELECT 1 FROM transactions WHERE item_id = ${data.id})
@@ -979,10 +989,9 @@ export const deleteItem = createServerFn({ method: "POST" })
               OR EXISTS(SELECT 1 FROM ris_items WHERE item_id = ${data.id})
               OR EXISTS(SELECT 1 FROM ics_items WHERE item_id = ${data.id})
               OR EXISTS(SELECT 1 FROM par_items WHERE item_id = ${data.id})
-              OR EXISTS(SELECT 1 FROM accountability_events WHERE item_id = ${data.id})
-              OR EXISTS(SELECT 1 FROM splc_entries WHERE item_id = ${data.id}) AS referenced
+              OR EXISTS(SELECT 1 FROM accountability_events WHERE item_id = ${data.id}) AS referenced
           `;
-          if (refs?.referenced) throw new Error("Item has transaction history and cannot be deleted. Historical records are preserved.");
+          if (refs?.referenced || hasSplcHistory) throw new Error("Item has transaction history and cannot be deleted. Historical records are preserved.");
           await tx`DELETE FROM items WHERE id = ${data.id}`;
           return { ok: true };
         });
@@ -994,7 +1003,8 @@ export const deleteItem = createServerFn({ method: "POST" })
           const message = error instanceof Error ? error.message : String(error);
           // Older hosted projects may not have applied the RPC migration yet.
           // Fall back to FK-protected REST delete; never bypass history constraints.
-          if (!/delete_unused_inventory_item.*(schema cache|could not find the function)/i.test(message)) {
+          if (!/delete_unused_inventory_item.*(schema cache|could not find the function)/i.test(message)
+            && !/relation ["']?splc_entries["']? does not exist/i.test(message)) {
             throw error;
           }
           await sbDelete("items", `id=eq.${encodeURIComponent(data.id)}`, getRestWriteConfig());

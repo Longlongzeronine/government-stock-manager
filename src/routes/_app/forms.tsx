@@ -367,6 +367,23 @@ function FormsFlow() {
   const [zoom, setZoom] = useState(1);
   const [selectedItemId, setSelectedItemId] = useState("");
   const [loadingIarReceiptId, setLoadingIarReceiptId] = useState("");
+
+    // When navigated from the Inventory page with a pending form item, pre-select it.
+    useEffect(() => {
+      try {
+        const raw = sessionStorage.getItem("app-cse-pending-form-item");
+        if (!raw) return;
+        const pending = JSON.parse(raw);
+        const now = Date.now();
+        if (!pending || !pending.itemId || now - (pending.timestamp || 0) > 5 * 60 * 1000) {
+          sessionStorage.removeItem("app-cse-pending-form-item");
+          return;
+        }
+        setSelectedItemId(pending.itemId);
+        sessionStorage.removeItem("app-cse-pending-form-item");
+        toast.success(`Ready to add "${pending.itemName}" to a new ${pending.formType.toUpperCase()}.`);
+      } catch {}
+    }, []);
   const [loadingRisIssueId, setLoadingRisIssueId] = useState("");
   const [loadedRisId, setLoadedRisId] = useState("");
   const [risDropdownOpen, setRisDropdownOpen] = useState(false);

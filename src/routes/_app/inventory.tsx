@@ -7,7 +7,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { StatusBadge } from "@/components/common/StatusBadge";
 import { ItemDialog } from "@/components/inventory/ItemDialog";
 import { MobileCard, MobileCardRow } from "@/components/common/MobileCard";
-import { ChevronDown, Plus, ScanLine, Search, Pencil, Trash2, Download, FileText, FileSpreadsheet, Clipboard, Printer, Loader2, LayoutGrid, Check, Upload } from "lucide-react";
+import { ChevronDown, Plus, ScanLine, Search, Pencil, Trash2, Download, FileText, FileSpreadsheet, Clipboard, Printer, Loader2, LayoutGrid, Check, Upload, ClipboardList, FileCheck2 } from "lucide-react";
 import { toast } from "sonner";
 import { exportCSV, exportPDF, exportXLSX, exportAppCseXlsx, exportAppCsePdf } from "@/lib/export";
 import { detectAppCseLayout, parseAppCseRows, validateAppCseLayout, MONTH_LABELS, MONTH_QUANTITY_COLUMNS } from "@/lib/appcse-sheet";
@@ -123,6 +123,22 @@ function Inventory() {
     }
   }
 
+  /** Store a pending form item in sessionStorage and navigate to the Forms Flow. */
+  function createFormForItem(formType: "ris" | "iar", item?: any) {
+    if (item) {
+      try {
+        sessionStorage.setItem(
+          "app-cse-pending-form-item",
+          JSON.stringify({ formType, itemId: item.id, itemName: item.name, timestamp: Date.now() }),
+        );
+      } catch {}
+    }
+    navigate({ to: "/forms" });
+    if (item) {
+      toast.success("Opened Forms Flow for \"" + displayItemName(item.name) + "\" — add it to a new " + formType.toUpperCase() + " line.");
+    }
+  }
+
   function exportRows() {
     return filtered.map((i: any) => ({
       StockNo: i.stock_number ?? "",
@@ -161,13 +177,29 @@ function Inventory() {
           onCategoryCreated={() => qc.invalidateQueries({ queryKey: ["categories"] })}
         />
       )}
-      {false && <div>
+      <div>
       <PageHeader
         title="Inventory"
         subtitle={`${items.length} items on record`}
         actions={
           <>
             <ExportMenu rows={exportRows()} title="Inventory Report" />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => createFormForItem("ris")}
+                className="inline-flex items-center gap-2 rounded-md border border-input bg-card px-3 py-2 text-sm font-medium hover:bg-accent"
+                title="Create Requisition and Issue Slip (RIS)"
+              >
+                <ClipboardList className="h-4 w-4" /> New Requisition
+              </button>
+              <button
+                onClick={() => createFormForItem("iar")}
+                className="inline-flex items-center gap-2 rounded-md border border-input bg-card px-3 py-2 text-sm font-medium hover:bg-accent"
+                title="Create Inspection and Acceptance Report (IAR)"
+              >
+                <FileCheck2 className="h-4 w-4" /> New Receipt
+              </button>
+            </div>
             {isAdmin && (
               <button
                 onClick={() => {
@@ -327,6 +359,12 @@ function Inventory() {
                           <button onClick={() => { setEditing(i); setOpen(true); }} className="p-1.5 rounded hover:bg-accent" title="Edit">
                             <Pencil className="h-3.5 w-3.5" />
                           </button>
+                          <button onClick={() => createFormForItem("ris", i)} className="p-1.5 rounded hover:bg-blue-50 text-blue-700 border border-blue-200" title="Issue via RIS">
+                            <ClipboardList className="h-3.5 w-3.5" />
+                          </button>
+                          <button onClick={() => createFormForItem("iar", i)} className="p-1.5 rounded hover:bg-green-50 text-green-700 border border-green-200" title="Receive via IAR">
+                            <FileCheck2 className="h-3.5 w-3.5" />
+                          </button>
                           <button onClick={() => onDelete(i.id)} className="p-1.5 rounded hover:bg-destructive/10 text-destructive" title="Delete">
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
@@ -350,38 +388,66 @@ function Inventory() {
         {/* Mobile Card View */}
         {isMobileView && (
           <div className="space-y-3">
-            {paged.map((i: any) => (
-              <MobileCard key={i.id}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-base">{displayItemName(i.name)}</div>
-                    {i.description && <div className="text-xs text-muted-foreground mt-1 line-clamp-2">{i.description}</div>}
+            {paged.map((i: any, index: number) => {
+              const qrValue = i.qr_code_value || i.barcode_value || i.id;
+              return (
+                <div key={i.id} className="bg-card border border-border rounded-lg shadow-sm p-4 sm:p-5 overflow-hidden">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="shrink-0 flex h-6 w-6 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
+                        {index + 1}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs text-muted-foreground uppercase tracking-wider">Stock No.</div>
+                        <div className="text-sm font-medium text-foreground truncate">{i.stock_number || "\u2014"}</div>
+                      </div>
+                    </div>
+                    <div className="shrink-0">
+                      <img
+                        src={"https://api.qrserver.com/v1/create-qr-code/?size=120x120&format=svg&data=" + encodeURIComponent(qrValue)}
+                        alt={"QR code for " + i.name}
+                        className="w-24 h-24 rounded bg-white border border-border"
+                        loading="lazy"
+                      />
+                    </div>
                   </div>
-                  <StatusBadge quantity={i.quantity} reorder={i.reorder_level} />
-                </div>
-                <div className="border-t border-border pt-2 space-y-2">
-                  <MobileCardRow label="Category" value={i.category?.name ?? "—"} />
-                  <MobileCardRow label="Supplier" value={i.supplier?.name ?? "—"} />
-                  <MobileCardRow label="Type" value={<TypeBadge itemType={i.item_type} />} />
-                  <MobileCardRow label="Classification" value={<ClassificationBadge item={i} />} />
-                  <MobileCardRow label="Acquisition Cost" value={money(Number(i.acquisition_cost || 0))} />
-                  <div className="grid grid-cols-2 gap-2">
-                    <MobileCardRow label="Qty" value={`${i.quantity} ${i.unit}`} />
-                    <MobileCardRow label="Reorder" value={i.reorder_level} align="right" />
+                  <div className="mb-1">
+                    <div className="text-base font-semibold uppercase tracking-tight text-foreground">{displayItemName(i.name)}</div>
                   </div>
-                </div>
-                {isAdmin && (
+                  {i.description && (
+                    <div className="text-xs text-muted-foreground mb-4 line-clamp-1">{i.description}</div>
+                  )}
+                  <div className="grid grid-cols-2 gap-4 mb-4 border-t border-border pt-4">
+                    <div>
+                      <div className="text-xs uppercase tracking-wider text-muted-foreground">Unit</div>
+                      <div className="text-sm font-medium text-foreground">{i.unit}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs uppercase tracking-wider text-muted-foreground">Total Qty</div>
+                      <div className="text-sm font-medium text-foreground">{i.quantity}</div>
+                    </div>
+                  </div>
                   <div className="flex gap-2 pt-2 border-t border-border">
-                    <button onClick={() => { setEditing(i); setOpen(true); }} className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-sm rounded-md border border-input hover:bg-accent">
-                      <Pencil className="h-3.5 w-3.5" /> Edit
-                    </button>
-                    <button onClick={() => onDelete(i.id)} className="px-3 py-2 text-sm rounded-md border border-destructive/30 text-destructive hover:bg-destructive/10">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    {isAdmin && (
+                      <>
+                        <button onClick={() => { setEditing(i); setOpen(true); }} className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-sm rounded-md border border-input bg-card hover:bg-accent text-sm font-medium">
+                          <Pencil className="h-3.5 w-3.5" /> Edit
+                        </button>
+                        <button onClick={() => createFormForItem("ris", i)} className="px-3 py-2 text-sm rounded-md border border-blue-200 text-blue-700 font-medium hover:bg-blue-50">
+                          <ClipboardList className="h-3.5 w-3.5" /> RIS
+                        </button>
+                        <button onClick={() => createFormForItem("iar", i)} className="px-3 py-2 text-sm rounded-md border border-green-200 text-green-700 font-medium hover:bg-green-50">
+                          <FileCheck2 className="h-3.5 w-3.5" /> IAR
+                        </button>
+                        <button onClick={() => onDelete(i.id)} className="px-3 py-2 text-sm rounded-md border border-destructive text-destructive font-medium hover:bg-destructive/10">
+                          <Trash2 className="h-3.5 w-3.5" /> Delete
+                        </button>
+                      </>
+                    )}
                   </div>
-                )}
-              </MobileCard>
-            ))}
+                </div>
+              );
+            })}
             {paged.length === 0 && (
               <div className="p-12 text-center text-sm text-muted-foreground bg-card border border-border rounded-lg">
                 No items match your filters.
@@ -391,16 +457,7 @@ function Inventory() {
         )}
 
       </div>
-
-      {false && open && (
-        <ItemDialog
-          editing={editing}
-          cats={cats}
-          onClose={() => setOpen(false)}
-          onSaved={() => { setOpen(false); qc.invalidateQueries({ queryKey: ["items"] }); }}
-        />
-      )}
-      </div>}
+      </div>
     </>
   );
 }
