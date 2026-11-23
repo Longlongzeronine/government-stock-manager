@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { PageHeader } from "@/components/layout/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
@@ -19,10 +19,10 @@ import {
 } from "@/lib/admin.functions";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { FORM_DEFINITIONS } from "@/lib/form-definitions";
 
 type AssignableRole = Role;
 const assignableRoles: { value: AssignableRole; label: string }[] = [
-  { value: "super_admin", label: "Super Admin" },
   { value: "regular_user", label: "Regular User" },
   { value: "permanent_employee", label: "Permanent Employee" },
   { value: "supply_officer", label: "Supply Officer" },
@@ -38,6 +38,8 @@ export const Route = createFileRoute("/_app/users")({
 });
 
 function UsersPage() {
+  const queryClient = useQueryClient();
+  const isMobileView = useIsMobile();
   const { isAdmin, developerMode, session } = useAuth();
   const accessToken = session?.access_token ?? "";
   const [creating, setCreating] = useState(false);
@@ -133,7 +135,6 @@ function UsersPage() {
     }
   }
 
-  const isMobileView = useIsMobile();
   const filteredProfiles = profiles.filter((u: any) => {
     const matchesSearch = `${u.full_name ?? ""} ${u.email ?? ""}`.toLowerCase().includes(search.trim().toLowerCase());
     return matchesSearch && (roleFilter === "all" || u.roles.includes(roleFilter));
@@ -184,8 +185,8 @@ function UsersPage() {
         </form>
 
         <section className="bg-card border border-border rounded-lg p-4 space-y-3">
-          <div><h2 className="font-semibold">Form access matrix</h2><p className="text-xs text-muted-foreground">Changes apply to next request. Administrator keeps full access.</p></div>
-          {!matrix ? <p className="text-sm text-muted-foreground">Loading permissions…</p> : <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr><th className="text-left p-2">Form</th>{matrix.roles.map((role: any) => <th key={role.code} className="p-2 text-center">{role.label}</th>)}</tr></thead><tbody>{matrix.forms.map((item: any) => <tr key={item.form_key} className="border-t border-border"><td className="p-2"><span className="text-xs text-muted-foreground">{item.section}</span><br />{item.label}</td>{matrix.roles.map((role: any) => { const allowed = matrix.permissions.some((permission: any) => permission.role_code === role.code && permission.form_key === item.form_key && permission.can_access); return <td className="p-2 text-center" key={role.code}><input aria-label={`${role.label} can access ${item.section} ${item.label}`} type="checkbox" checked={allowed} disabled={role.is_system_admin} onChange={async (event) => { try { await setRoleFormPermission({ data: { accessToken, role: role.code, formKey: item.form_key, canAccess: event.target.checked } }); await refetchMatrix(); } catch (e: any) { toast.error(e?.message ?? "Permission update failed"); } }} /></td>; })}</tr>)}</tbody></table></div>}
+          <div><h2 className="font-semibold">Form access matrix</h2><p className="text-xs text-muted-foreground">Select roles above to edit their access. Changes apply to the next form request.</p></div>
+          {!matrix ? <p className="text-sm text-muted-foreground">Loading permissions…</p> : <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr><th className="text-left p-2">Form</th>{matrix.roles.map((role: any) => <th key={role.code} className="p-2 text-center">{role.label}</th>)}</tr></thead><tbody>{FORM_DEFINITIONS.map((definition) => { const item = { form_key: definition.formKey, section: definition.section, label: definition.label }; return <tr key={item.form_key} className="border-t border-border"><td className="p-2"><span className="text-xs text-muted-foreground">{item.section}</span><br />{item.label}</td>{matrix.roles.map((role: any) => { const permission = matrix.permissions.find((entry: any) => entry.role_code === role.code && entry.form_key === item.form_key); const allowed = permission?.can_access ?? role.code === "admin"; return <td className="p-2 text-center" key={role.code}><input aria-label={`${role.label} can access ${item.section} ${item.label}`} type="checkbox" checked={allowed} disabled={role.code === "super_admin" || !form.roles.includes(role.code as Role)} onChange={async (event) => { const canAccess = event.target.checked; const previousMatrix = queryClient.getQueryData<any>(["roles", "form-matrix"]); queryClient.setQueryData(["roles", "form-matrix"], (current: any) => current ? { ...current, permissions: [...current.permissions.filter((entry: any) => entry.role_code !== role.code || entry.form_key !== item.form_key), { role_code: role.code, form_key: item.form_key, can_access: canAccess }] } : current); try { await setRoleFormPermission({ data: { accessToken, role: role.code, formKey: item.form_key, canAccess } }); } catch (e: any) { queryClient.setQueryData(["roles", "form-matrix"], previousMatrix); toast.error(e?.message ?? "Permission update failed"); } }} /></td>; })}</tr>; })}</tbody></table></div>}
         </section>
 
         <div className="flex flex-col gap-2 sm:flex-row">
