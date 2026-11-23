@@ -1416,11 +1416,26 @@ export const createTransaction = createServerFn({ method: "POST" })
 
 export const listAuditLogs = createServerFn({ method: "GET" }).handler(
   async () => withDbFallback(
-    async (sql) => sql`SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 500`,
-    async () => sbSelect(
-      "audit_logs",
-      "select=*&order=created_at.desc&limit=500",
-    ),
+    async (sql) => {
+      const { ensureAuditLogSchema } = await import("@/lib/local-db");
+      await ensureAuditLogSchema();
+      const rows = await sql`SELECT created_at, action, actor_email, payload FROM audit_logs ORDER BY created_at DESC LIMIT 500`;
+      return rows.map((row: any) => ({
+        created_at: row.created_at,
+        action: row.action,
+        actor_email: row.actor_email,
+        actor_name: row.payload?.actor_name ?? null,
+      }));
+    },
+    async () => {
+      const rows = await sbSelect("audit_logs", "select=created_at,action,actor_email,payload&order=created_at.desc&limit=500");
+      return rows.map((row: any) => ({
+        created_at: row.created_at,
+        action: row.action,
+        actor_email: row.actor_email,
+        actor_name: row.payload?.actor_name ?? null,
+      }));
+    },
   ),
 );
 
