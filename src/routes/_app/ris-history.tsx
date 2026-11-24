@@ -84,6 +84,7 @@ function RisHistoryPage() {
     queryKey: ["risForms", "history", user?.id],
     queryFn: () => listRisForms({ data: { created_by: user?.id } }),
     enabled: Boolean(user?.id),
+    staleTime: 15_000,
     refetchInterval: 5000,
   });
   const rows = forms as HistoryRow[];
