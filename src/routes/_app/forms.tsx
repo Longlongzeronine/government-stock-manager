@@ -47,6 +47,7 @@ import {
   createRisForm,
   createRisItem,
   createTransaction,
+  getNextIarNumberFromHistory,
   getNextRisNumberFromHistory,
   getRisFormDetails,
   getRisFormStatus,
@@ -497,6 +498,7 @@ function FormsFlow() {
   const draftRestored = useRef(false);
   const initializedPersonnel = useRef(false);
   const initializedRisNumber = useRef(false);
+  const initializedIarNumber = useRef(false);
 
   // Forms Flow route unmounts during page navigation. Keep drafts in this
   // browser session so switching to Inventory/Stock Card cannot erase input.
@@ -697,6 +699,16 @@ function FormsFlow() {
       receivedBy: latest.ris_received_by?.[0] || current.receivedBy,
     }));
   }, [personnelMemory]);
+
+  useEffect(() => {
+    if (draftRestored.current || initializedIarNumber.current) return;
+    initializedIarNumber.current = true;
+    void getNextIarNumberFromHistory({ data: { date: today } })
+      .then((iarNo) => {
+        if (iarNo) setIar((current) => ({ ...current, iarNo }));
+      })
+      .catch((error) => console.error("Unable to sync IAR number from history:", errorMessage(error)));
+  }, [today]);
 
   useEffect(() => {
     if (initializedRisNumber.current) return;
@@ -1062,9 +1074,15 @@ function FormsFlow() {
 
     postingIar.current = true;
     setSaving(true);
+    const postedIarNo = await reserveNextIarNumber(today);
+    if (!postedIarNo) {
+      postingIar.current = false;
+      setSaving(false);
+      return toast.error("Could not reserve the next IAR number. Try again.");
+    }
     try {
       await postIar({ data: {
-        iar_no: iar.iarNo, property_flow: propertyFlow, supplier: iar.supplier || null,
+        iar_no: postedIarNo, property_flow: propertyFlow, supplier: iar.supplier || null,
         invoice_no: iar.invoiceNo || null, accepted_by: iar.acceptedBy || null,
         created_by: user?.id, created_by_name: userName,
         form_data: {
@@ -1092,7 +1110,7 @@ function FormsFlow() {
     } catch (error) {
       postingIar.current = false;
       if (isUniqueViolation(error as { code?: string; message?: string })) {
-        const nextIarNo = makeFormNumber("IAR", today);
+        const nextIarNo = (await getNextIarNumberFromHistory({ data: { date: today } })) || makeFormNumber("IAR", today);
         setIar({ ...iar, iarNo: nextIarNo });
         setSaving(false);
         return toast.error(
@@ -1113,7 +1131,7 @@ function FormsFlow() {
     setSelectedItemId(validLines[0]?.item_id || "");
     setIar({
       ...iar,
-      iarNo: makeFormNumber("IAR", today),
+      iarNo: (await getNextIarNumberFromHistory({ data: { date: today } })) || makeFormNumber("IAR", today),
       supplier: "",
       poNoDate: "",
       invoiceNo: "",
@@ -1126,7 +1144,6 @@ function FormsFlow() {
     if (ris.verificationStatus === "verified") {
       const nextRisNo =
         (await getNextRisNumberFromHistory({ data: { date: today } })) ||
-        (await reserveNextRisNumber(today)) ||
         incrementRisNumber(ris.risNo, today);
       const verification = createVerificationIdentity();
       setRis((current) => ({
@@ -1210,9 +1227,14 @@ function FormsFlow() {
 
     setSaving(true);
     let risRecord: any;
+    const postedRisNo = await reserveNextRisNumber(today);
+    if (!postedRisNo) {
+      setSaving(false);
+      return toast.error("Could not reserve the next RIS number. Try again.");
+    }
     try {
       risRecord = await createRisForm({ data: {
-        ris_no: ris.risNo,
+        ris_no: postedRisNo,
         office: ris.office,
         purpose: ris.purpose || null,
         requested_by: ris.requestedBy || null,
@@ -1271,7 +1293,7 @@ function FormsFlow() {
             source_form_id: risRecord.id,
             source_line_id: lot?.id || null,
             remarks: [
-            `RIS ${ris.risNo}`,
+            `RIS ${postedRisNo}`,
             `Fund Cluster: ${risFundCluster}`,
             `Office: ${ris.office}`,
             "Responsibility Center: 16 009 03 0001 07",
@@ -1286,6 +1308,7 @@ function FormsFlow() {
             property_flow: propertyFlow,
             item_id: line.item_id,
             quantity: issuedQty,
+            unit_cost: Number(lot?.unit_cost ?? item?.acquisition_cost ?? 0),
             remarks: line.remarks || null,
             transaction_id: tx.id,
           } });
@@ -1302,7 +1325,7 @@ function FormsFlow() {
 
     const accountabilityError = await createAccountabilityDocuments({
       risId: risRecord.id,
-      risNo: ris.risNo,
+      risNo: postedRisNo,
       office: ris.office,
       custodian: ris.receivedBy || ris.requestedBy || userName,
       userId: user?.id,
@@ -1323,7 +1346,7 @@ function FormsFlow() {
     ]);
     await queryClient.invalidateQueries({ queryKey: ["ris-forms", "semi-expendable"] });
     const nextRisNo =
-      (await reserveNextRisNumber(today)) || incrementRisNumber(ris.risNo, today);
+      (await getNextRisNumberFromHistory({ data: { date: today } })) || incrementRisNumber(postedRisNo, today);
     const nextVerification = createVerificationIdentity();
     setSaving(false);
     toast.success(`RIS issued. Next RIS No.: ${nextRisNo}`);
@@ -1346,7 +1369,6 @@ function FormsFlow() {
     });
     setRisLines([blankLine()]);
     setRisValidationAttempted(false);
-    setTab("ics");
   }
 
   async function saveIcs() {
@@ -1405,7 +1427,7 @@ function FormsFlow() {
     if (tab === "iar") {
       setFormsFundCluster(FORM_DEFAULTS.fundCluster);
       setIar({
-        iarNo: makeFormNumber("IAR", today),
+        iarNo: (await getNextIarNumberFromHistory({ data: { date: today } })) || makeFormNumber("IAR", today),
         entityName: FORM_DEFAULTS.entityName,
         fundCluster: FORM_DEFAULTS.fundCluster,
         supplier: "",
@@ -1426,7 +1448,7 @@ function FormsFlow() {
       setLoadedRisId("");
       const verification = createVerificationIdentity();
       const nextRisNo =
-        (await reserveNextRisNumber(today)) || makeFormNumber("RIS", today);
+        (await getNextRisNumberFromHistory({ data: { date: today } })) || makeFormNumber("RIS", today);
       setRis({
         risNo: nextRisNo,
         office: "",
@@ -5971,16 +5993,7 @@ function blankLine(): Line {
 
 function makeFormNumber(prefix: "IAR" | "RIS" | "ICS", date: string) {
   if (prefix === "RIS" || prefix === "ICS") return `${date}-0000001`;
-  const now = new Date();
-  const timePart = [
-    now.getHours(),
-    now.getMinutes(),
-    now.getSeconds(),
-    now.getMilliseconds(),
-  ]
-    .map((part, index) => String(part).padStart(index === 3 ? 3 : 2, "0"))
-    .join("");
-  return `${prefix}-${date}-${timePart}`;
+  return `${prefix}-${date}-0000001`;
 }
 
 function incrementRisNumber(current: string, date: string) {
@@ -6002,6 +6015,15 @@ async function reserveNextRisNumber(date: string) {
     });
   } catch (error) {
     console.error("Unable to reserve RIS number:", errorMessage(error));
+    return "";
+  }
+}
+
+async function reserveNextIarNumber(date: string) {
+  try {
+    return await reserveNextFormNumber({ data: { prefix: "IAR", date } });
+  } catch (error) {
+    console.error("Unable to reserve IAR number:", errorMessage(error));
     return "";
   }
 }
