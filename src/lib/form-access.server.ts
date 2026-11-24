@@ -33,20 +33,13 @@ export async function getPermittedFormKeysFromRequest(formKeys: string[], action
     if (await readDeveloperSession()) return formKeys;
     throw Object.assign(new Error("Authentication required."), { statusCode: 401 });
   }
-  const { data: { user }, error: authError } = await client.auth.getUser();
-  if (authError || !user) throw Object.assign(new Error("Authentication required."), { statusCode: 401 });
-  const permitted: string[] = [];
-  for (const formKey of formKeys) {
-    const { data, error } = await client.rpc("user_can_access_form", { _user_id: user.id, _form_key: formKey });
+  const checks = await Promise.all(formKeys.map(async (formKey) => {
+    const { data, error } = await client.rpc("check_and_log_form_access", { _form_key: formKey, _action: action });
     if (error) throw new Error(`Could not check form access: ${error.message}`);
-    if (data) permitted.push(formKey);
-  }
-  if (!permitted.length) {
-    await assertFormAccessFromRequest(formKeys[0], action);
-  }
-  for (const formKey of permitted) {
-    await client.rpc("check_and_log_form_access", { _form_key: formKey, _action: action });
-  }
+    return data ? formKey : null;
+  }));
+  const permitted = checks.filter((formKey): formKey is string => Boolean(formKey));
+  if (!permitted.length) throw Object.assign(new Error("Forbidden: your assigned roles do not allow this form action."), { statusCode: 403 });
   return permitted;
 }
 
