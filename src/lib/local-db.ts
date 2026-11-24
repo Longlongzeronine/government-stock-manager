@@ -386,10 +386,14 @@ export async function ensureSchema() {
       ris_id UUID NOT NULL REFERENCES ris_forms(id) ON DELETE CASCADE,
       item_id UUID NOT NULL REFERENCES items(id),
       quantity NUMERIC(12,2) NOT NULL,
+      unit_cost NUMERIC(14,2) NOT NULL DEFAULT 0,
       remarks TEXT DEFAULT NULL,
       transaction_id UUID DEFAULT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    ALTER TABLE ris_items
+      ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(14,2) NOT NULL DEFAULT 0;
 
     UPDATE ris_forms r
     SET property_flow = 'semi-expendable'
@@ -485,6 +489,8 @@ export async function ensureSchema() {
     EXCEPTION WHEN unique_violation THEN NULL; END $$;
     CREATE INDEX IF NOT EXISTS idx_transactions_item_id ON transactions(item_id);
     CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at);
+    CREATE INDEX IF NOT EXISTS idx_ris_forms_created_by_created_at ON ris_forms(created_by, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ris_items_ris_id ON ris_items(ris_id);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
   `;
 
