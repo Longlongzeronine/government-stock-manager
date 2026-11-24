@@ -1298,28 +1298,23 @@ export const listTransactionsAsc = createServerFn({ method: "GET" })
       },
       async () => {
         const limit = data?.limit ?? 5000;
-        const rows = await sbSelect(
-          "transactions",
-          `select=*,item:items(id,name,description,stock_number,unit,quantity,acquisition_cost,inventory_classification,semi_expendable_tier)&order=created_at.asc&limit=${limit}`,
-        );
-        return rows.map((r: any) => ({
-          ...r,
-          item: r.item?.id
-            ? {
-                id: r.item.id,
-                name: r.item.name,
-                description: r.item.description,
-                stock_number: r.item.stock_number,
-                unit: r.item.unit,
-                quantity: r.item.quantity,
-                acquisition_cost: r.item.acquisition_cost,
-                inventory_classification: r.item.inventory_classification,
-                semi_expendable_tier: r.item.semi_expendable_tier,
-              }
-            : null,
+        const [rows, items] = await Promise.all([
+          sbSelect<any>(
+            "transactions",
+            `select=*&order=created_at.asc&limit=${limit}`,
+          ),
+          sbSelect<any>(
+            "items",
+            "select=id,name,description,stock_number,unit,quantity,acquisition_cost,inventory_classification,semi_expendable_tier&limit=10000",
+          ),
+        ]);
+        const itemsById = new Map(items.map((item: any) => [String(item.id), item]));
+        return rows.map((row: any) => ({
+          ...row,
+          item: itemsById.get(String(row.item_id)) || null,
         }));
       },
-    ).catch(() => []);
+    );
   });
 
 export const createTransaction = createServerFn({ method: "POST" })
@@ -1840,12 +1835,14 @@ export const listRisForms = createServerFn({ method: "GET" })
           coalesce(string_agg(DISTINCT c.name, ', ' ORDER BY c.name), 'Uncategorized') AS category_name,
           coalesce(sum(ri.quantity), 0) AS quantity,
           coalesce(string_agg(DISTINCT i.unit, ', ' ORDER BY i.unit), 'pcs') AS unit,
-          coalesce(max(i.acquisition_cost), 0) AS acquisition_cost,
-          coalesce(sum(ri.quantity * i.acquisition_cost), 0) AS total_amount,
+          coalesce(max(coalesce(nullif(ri.unit_cost, 0), lot.unit_cost, i.acquisition_cost)), 0) AS acquisition_cost,
+          coalesce(sum(ri.quantity * coalesce(nullif(ri.unit_cost, 0), lot.unit_cost, i.acquisition_cost)), 0) AS total_amount,
           coalesce(string_agg(DISTINCT nullif(ri.remarks, ''), ' | '), r.purpose, '') AS remarks,
           coalesce(string_agg(DISTINCT s.name, ', ' ORDER BY s.name), '') AS supplier_name
         FROM ris_forms r
         LEFT JOIN ris_items ri ON ri.ris_id = r.id
+        LEFT JOIN transactions ris_tx ON ris_tx.id = ri.transaction_id
+        LEFT JOIN iar_items lot ON lot.id::text = ris_tx.source_line_id
         LEFT JOIN items i ON i.id = ri.item_id
         LEFT JOIN categories c ON c.id = i.category_id
         LEFT JOIN suppliers s ON s.id = i.supplier_id
@@ -1882,18 +1879,29 @@ export const listRisForms = createServerFn({ method: "GET" })
         const formIds = forms.map((form) => String(form.id));
         const risItems = await sbSelect<any>(
           "ris_items",
-          `select=ris_id,item_id,quantity,remarks&ris_id=in.(${formIds.map(encodeURIComponent).join(",")})&limit=10000`,
+          `select=ris_id,item_id,quantity,unit_cost,remarks,transaction_id&ris_id=in.(${formIds.map(encodeURIComponent).join(",")})&limit=10000`,
         );
+        const transactionIds = [...new Set(risItems.map((line: any) => String(line.transaction_id || "")).filter(Boolean))];
         const itemIds = [...new Set(risItems.map((line) => String(line.item_id)))];
-        const items = itemIds.length
-          ? await sbSelect<any>(
+        const [linkedTransactions, items] = await Promise.all([
+          transactionIds.length
+            ? sbSelect<any>("transactions", `select=id,source_line_id&id=in.(${transactionIds.map(encodeURIComponent).join(",")})&limit=10000`)
+            : Promise.resolve([]),
+          itemIds.length
+            ? sbSelect<any>(
               "items",
               `select=id,name,unit,acquisition_cost,category_id,supplier_id,inventory_classification&id=in.(${itemIds.map(encodeURIComponent).join(",")})&limit=10000`,
             )
-          : [];
-        const categoryIds = [...new Set(items.map((item) => String(item.category_id || "")).filter(Boolean))];
-        const supplierIds = [...new Set(items.map((item) => String(item.supplier_id || "")).filter(Boolean))];
-        const [categories, suppliers] = await Promise.all([
+            : Promise.resolve([]),
+        ]);
+        const transactionsById = new Map(linkedTransactions.map((transaction: any) => [String(transaction.id), transaction]));
+        const lotIds = [...new Set(linkedTransactions.map((transaction: any) => String(transaction.source_line_id || "")).filter(Boolean))];
+        const categoryIds = [...new Set(items.map((item: any) => String(item.category_id || "")).filter(Boolean))];
+        const supplierIds = [...new Set(items.map((item: any) => String(item.supplier_id || "")).filter(Boolean))];
+        const [lots, categories, suppliers] = await Promise.all([
+          lotIds.length
+            ? sbSelect<any>("iar_items", `select=id,unit_cost&id=in.(${lotIds.map(encodeURIComponent).join(",")})&limit=10000`)
+            : Promise.resolve([]),
           categoryIds.length
             ? sbSelect<any>("categories", `select=id,name&id=in.(${categoryIds.map(encodeURIComponent).join(",")})&limit=10000`)
             : Promise.resolve([]),
@@ -1901,6 +1909,7 @@ export const listRisForms = createServerFn({ method: "GET" })
             ? sbSelect<any>("suppliers", `select=id,name&id=in.(${supplierIds.map(encodeURIComponent).join(",")})&limit=10000`)
             : Promise.resolve([]),
         ]);
+        const lotCostById = new Map(lots.map((lot: any) => [String(lot.id), Number(lot.unit_cost || 0)]));
         const itemById = new Map(items.map((item) => [String(item.id), item]));
         const categoryById = new Map(categories.map((category: any) => [String(category.id), category.name]));
         const supplierById = new Map(suppliers.map((supplier: any) => [String(supplier.id), supplier.name]));
@@ -1932,7 +1941,11 @@ export const listRisForms = createServerFn({ method: "GET" })
           const units = distinct(lineItems.map(({ item }) => item?.unit));
           const vendors = distinct(lineItems.map(({ item }) => item ? supplierById.get(String(item.supplier_id || "")) : ""));
           const quantity = lines.reduce((sum, line) => sum + Number(line.quantity || 0), 0);
-          const totalAmount = lineItems.reduce((sum, { line, item }) => sum + Number(line.quantity || 0) * Number(item?.acquisition_cost || 0), 0);
+          const totalAmount = lineItems.reduce((sum, { line, item }) => {
+            const transaction = transactionsById.get(String(line.transaction_id || ""));
+            const unitCost = Number(line.unit_cost || 0) || lotCostById.get(String(transaction?.source_line_id || "")) || Number(item?.acquisition_cost || 0);
+            return sum + Number(line.quantity || 0) * unitCost;
+          }, 0);
           const remarks = distinct(lines.map((line) => line.remarks));
           return {
             ...form,
@@ -2047,6 +2060,7 @@ export const createRisItem = createServerFn({ method: "POST" })
         ris_id: data.ris_id,
         item_id: data.item_id,
         quantity: Number(data.quantity),
+        unit_cost: Number(data.unit_cost || 0),
         remarks: data.remarks || null,
         transaction_id: data.transaction_id || null,
     };
@@ -2193,6 +2207,14 @@ export const reserveNextFormNumber = createServerFn({ method: "POST" })
               OR ics_no LIKE ${`ICS-${date}-%`}
           `;
           historyNext = Number(latest.last_number || 0) + 1;
+        } else if (prefix === "IAR") {
+          const [latest] = await tx`
+            SELECT count(*) AS form_count
+            FROM iar_forms
+            WHERE created_at >= make_date(${year}, 1, 1)
+              AND created_at < make_date(${year + 1}, 1, 1)
+          `;
+          historyNext = Number(latest.form_count || 0) + 1;
         }
         const [counter] = await tx`
           INSERT INTO form_number_counters (form_prefix, series_year, last_number)
@@ -2285,6 +2307,50 @@ export const getNextRisNumberFromHistory = createServerFn({ method: "GET" })
           // Older hosted projects may not have the optional counter table.
         }
         return `${date}-${String(Math.max(historySeries, counterSeries) + 1).padStart(7, "0")}`;
+      },
+    );
+  });
+
+export const getNextIarNumberFromHistory = createServerFn({ method: "GET" })
+  .inputValidator((d: { date: string }) => d)
+  .handler(async ({ data }) => {
+    await getPermittedFormKeysFromRequest(["supplies_iar", "semi_iar", "ppe_iar"], "list");
+    const year = Number(data.date.slice(0, 4));
+    return withDbFallback(
+      async (sql) => {
+        const [row] = await sql`
+          SELECT GREATEST(
+            COALESCE((
+              SELECT last_number FROM form_number_counters
+              WHERE form_prefix = 'IAR' AND series_year = ${year}
+            ), 0),
+            COALESCE((
+              SELECT count(*) FROM iar_forms
+              WHERE created_at >= make_date(${year}, 1, 1)
+                AND created_at < make_date(${year + 1}, 1, 1)
+            ), 0)
+          ) + 1 AS next_number
+        `;
+        return `IAR-${data.date}-${String(Number(row.next_number)).padStart(7, "0")}`;
+      },
+      async () => {
+        const from = `${year}-01-01T00:00:00.000Z`;
+        const to = `${year + 1}-01-01T00:00:00.000Z`;
+        const forms = await sbSelect<any>(
+          "iar_forms",
+          `select=id,created_at&created_at=gte.${encodeURIComponent(from)}&created_at=lt.${encodeURIComponent(to)}&order=created_at.desc&limit=10000`,
+        );
+        let counterSeries = 0;
+        try {
+          const [counter] = await sbSelect<{ last_number: number }>(
+            "form_number_counters",
+            `select=last_number&form_prefix=eq.IAR&series_year=eq.${year}&limit=1`,
+          );
+          counterSeries = Number(counter?.last_number || 0);
+        } catch {
+          // Older hosted projects may not have the optional counter table.
+        }
+        return `IAR-${data.date}-${String(Math.max(forms.length, counterSeries) + 1).padStart(7, "0")}`;
       },
     );
   });
