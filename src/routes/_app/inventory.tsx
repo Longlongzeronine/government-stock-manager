@@ -515,18 +515,37 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
     };
   }, [layoutOpen]);
   const monthsFor = (item: any) => monthlyPlan[item.id] || ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].map((month, index) => Number(item[`${month}_quantity`] ?? (index === 0 ? item.stored_quantity ?? item.quantity : 0)) || 0);
+  const unitPriceFor = (item: any) => {
+    const savedPrice = Number(item.acquisition_cost || 0);
+    if (savedPrice > 0) return savedPrice;
+    const lots = item.price_balances || [];
+    const lotQuantity = lots.reduce((sum: number, lot: any) => sum + Number(lot.quantity || 0), 0);
+    return lotQuantity > 0
+      ? lots.reduce((sum: number, lot: any) => sum + Number(lot.quantity || 0) * Number(lot.unit_cost || 0), 0) / lotQuantity
+      : 0;
+  };
+  const inventoryAmountFor = (item: any) => {
+    const lots = item.price_balances || [];
+    if (lots.length) {
+      return lots.reduce((sum: number, lot: any) => {
+        const unitPrice = Number(lot.unit_cost || 0) || unitPriceFor(item);
+        return sum + Number(lot.quantity || 0) * unitPrice;
+      }, 0);
+    }
+    return Number(item.quantity || 0) * unitPriceFor(item);
+  };
   const isNewItem = (item: any) => !!item?.created_at && !seenNewIds.has(item.id) && Date.now() - new Date(item.created_at).getTime() < NEW_ITEM_WINDOW_MS;
   // Part I = items with barcode_value (PS-DBM catalog items from XLSX import)
   const part1Items = (items as any[]).filter((item: any) => item.barcode_value);
   // Part II = items without barcode_value (custom/manually added items)
   const part2Items = (items as any[]).filter((item: any) => !item.barcode_value);
-  const part1Total = part1Items.reduce((sum: number, item: any) => sum + monthsFor(item).reduce((all, q) => all + q, 0) * Number(item.acquisition_cost || 0), 0);
+  const part1Total = part1Items.reduce((sum: number, item: any) => sum + monthsFor(item).reduce((all, q) => all + q, 0) * unitPriceFor(item), 0);
   const planGroups = part1Items.reduce<Record<string, any[]>>((groups, item: any) => {
     const cat = item.category?.name || "PS-DBM SUPPLIES";
     (groups[cat] ||= []).push(item);
     return groups;
   }, {});
-  const part2Total = part2Items.reduce((sum: number, item: any) => sum + monthsFor(item).reduce((all, quantity) => all + quantity, 0) * Number(item.acquisition_cost || 0), 0);
+  const part2Total = part2Items.reduce((sum: number, item: any) => sum + monthsFor(item).reduce((all, quantity) => all + quantity, 0) * unitPriceFor(item), 0);
   const itemGroups = part2Items.reduce<Record<string, any[]>>((groups, item: any) => {
     const cat = item.category?.name || (item.item_type === "material" ? "MATERIALS" : "SUPPLIES");
     (groups[cat] ||= []).push(item);
@@ -547,8 +566,8 @@ function SpreadsheetInventory({ items, cats, sups, canEdit, onItemsChanged, onCa
     (groups[cat] ||= []).push(item);
     return groups;
   }, {});
-  const compactPart1Total = compactPart1.reduce((sum: number, item: any) => sum + monthsFor(item).reduce((all, q) => all + q, 0) * Number(item.acquisition_cost || 0), 0);
-  const compactPart2Total = compactPart2.reduce((sum: number, item: any) => sum + monthsFor(item).reduce((all, q) => all + q, 0) * Number(item.acquisition_cost || 0), 0);
+  const compactPart1Total = compactPart1.reduce((sum: number, item: any) => sum + inventoryAmountFor(item), 0);
+  const compactPart2Total = compactPart2.reduce((sum: number, item: any) => sum + inventoryAmountFor(item), 0);
   const deleteSingleItem = async (item: any) => {
     if (!confirm(`Permanently delete "${item.name}" from the plan? This cannot be undone.`)) return;
     try {
