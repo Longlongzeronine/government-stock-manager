@@ -43,44 +43,76 @@ const adminOnlyFunctions = new Set([
   "deleteAdminUser",
 ]);
 
-const auditSkippedFunctions = new Set(["recordUserAuditActivity", "listAdminUsers", "listRoleMatrix"]);
-
-function auditTableForFunction(name: string) {
-  if (/User|Role|Admin|Password|Disabled|Approval/i.test(name)) return "user_accounts";
-  if (/Iar|Ris|Ics|Par|Ppe|Itr|Rspi|Rpcsp|Form/i.test(name)) return "forms";
-  if (/Item|Inventory|Transaction|Category|Supplier|Stock/i.test(name)) return "inventory";
-  return "site";
+function auditResultRecord(result: unknown): Record<string, unknown> {
+  let value = result;
+  for (let depth = 0; depth < 3; depth += 1) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const record = value as Record<string, unknown>;
+    if (record.result && typeof record.result === "object") value = record.result;
+    else if (!record.id && record.data && typeof record.data === "object") value = record.data;
+    else return record;
+  }
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function auditActionForFunction(name: string) {
-  const known: Record<string, string> = {
-    approveUser: "user_approved",
-    createAdminUser: "account_created",
-    createRisForm: "form_submitted",
-    declineUser: "user_declined",
-    deleteAdminUser: "account_deleted",
-    postIar: "form_submitted",
-    resetUserPassword: "password_reset",
-    setRoleFormPermission: "form_permission_changed",
-    setUserDisabled: "user_status_changed",
-    setUserRole: "user_role_changed",
-    updateRisFormStatus: "form_status_changed",
+function auditEventForFunction(name: string, result: unknown) {
+  const source = auditResultRecord(result);
+  const flow = String(source.property_flow || "").toLowerCase();
+  const flowArea = flow === "semi-expendable" ? "Semi-Ex" : flow === "ppe" ? "PPE" : flow === "supplies" ? "Supplies" : "";
+  const requestedArea = String(source.audit_area || "").toLowerCase();
+  const explicitArea = requestedArea === "semi-expendable" ? "Semi-Ex" : requestedArea === "ppe" ? "PPE" : requestedArea === "supplies" ? "Supplies" : String(source.audit_area || "");
+  const created: Record<string, string> = {
+    createIarForm: "iar",
+    postIar: "iar",
+    createRisForm: "ris",
+    createIcsForm: "ics",
+    createParForm: "par",
   };
-  if (known[name]) return known[name];
-  if (/^create/.test(name)) return "record_created";
-  if (/^update|^set|^remember/.test(name)) return "record_updated";
-  if (/^delete/.test(name)) return "record_deleted";
-  if (/^approve/.test(name)) return "record_approved";
-  return `site_action_${name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase()}`;
+  const updated: Record<string, string> = {
+    updateRisFormStatus: "ris",
+  };
+  if (created[name]) return { action: `form_created_${created[name]}`, area: explicitArea || flowArea || (created[name] === "ics" ? "Semi-Ex" : created[name] === "par" ? "PPE" : "Supplies") };
+  if (updated[name]) return { action: `form_updated_${updated[name]}`, area: "Approval" };
+  if (["approveIar", "approveRis", "approveItr"].includes(name)) {
+    const type = name === "approveIar" ? "iar" : name === "approveRis" ? "ris" : "itr";
+    return { action: `form_updated_${type}`, area: "Approval" };
+  }
+
+  const formType = String(source.document_type || "").trim().toLowerCase();
+  const operation = String(source.audit_operation || "");
+  if (name === "savePpeDocument" && formType && ["created", "updated"].includes(operation)) {
+    return { action: `form_${operation}_${formType}`, area: explicitArea || flowArea || (formType === "splc" || formType === "itr" || formType === "rpcsp" ? "Semi-Ex" : "PPE") };
+  }
+  if (name === "approvePpeDocument" && formType) {
+    return { action: `form_updated_${formType}`, area: explicitArea || flowArea || "Approval" };
+  }
+
+  const recordEvents: Record<string, { action: string; area: string }> = {
+    createItem: { action: "record_created_inventory_item", area: "Inventory" },
+    updateItem: { action: "record_updated_inventory_item", area: "Inventory" },
+    updateItemMonthlyQuantity: { action: "record_updated_inventory_item", area: "Inventory" },
+    createCategory: { action: "record_created_category", area: "Categories" },
+    updateCategory: { action: "record_updated_category", area: "Categories" },
+    createSupplier: { action: "record_created_supplier", area: "Suppliers" },
+    updateSupplier: { action: "record_updated_supplier", area: "Suppliers" },
+    createAdminUser: { action: "record_created_user", area: "Users" },
+    setUserRole: { action: "record_updated_user", area: "Users" },
+    setUserDisabled: { action: "record_updated_user", area: "Users" },
+  };
+  if (name === "createTransaction" && !["IAR", "RIS"].includes(String(source.source_form_type || "").toUpperCase())) {
+    return { action: "record_created_stock_transaction", area: "Stock In / Out" };
+  }
+  const recordEvent = recordEvents[name];
+  return recordEvent ? { ...recordEvent, area: explicitArea || recordEvent.area } : null;
 }
 
 function auditResultSummary(result: unknown) {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return Array.isArray(result) ? { result_count: result.length } : {};
   }
-  const source = result as Record<string, unknown>;
+  const source = auditResultRecord(result);
   const summary: Record<string, unknown> = {};
-  for (const key of ["id", "userId", "email", "name", "ris_no", "iar_no", "document_no", "status", "disabled", "role", "roles", "formKey", "canAccess", "changesCount", "employmentStatus"]) {
+  for (const key of ["id", "userId", "email", "full_name", "name", "stock_number", "property_flow", "audit_area", "area", "source_form_type", "reference_number", "ris_no", "iar_no", "ics_no", "par_no", "document_no", "document_type", "audit_operation", "status", "disabled", "role", "roles", "formKey", "canAccess", "changesCount", "employmentStatus"]) {
     const value = source[key];
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || (Array.isArray(value) && value.every((entry) => typeof entry === "string"))) {
       summary[key] = value;
@@ -171,7 +203,7 @@ const inventoryAuthMiddleware = createMiddleware({ type: "function" })
 
     // These endpoints perform their own role or form permission checks. Let
     // them reach that authorization instead of rejecting them as inventory writes.
-    const formGuardedFunctions = new Set(["createIarForm", "createIarItem", "postIar", "updateIarPriceLots", "createRisForm", "createRisItem", "updateRisFormStatus", "savePpeDocument", "approvePpeDocument", "createTransaction", "setRoleFormPermission", "recordUserAuditActivity"]);
+    const formGuardedFunctions = new Set(["createIarForm", "createIarItem", "postIar", "updateIarPriceLots", "createRisForm", "createRisItem", "updateRisFormStatus", "savePpeDocument", "approvePpeDocument", "createTransaction", "setRoleFormPermission"]);
     const canWrite = ["admin", "super_admin", "supply_officer", "inspection_officer", "financial_analyst"].some((candidate) => assignedRoles.has(candidate));
     if (method !== "GET" && !canWrite && !formGuardedFunctions.has(serverFnMeta.name) && !adminOnlyFunctions.has(serverFnMeta.name)) {
       throw Object.assign(new Error("Forbidden: write access required."), { statusCode: 403 });
@@ -180,17 +212,18 @@ const inventoryAuthMiddleware = createMiddleware({ type: "function" })
       throw Object.assign(new Error("Forbidden: administrator access required."), { statusCode: 403 });
     }
     const result = await next();
-    if ((!auditSkippedFunctions.has(serverFnMeta.name) && method !== "GET") || serverFnMeta.name === "createFormsFlowBackup") {
+    const auditEvent = auditEventForFunction(serverFnMeta.name, result);
+    if (auditEvent) {
       const summary = auditResultSummary(result);
       const rowId = [summary.id, summary.userId].find((value): value is string => typeof value === "string") ?? null;
       try {
         await writeAuditEvent({
           actorId: auditActorId,
           actorEmail: auditActorEmail,
-          action: auditActionForFunction(serverFnMeta.name),
-          tableName: auditTableForFunction(serverFnMeta.name),
+          action: auditEvent.action,
+          tableName: auditEvent.area,
           rowId,
-          payload: { actor_name: auditActorName, server_function: serverFnMeta.name, ...summary },
+          payload: { actor_name: auditActorName, server_function: serverFnMeta.name, area: auditEvent.area, ...summary },
         });
       } catch (error) {
         console.error(`Could not record ${serverFnMeta.name} audit event`, error);
