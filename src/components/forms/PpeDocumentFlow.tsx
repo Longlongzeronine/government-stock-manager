@@ -756,6 +756,7 @@ export function PpeDocumentFlow({
         data: {
           document_type: type,
           document_no: effectiveDocNo,
+          property_flow: propertyFlow,
           form_data: formData,
           created_by: userId,
           created_by_name: userName,
@@ -766,7 +767,7 @@ export function PpeDocumentFlow({
       setSavedStatus(saved.status);
       if (approve) {
         const result = await approvePpeDocument({
-          data: { id: saved.id, document_type: type, created_by: userId, created_by_name: userName },
+          data: { id: saved.id, document_type: type, property_flow: propertyFlow, created_by: userId, created_by_name: userName },
         });
         setSavedStatus(result.status);
         toast.success("Form approved; property records updated.");
