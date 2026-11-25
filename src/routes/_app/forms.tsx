@@ -30,7 +30,6 @@ import { ItemDialog } from "@/components/inventory/ItemDialog";
 import { PpeDocumentFlow, type PpeDocumentType } from "@/components/forms/PpeDocumentFlow";
 import { exportCSV } from "@/lib/export";
 import { displayItemName } from "@/lib/item-display";
-import { recordUserAuditActivity } from "@/lib/audit.functions";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -348,9 +347,6 @@ function FormsFlow() {
     if ((!accessLoaded && !developerMode) || !activeFormKey || developerMode) return;
     if (!effectivePermittedForms.includes(activeFormKey)) return;
     void supabase.rpc("check_and_log_form_access", { _form_key: activeFormKey, _action: "open" });
-    void recordUserAuditActivity({ data: { action: "form_open", formKey: activeFormKey } }).catch((error) => {
-      console.error("Could not record form access audit event", error);
-    });
   }, [accessLoaded, activeFormKey, effectivePermittedForms, developerMode]);
   useEffect(() => {
     if ((!accessLoaded && !developerMode) || !activeFormKey || developerMode || effectivePermittedForms.includes(activeFormKey)) return;
@@ -1392,6 +1388,7 @@ function FormsFlow() {
         office: ics.office || null,
         created_by: user?.id,
         created_by_name: userName,
+        property_flow: propertyFlow,
       } });
       for (const line of validLines) {
         await createIcsItem({ data: {
@@ -3634,7 +3631,7 @@ function StockCardPaper({
                 {row ? format(new Date(row.created_at), "MM/dd/yyyy") : ""}
               </td>
               <td>
-                {extractReference(row?.remarks)}
+                {displayTransactionReference(row?.remarks)}
               </td>
               {isSemiExpendable ? (
                 <>
@@ -5485,11 +5482,11 @@ function SupportTable({
                 } : undefined}
                 tabIndex={onSelectRow ? 0 : undefined}
                 role={onSelectRow ? "button" : undefined}
-                aria-label={onSelectRow ? `${actionLabel || "Open"} ${extractReference(row.remarks)} in form` : undefined}
+                aria-label={onSelectRow ? `${actionLabel || "Open"} ${displayTransactionReference(row.remarks)} in form` : undefined}
                 aria-busy={loadingRowId === row.id}
                 className={onSelectRow ? "cursor-pointer hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary" : undefined}
               >
-                <td>{extractReference(row.remarks)}</td>
+                <td>{displayTransactionReference(row.remarks)}</td>
                 <td>{row.item?.name || "-"}{row.product_description && <small className="block text-muted-foreground">{row.product_description}</small>}</td>
                 <td className="text-right tabular-nums">{row.quantity}</td>
                 <td>{format(new Date(row.created_at), "MMM d, yyyy")}</td>
@@ -6665,6 +6662,7 @@ async function createAccountabilityDocuments({
         office,
         created_by: userId,
         created_by_name: userName,
+        property_flow: "semi-expendable",
       } });
       for (const line of semiExpendable) {
         await createIcsItem({ data: {
@@ -6689,6 +6687,7 @@ async function createAccountabilityDocuments({
         office,
         created_by: userId,
         created_by_name: userName,
+        property_flow: "ppe",
       } });
       for (const line of ppe) {
         await createParItem({ data: {
@@ -6752,6 +6751,10 @@ function padRows<T>(rows: T[], count: number): Array<T | null> {
 function extractReference(remarks?: string | null) {
   if (!remarks) return "";
   return remarks.split("|")[0]?.trim() || "";
+}
+
+function displayTransactionReference(remarks?: string | null) {
+  return extractReference(remarks).replace(/^IAR\s+IAR-/i, "IAR ");
 }
 
 function extractOffice(remarks?: string | null) {
