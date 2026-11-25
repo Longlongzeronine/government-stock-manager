@@ -89,6 +89,37 @@ function actionStyle(action: string) {
 
 function actionLabel(action: string) {
   const value = action.toLowerCase();
+  const formEvent = value.match(/^form_(created|updated)_(.+)$/);
+  if (formEvent) {
+    const formTypeLabels: Record<string, string> = {
+      iar: "IAR",
+      ris: "RIS",
+      ics: "ICS",
+      par: "PAR",
+      "ppe-ledger": "PPE Ledger",
+      "rpcppe": "RPCPPE",
+      "rpcsp": "RPCSP",
+      "rlsddp": "RLSDDP",
+      "splc": "SPLC",
+      "iirup": "IIRUP",
+      "rspi": "RSPI",
+      "itr": "ITR",
+      "rrpe": "RRPE",
+    };
+    const formType = formTypeLabels[formEvent[2]] ?? fieldLabel(formEvent[2]);
+    return `${formEvent[1] === "created" ? "Created" : "Updated"} ${formType} Form`;
+  }
+  const recordEvent = value.match(/^record_(created|updated)_(.+)$/);
+  if (recordEvent) {
+    const labels: Record<string, string> = {
+      inventory_item: "Inventory Item",
+      stock_transaction: "Stock In / Out",
+      category: "Category",
+      supplier: "Supplier",
+      user: "User",
+    };
+    return `${recordEvent[1] === "created" ? "Created" : "Updated"} ${labels[recordEvent[2]] ?? fieldLabel(recordEvent[2])}`;
+  }
   if (/delete|remove/.test(value)) return "Deleted";
   if (/reject/.test(value)) return "Rejected";
   if (/cancel/.test(value)) return "Cancelled";
@@ -145,6 +176,8 @@ function Audit() {
         row.actor_email,
         row.action,
         row.actor_name,
+        row.reference_number,
+        row.area,
       ].some((value) => String(value ?? "").toLowerCase().includes(term));
     });
   }, [rows, search, range]);
@@ -163,7 +196,7 @@ function Audit() {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search by username, email, or action..."
+              placeholder="Search username, email, action, reference, or area..."
               className="w-full rounded-md border border-input bg-background py-2 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring/30"
             />
           </label>
@@ -185,11 +218,13 @@ function Audit() {
           <div className="rounded-lg border border-destructive/30 bg-card p-8 text-center text-sm text-destructive">Could not load audit events: {error.message}</div>
         ) : (
           <div className="overflow-x-auto rounded-lg border border-border bg-card">
-            <table className="w-full min-w-[640px] text-sm">
+            <table className="w-full min-w-[920px] text-sm">
               <thead className="bg-muted/60 text-[10px] uppercase tracking-wider text-muted-foreground">
                 <tr>
                   <th className="w-44 px-3 py-3 text-left">Date &amp; time</th>
                   <th className="w-36 px-3 py-3 text-left">User action</th>
+                  <th className="w-44 px-3 py-3 text-left">Reference number</th>
+                  <th className="w-36 px-3 py-3 text-left">Area</th>
                   <th className="w-48 px-3 py-3 text-left">Username</th>
                   <th className="w-48 px-3 py-3 text-left">Email</th>
                 </tr>
@@ -199,11 +234,13 @@ function Audit() {
                     <tr key={`${row.created_at}-${row.action}-${index}`} className="border-t border-border hover:bg-muted/20">
                       <td className="px-3 py-3 text-xs tabular-nums">{displayTime(row.created_at)}</td>
                       <td className="px-3 py-3"><span className={`rounded border px-2 py-1 text-[10px] font-semibold ${actionStyle(row.action)}`}>{actionLabel(row.action)}</span></td>
+                      <td className="px-3 py-3 text-xs font-medium tabular-nums">{row.reference_number || "—"}</td>
+                      <td className="px-3 py-3 text-xs">{row.area || "—"}</td>
                       <td className="px-3 py-3 text-xs">{row.actor_name || (row.actor_email ? row.actor_email.split("@")[0] : "—")}</td>
                       <td className="px-3 py-3 text-xs">{row.actor_email ?? "—"}</td>
                     </tr>
                 ))}
-                {filteredRows.length === 0 && <tr><td colSpan={4} className="p-12 text-center text-sm text-muted-foreground">No events match these filters.</td></tr>}
+                {filteredRows.length === 0 && <tr><td colSpan={6} className="p-12 text-center text-sm text-muted-foreground">No events match these filters.</td></tr>}
               </tbody>
             </table>
           </div>
