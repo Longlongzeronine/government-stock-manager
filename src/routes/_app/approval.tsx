@@ -310,12 +310,15 @@ function ApprovalPage() {
   const {
     data: risForms = [],
     isLoading,
+    isFetching,
     error,
+    refetch,
   } = useQuery({
     queryKey: ["risForms", "approval"],
     queryFn: () => listRisForms({ data: {} }),
-    staleTime: 15_000,
-    refetchInterval: 5000,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   });
 
   const requests = useMemo<RequestRow[]>(
@@ -570,19 +573,23 @@ function ApprovalPage() {
               ))}
             </select>
           </div>
-          {error && (
-            <div className="p-4 text-sm text-destructive">
-              Could not load approval requests. Check the database schema and
-              connection.
-            </div>
-          )}
           {isLoading ? (
             <div className="min-h-[116px] grid place-items-center p-8 text-center text-sm text-muted-foreground">
               Loading requests...
             </div>
+          ) : error ? (
+            <div className="flex min-h-[116px] flex-col items-center justify-center gap-3 p-8 text-center text-sm text-destructive">
+              <span>Could not load approval requests.</span>
+              {error instanceof Error && <span className="max-w-2xl break-words text-xs">{error.message}</span>}
+              <button type="button" onClick={() => void refetch()} disabled={isFetching} className="rounded-md border border-border px-3 py-1.5 text-foreground hover:bg-muted disabled:opacity-50">
+                {isFetching ? "Retrying..." : "Try again"}
+              </button>
+            </div>
           ) : filtered.length === 0 ? (
             <div className="p-12 text-center text-sm text-muted-foreground">
-              No requests match the current filters.
+              {requests.length === 0
+                ? "There are no records as of now."
+                : "No requests match the current filters."}
             </div>
           ) : (
             <div className="overflow-x-auto">

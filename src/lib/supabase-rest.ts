@@ -176,9 +176,10 @@ export async function sbRpc<T = any>(
 ): Promise<T> {
   const cfg = writeCfg || getRestConfig();
   if (!cfg) throw new Error("Supabase REST config missing");
+  const accessToken = getCallerAccessToken();
   const res = await fetch(`${cfg.url}/rest/v1/rpc/${fn}`, {
     method: "POST",
-    headers: headers(cfg.key),
+    headers: headers(cfg.key, accessToken ? { Authorization: "Bearer " + accessToken } : {}),
     body: JSON.stringify(params),
   });
   const body = await res.json().catch(() => null);

@@ -80,12 +80,14 @@ function RisHistoryPage() {
     data: forms = [],
     isLoading,
     error,
+    refetch,
   } = useQuery({
     queryKey: ["risForms", "history", user?.id],
     queryFn: () => listRisForms({ data: { created_by: user?.id } }),
     enabled: Boolean(user?.id),
-    staleTime: 15_000,
-    refetchInterval: 5000,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   });
   const rows = forms as HistoryRow[];
   const counts = rows.reduce(
@@ -161,18 +163,21 @@ function RisHistoryPage() {
               </p>
             </div>
           </div>
-          {error && (
-            <div className="p-4 text-sm text-destructive">
-              Could not load your RIS history.
-            </div>
-          )}
           {isLoading ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
               Loading RIS history...
             </div>
+          ) : error ? (
+            <div className="flex flex-col items-center gap-3 p-10 text-center text-sm text-destructive">
+              <span>Could not load your RIS history.</span>
+              {error instanceof Error && <span className="max-w-2xl break-words text-xs">{error.message}</span>}
+              <button type="button" onClick={() => void refetch()} className="rounded-md border border-border px-3 py-1.5 text-foreground hover:bg-muted">
+                Try again
+              </button>
+            </div>
           ) : rows.length === 0 ? (
             <div className="p-10 text-center text-sm text-muted-foreground">
-              You have no RIS requests yet.
+              There are no records as of now.
             </div>
           ) : (
             <div className="overflow-x-auto">
