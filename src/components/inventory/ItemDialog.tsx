@@ -63,7 +63,7 @@ export function ItemDialog({
     if (!name) return;
     setCreatingCategory(true);
     try {
-      const created = await createCategory({ data: { name } });
+      const created = await createCategory({ data: { name, audit_area: propertyFlow || "Inventory" } });
       if (!created) return;
       setLocalCats((prev) => [created, ...prev.filter((category: any) => category.id !== created.id)]);
       setForm((current: any) => ({ ...current, category_id: created.id }));
@@ -113,7 +113,7 @@ export function ItemDialog({
           })) };
         }
       } else {
-        savedItem = await createItem({ data: payload });
+        savedItem = await createItem({ data: { ...payload, audit_area: propertyFlow || "Inventory" } });
         if (savedItem?.legacySchemaUsed) {
           toast.warning("Item saved. Online Supabase schema needs update for all fields.");
         }
