@@ -527,12 +527,14 @@ export const createItem = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const name = String(data.name || "").trim();
     if (!name) throw new Error("Item name is required.");
+    const auditArea = String(data.audit_area || "Inventory");
+    const { audit_area: _auditArea, ...itemInput } = data;
     const itemData = {
-      ...data,
+      ...itemInput,
       name,
       description: String(data.description || "").trim() || null,
     };
-    return withDbFallback(
+    const created = await withDbFallback(
       async (sql) => {
         return sql.begin(async (tx: any) => {
           await tx`SELECT pg_advisory_xact_lock(hashtextextended(
@@ -610,6 +612,7 @@ export const createItem = createServerFn({ method: "POST" })
         };
       },
     );
+    return { ...created, audit_area: auditArea };
   });
 
 async function importItemsHosted(items: any[]) {
@@ -1019,7 +1022,7 @@ export const postIar = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
     await assertFormAccessFromRequest(`${data.property_flow === "semi-expendable" ? "semi" : data.property_flow === "ppe" ? "ppe" : "supplies"}_iar`, "post");
-    return withDbFallback(
+    const posted = await withDbFallback(
     async (sql) => sql.begin(async (tx: any) => {
       const [form] = await tx`
         INSERT INTO iar_forms ${tx({
@@ -1081,6 +1084,7 @@ export const postIar = createServerFn({ method: "POST" })
       }
     },
     );
+    return { ...posted, iar_no: posted?.iar_no || data.iar_no, property_flow: data.property_flow || "supplies" };
   });
 
 // ============================================
@@ -1100,7 +1104,7 @@ export const listCategories = createServerFn({ method: "GET" }).handler(
 export const createCategory = createServerFn({ method: "POST" })
   .inputValidator((d: any) => d)
   .handler(async ({ data }) => {
-    return withDbFallback(
+    const row = await withDbFallback(
       async (sql) => {
         const [row] = await sql`
           INSERT INTO categories ${sql({ name: data.name, description: data.description || null })}
@@ -1110,6 +1114,7 @@ export const createCategory = createServerFn({ method: "POST" })
       },
       async () => sbInsert("categories", { name: data.name, description: data.description || null }, getRestWriteConfig()),
     );
+    return { ...row, audit_area: data.audit_area || "Categories" };
   });
 
 export const updateCategory = createServerFn({ method: "POST" })
@@ -1335,7 +1340,7 @@ export const createTransaction = createServerFn({ method: "POST" })
     return withDbFallback(
       async (sql) => sql.begin(async (tx: any) => {
         const [item] = await tx`
-          SELECT quantity FROM items WHERE id = ${data.item_id} FOR UPDATE
+          SELECT quantity, stock_number FROM items WHERE id = ${data.item_id} FOR UPDATE
         `;
         if (!item) throw new Error("Inventory item was not found.");
         const stockCardTransactions = data.type === "OUT" && data.source_form_type === "RIS"
@@ -1370,12 +1375,12 @@ export const createTransaction = createServerFn({ method: "POST" })
           RETURNING *
         `;
         // The transactions AFTER INSERT trigger is the sole balance writer.
-        return row;
+        return { ...row, stock_number: item.stock_number };
       }),
       async () => {
-        const [item] = await sbSelect(
+        const [item] = await sbSelect<any>(
           "items",
-          `select=id,quantity&id=eq.${encodeURIComponent(data.item_id)}&limit=1`,
+          `select=id,quantity,stock_number&id=eq.${encodeURIComponent(data.item_id)}&limit=1`,
         );
         if (!item) throw new Error("Inventory item was not found.");
         const stockCardTransactions = data.type === "OUT" && data.source_form_type === "RIS"
@@ -1400,7 +1405,7 @@ export const createTransaction = createServerFn({ method: "POST" })
         if (data.type === "OUT" && available < quantity) {
           throw new Error(`Only ${available} units are available.`);
         }
-        return sbInsert("transactions", {
+        const row = await sbInsert<any>("transactions", {
           item_id: data.item_id,
           type: data.type,
           quantity,
@@ -1411,6 +1416,7 @@ export const createTransaction = createServerFn({ method: "POST" })
           source_form_id: data.source_form_id || null,
           source_line_id: data.source_line_id || null,
         }, getRestWriteConfig());
+        return { ...row, stock_number: item.stock_number };
       },
     );
   });
@@ -1419,26 +1425,147 @@ export const createTransaction = createServerFn({ method: "POST" })
 // AUDIT LOGS
 // ============================================
 
+function auditReferenceNumber(payload: unknown) {
+  let value = payload;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.reference_number === "string" && record.reference_number.trim()) return record.reference_number;
+  const references: Array<[string, unknown]> = [
+    ["IAR", record.iar_no], ["RIS", record.ris_no], ["ICS", record.ics_no], ["PAR", record.par_no],
+    [String(record.document_type || "Form").toUpperCase(), record.document_no],
+  ];
+  for (const [prefix, candidate] of references) {
+    if (typeof candidate !== "string" && typeof candidate !== "number") continue;
+    const formatted = formatAuditReference(prefix, candidate);
+    if (formatted) return formatted;
+  }
+  const reference = [record.stock_number, record.name, record.email, record.full_name, record.userId]
+    .find((candidate) => typeof candidate === "string" || typeof candidate === "number");
+  return reference == null ? null : String(reference);
+}
+
+function formatAuditReference(prefix: string, candidate: unknown) {
+  if (typeof candidate !== "string" && typeof candidate !== "number") return null;
+  const number = String(candidate).trim();
+  if (!number) return null;
+  const bareNumber = number.replace(new RegExp(`^${prefix}(?:\\s+|-)`, "i"), "").trim();
+  return `${prefix} ${bareNumber}`;
+}
+
+function auditArea(payload: unknown, tableName: string | null | undefined) {
+  let value = payload;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      value = null;
+    }
+  }
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>).area
+    : null;
+  const area = String(source || tableName || "Unknown");
+  const legacyAreas: Record<string, string> = {
+    forms: "Forms Flow",
+    inventory: "Inventory",
+    transactions: "Stock In / Out",
+    categories: "Categories",
+    suppliers: "Suppliers",
+    user_accounts: "Users",
+  };
+  return legacyAreas[area.toLowerCase()] || area;
+}
+
+async function addAuditReferenceFallback(
+  rows: any[],
+  fetchReferences: (type: string, ids: string[]) => Promise<any[]>,
+) {
+  const referenceTables: Record<string, { table: string; field: string; prefix: string }> = {
+    iar: { table: "iar_forms", field: "iar_no", prefix: "IAR" },
+    ris: { table: "ris_forms", field: "ris_no", prefix: "RIS" },
+    ics: { table: "ics_forms", field: "ics_no", prefix: "ICS" },
+    par: { table: "par_forms", field: "par_no", prefix: "PAR" },
+  };
+  const idsByType = new Map<string, string[]>();
+  for (const row of rows) {
+    if (auditReferenceNumber(row.payload)) continue;
+    const type = String(row.action || "").match(/^form_(?:created|updated)_(.+)$/)?.[1];
+    if (!type || !row.row_id || !/^[0-9a-f-]{36}$/i.test(String(row.row_id))) continue;
+    const key = referenceTables[type] ? type : "document";
+    idsByType.set(key, [...new Set([...(idsByType.get(key) || []), String(row.row_id)])]);
+  }
+  const references = new Map<string, { value: string; prefix: string }>();
+  for (const [type, ids] of idsByType) {
+    const spec = referenceTables[type] || { table: "ppe_documents", field: "document_no", prefix: "FORM" };
+    const found = await fetchReferences(type, ids);
+    for (const entry of found) {
+      const number = String(entry[spec.field] || "").trim();
+      if (entry.id && number) references.set(String(entry.id), { value: number, prefix: spec.prefix });
+    }
+  }
+  return rows.map((row) => {
+    const reference = auditReferenceNumber(row.payload) || references.get(String(row.row_id));
+    if (!reference) return { ...row, reference_number: null };
+    if (typeof reference === "string") return { ...row, reference_number: reference };
+    return {
+      ...row,
+      reference_number: formatAuditReference(reference.prefix, reference.value),
+    };
+  });
+}
+
 export const listAuditLogs = createServerFn({ method: "GET" }).handler(
   async () => withDbFallback(
     async (sql) => {
       const { ensureAuditLogSchema } = await import("@/lib/local-db");
       await ensureAuditLogSchema();
-      const rows = await sql`SELECT created_at, action, actor_email, payload FROM audit_logs ORDER BY created_at DESC LIMIT 500`;
-      return rows.map((row: any) => ({
+      const rows = await sql`
+        SELECT created_at, action, actor_email, table_name, row_id, payload
+        FROM audit_logs
+        WHERE action LIKE 'form_created_%' OR action LIKE 'form_updated_%'
+          OR action LIKE 'record_created_%' OR action LIKE 'record_updated_%'
+        ORDER BY created_at DESC
+        LIMIT 500
+      `;
+      const enriched = await addAuditReferenceFallback(rows, async (type, ids) => {
+        if (type === "iar") return sql`SELECT id::text AS id, iar_no FROM iar_forms WHERE id::text = ANY(${ids}::text[])`;
+        if (type === "ris") return sql`SELECT id::text AS id, ris_no FROM ris_forms WHERE id::text = ANY(${ids}::text[])`;
+        if (type === "ics") return sql`SELECT id::text AS id, ics_no FROM ics_forms WHERE id::text = ANY(${ids}::text[])`;
+        if (type === "par") return sql`SELECT id::text AS id, par_no FROM par_forms WHERE id::text = ANY(${ids}::text[])`;
+        return sql`SELECT id::text AS id, document_no FROM ppe_documents WHERE id::text = ANY(${ids}::text[])`;
+      });
+      return enriched.map((row: any) => ({
         created_at: row.created_at,
         action: row.action,
         actor_email: row.actor_email,
         actor_name: row.payload?.actor_name ?? null,
+        reference_number: row.reference_number,
+        area: auditArea(row.payload, row.table_name),
       }));
     },
     async () => {
-      const rows = await sbSelect("audit_logs", "select=created_at,action,actor_email,payload&order=created_at.desc&limit=500");
-      return rows.map((row: any) => ({
+      const rows = await sbSelect<any>("audit_logs", "select=created_at,action,actor_email,table_name,row_id,payload&or=(action.like.form_created_*,action.like.form_updated_*,action.like.record_created_*,action.like.record_updated_*)&order=created_at.desc&limit=500");
+      const enriched = await addAuditReferenceFallback(rows, async (type, ids) => {
+        if (type === "iar") return sbSelect("iar_forms", `select=id,iar_no&id=in.(${ids.map(encodeURIComponent).join(",")})&limit=10000`);
+        if (type === "ris") return sbSelect("ris_forms", `select=id,ris_no&id=in.(${ids.map(encodeURIComponent).join(",")})&limit=10000`);
+        if (type === "ics") return sbSelect("ics_forms", `select=id,ics_no&id=in.(${ids.map(encodeURIComponent).join(",")})&limit=10000`);
+        if (type === "par") return sbSelect("par_forms", `select=id,par_no&id=in.(${ids.map(encodeURIComponent).join(",")})&limit=10000`);
+        return sbSelect("ppe_documents", `select=id,document_no&id=in.(${ids.map(encodeURIComponent).join(",")})&limit=10000`);
+      });
+      return enriched.map((row: any) => ({
         created_at: row.created_at,
         action: row.action,
         actor_email: row.actor_email,
         actor_name: row.payload?.actor_name ?? null,
+        reference_number: row.reference_number,
+        area: auditArea(row.payload, row.table_name),
       }));
     },
   ),
@@ -2475,13 +2602,14 @@ export const createIcsForm = createServerFn({ method: "POST" })
         created_by: data.created_by || null,
         created_by_name: data.created_by_name || null,
     };
-    return withDbFallback(
+    const row = await withDbFallback(
       async (sql) => {
         const [row] = await sql`INSERT INTO ics_forms ${sql(payload)} RETURNING *`;
         return row;
       },
       async () => sbInsert("ics_forms", payload, getRestWriteConfig()),
     );
+    return { ...row, property_flow: data.property_flow || "semi-expendable" };
   });
 
 export const createIcsItem = createServerFn({ method: "POST" })
@@ -2514,13 +2642,14 @@ export const createParForm = createServerFn({ method: "POST" })
         created_by: data.created_by || null,
         created_by_name: data.created_by_name || null,
     };
-    return withDbFallback(
+    const row = await withDbFallback(
       async (sql) => {
         const [row] = await sql`INSERT INTO par_forms ${sql(payload)} RETURNING *`;
         return row;
       },
       async () => sbInsert("par_forms", payload, getRestWriteConfig()),
     );
+    return { ...row, property_flow: data.property_flow || "ppe" };
   });
 
 export const createParItem = createServerFn({ method: "POST" })
@@ -2594,7 +2723,7 @@ export const savePpeDocument = createServerFn({ method: "POST" })
       form_data: data.form_data || {}, created_by: data.created_by || null,
       created_by_name: data.created_by_name || null, updated_at: new Date().toISOString(),
     };
-    return withDbFallback(
+    const saved = await withDbFallback(
       async (sql) => {
         const [existing] = await sql`SELECT status FROM ppe_documents WHERE document_type = ${type} AND document_no = ${number} FOR UPDATE`;
         if (existing?.status === "approved") throw new Error("Approved form is locked and cannot be changed.");
@@ -2607,7 +2736,7 @@ export const savePpeDocument = createServerFn({ method: "POST" })
           RETURNING *
         `;
         if (!row) throw new Error("Unable to save this form.");
-        return row;
+        return { ...row, audit_operation: existing ? "updated" : "created" };
       },
       async () => {
         const query = `select=*&document_type=eq.${encodeURIComponent(type)}&document_no=eq.${encodeURIComponent(number)}&limit=1`;
@@ -2615,11 +2744,13 @@ export const savePpeDocument = createServerFn({ method: "POST" })
         if (existing?.status === "approved") throw new Error("Approved form is locked and cannot be changed.");
         if (existing) {
           const [row] = await sbUpdate<any>("ppe_documents", `id=eq.${encodeURIComponent(existing.id)}`, payload, getRestWriteConfig());
-          return row;
+          return { ...row, audit_operation: "updated" };
         }
-        return sbInsert("ppe_documents", payload, getRestWriteConfig());
+        const row = await sbInsert<any>("ppe_documents", payload, getRestWriteConfig());
+        return { ...row, audit_operation: "created" };
       },
     );
+    return { ...saved, property_flow: data.property_flow || "ppe" };
   });
 
 export const approvePpeDocument = createServerFn({ method: "POST" })
@@ -2631,7 +2762,7 @@ export const approvePpeDocument = createServerFn({ method: "POST" })
     const protectedFormKey = documentType === "splc" ? "semi_splc" : documentType === "ppe-ledger" ? "ppe_ppelc" : documentType === "rspi" ? "semi_rspi" : null;
     if (protectedFormKey) await assertFormAccessFromRequest(protectedFormKey, "approve");
     else await assertInventoryWriteFromRequest();
-    return withDbFallback(
+    const approved = await withDbFallback(
       async (sql) => sql.begin(async (tx: any) => {
         const [doc] = await tx`SELECT * FROM ppe_documents WHERE id = ${id} FOR UPDATE`;
         if (!doc) throw new Error("Form not found.");
@@ -2689,6 +2820,7 @@ export const approvePpeDocument = createServerFn({ method: "POST" })
       }),
       async () => sbRpc("approve_ppe_document", { p_document_id: id, p_actor_id: data.created_by || null, p_actor_name: data.created_by_name || "" }, getRestWriteConfig()),
     );
+    return { ...approved, document_type: approved?.document_type || documentType, property_flow: data.property_flow || "ppe" };
   });
 
 // ============================================
