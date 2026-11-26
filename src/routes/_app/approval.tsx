@@ -316,9 +316,8 @@ function ApprovalPage() {
   } = useQuery({
     queryKey: ["risForms", "approval"],
     queryFn: () => listRisForms({ data: {} }),
-    staleTime: 30_000,
-    refetchInterval: 30_000,
-    refetchOnWindowFocus: true,
+    staleTime: 300_000,   // 5 min — keep data fresh, avoid constant refetches
+    refetchOnWindowFocus: false, // only refetch on explicit user action
   });
 
   const { data: cats = [] as any[] } = useQuery({
