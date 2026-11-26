@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import { RoleGate } from "@/components/common/RoleGate";
 import { SummaryActions } from "@/components/common/SummaryActions";
 import { exportCSV } from "@/lib/export";
-import { listRisForms, updateRisFormStatus } from "@/lib/data.functions";
+import { listCategories, listRisForms, updateRisFormStatus } from "@/lib/data.functions";
 
 export const Route = createFileRoute("/_app/approval")({
   head: () => ({ meta: [{ title: "Approvals - Supplify" }] }),
@@ -321,6 +321,13 @@ function ApprovalPage() {
     refetchOnWindowFocus: true,
   });
 
+  const { data: cats = [] as any[] } = useQuery({
+    queryKey: ["categories"],
+    queryFn: () => listCategories(),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+
   const requests = useMemo<RequestRow[]>(
     () =>
       risForms.map((row: RisApprovalRow) => {
@@ -348,14 +355,16 @@ function ApprovalPage() {
     [risForms],
   );
 
-  const categories = useMemo(
+  const categories: string[] = useMemo(
     () => [
       "all",
       ...Array.from(
-        new Set(requests.map((request) => request.category)),
+        new Set(
+          (cats as any[]).map((cat: any) => String(cat.name || "")).filter(Boolean),
+        ),
       ).sort(),
     ],
-    [requests],
+    [cats],
   );
   const filtered = useMemo(
     () =>
