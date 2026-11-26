@@ -158,15 +158,9 @@ export function ItemDialog({
                 ...(val === "ppe" ? { acquisition_cost: 50000 } : {}),
               }));
             }}>
-              {propertyFlow === "supplies" || !propertyFlow ? (
-                <option value="supply">Supplies & Materials</option>
-              ) : null}
-              {propertyFlow === "semi-expendable" || !propertyFlow ? (
-                <option value="material">Semi-Expendable Property</option>
-              ) : null}
-              {propertyFlow === "ppe" || !propertyFlow ? (
-                <option value="ppe">Property, Plant & Equipment</option>
-              ) : null}
+              <option value="supply">Supplies & Materials</option>
+              <option value="material">Semi-Expendable Property</option>
+              <option value="ppe">Property, Plant & Equipment</option>
             </select>
           </Field>
           <Field label="Classification" full>
