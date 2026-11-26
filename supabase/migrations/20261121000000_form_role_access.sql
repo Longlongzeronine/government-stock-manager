@@ -25,8 +25,8 @@ insert into public.forms (form_key, section, label, sort_order) values
   ('supplies_iar', 'Supplies', 'IAR', 10),
   ('supplies_stock_card', 'Supplies', 'Stock Card', 12),
   ('supplies_ris', 'Supplies', 'RIS', 14),
-  ('supplies_rsmi', 'Supplies', 'RSMI', 30),
-  ('supplies_rpci', 'Supplies', 'RPCI', 40),
+  ('supplies_rsmi', 'Supplies', 'RSMI', 16),
+  ('supplies_rpci', 'Supplies', 'RPCI', 18),
   -- Semi-Expendable Property
   ('semi_iar', 'Semi-Expendable Property', 'IAR', 50),
   ('semi_splc', 'Semi-Expendable Property', 'SPLC', 52),
