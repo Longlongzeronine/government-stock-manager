@@ -2136,24 +2136,37 @@ export const getInventoryTotal = createServerFn({ method: "GET" }).handler(async
       return Number(row?.total_value || 0);
     },
     async () => {
-      // Hosted Supabase may not mirror the local `items` table (inventory is
-      // local-only in this architecture). Fall back to summing the value of
-      // every RIS line item (`ris_items.quantity * ris_items.unit_cost`) so the
-      // live Worker still reports a real total instead of ₱0.00.
-      let rows = await sbSelectService<any>("items", "select=acquisition_cost,quantity");
-      let total = rows.reduce(
-        (sum, item) => sum + Number(item.acquisition_cost || 0) * Number(item.quantity || 0),
-        0,
+      // Hosted Supabase `items.acquisition_cost` is 0 (see investigation), so
+      // valuing inventory as items.acquisition_cost * items.quantity returns 0.
+      // The real unit costs live in `iar_items` (IAR receipts). Value current
+      // stock on hand (`items.quantity`) at the most recent IAR receipt cost per
+      // item, falling back to `items.acquisition_cost` when no IAR receipt exists.
+      // This counts each item once from `items` (current stock on hand) and never
+      // sums released/RIS transactions, avoiding double-counting.
+      const items = await sbSelectService<any>(
+        "items",
+        "select=id,quantity,acquisition_cost",
       );
-      if (total === 0) {
-        const risItems = await sbSelectService<any>(
-          "ris_items",
-          "select=quantity,unit_cost",
-        );
-        total = risItems.reduce(
-          (sum, item) => sum + Number(item.quantity || 0) * Number(item.unit_cost || 0),
-          0,
-        );
+      const iarItems = await sbSelectService<any>(
+        "iar_items",
+        "select=item_id,unit_cost,created_at&order=created_at.desc",
+      );
+      const latestCostByItem = new Map<string, number>();
+      for (const row of iarItems) {
+        const itemId = String(row.item_id || "");
+        if (!itemId) continue;
+        const cost = Number(row.unit_cost || 0);
+        if (cost > 0 && !latestCostByItem.has(itemId)) {
+          latestCostByItem.set(itemId, cost);
+        }
+      }
+      let total = 0;
+      for (const item of items) {
+        const qty = Number(item.quantity || 0);
+        if (qty <= 0) continue;
+        const unitCost =
+          latestCostByItem.get(String(item.id)) ?? Number(item.acquisition_cost || 0);
+        total += qty * unitCost;
       }
       return total;
     },
