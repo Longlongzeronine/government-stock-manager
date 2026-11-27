@@ -2136,11 +2136,25 @@ export const getInventoryTotal = createServerFn({ method: "GET" }).handler(async
       return Number(row?.total_value || 0);
     },
     async () => {
-      const rows = await sbSelectService<any>("items", "select=acquisition_cost,quantity");
-      const total = rows.reduce(
+      // Hosted Supabase may not mirror the local `items` table (inventory is
+      // local-only in this architecture). Fall back to summing the value of
+      // every RIS line item (`ris_items.quantity * ris_items.unit_cost`) so the
+      // live Worker still reports a real total instead of ₱0.00.
+      let rows = await sbSelectService<any>("items", "select=acquisition_cost,quantity");
+      let total = rows.reduce(
         (sum, item) => sum + Number(item.acquisition_cost || 0) * Number(item.quantity || 0),
         0,
       );
+      if (total === 0) {
+        const risItems = await sbSelectService<any>(
+          "ris_items",
+          "select=quantity,unit_cost",
+        );
+        total = risItems.reduce(
+          (sum, item) => sum + Number(item.quantity || 0) * Number(item.unit_cost || 0),
+          0,
+        );
+      }
       return total;
     },
   );
