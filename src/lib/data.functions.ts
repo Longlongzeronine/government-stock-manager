@@ -1305,7 +1305,10 @@ export const listTransactionsAsc = createServerFn({ method: "GET" })
       async () => {
         const limit = data?.limit ?? 5000;
         const [rows, items] = await Promise.all([
-          sbSelect<any>(
+          // Use service-role read for transactions: RLS on the hosted
+          // Supabase project blocks anon-key reads of the transactions table,
+          // which would make Recent IAR Receipts / Recent RIS Issues empty.
+          sbSelectService<any>(
             "transactions",
             `select=*&order=created_at.asc&limit=${limit}`,
           ),
