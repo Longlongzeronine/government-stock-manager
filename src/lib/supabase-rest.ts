@@ -58,7 +58,13 @@ export function getRestWriteConfig(): { url: string; key: string } | null {
     workerVar("SUPABASE_URL") ||
     workerVar("VITE_SUPABASE_URL") ||
     "";
-  const key = workerVar("SUPABASE_SERVICE_ROLE_KEY") || "";
+  // Worker secrets may not be reliably visible via workerVar()/process.env on
+  // the deployed Cloudflare Worker. Fall back to the build-time value from
+  // .env (import.meta.env) so the service-role key is available for RLS-
+  // bypassing reads on the live Worker.
+  const key =
+    workerVar("SUPABASE_SERVICE_ROLE_KEY") ||
+    String((import.meta as any).env?.VITE_SUPABASE_SERVICE_ROLE_KEY || "").trim();
   if (!url || !key) return null;
   return { url: url.replace(/\/$/, ""), key };
 }
