@@ -2125,6 +2125,26 @@ export const getRisFormStatus = createServerFn({ method: "GET" })
     );
   });
 
+export const getInventoryTotal = createServerFn({ method: "GET" }).handler(async () => {
+  return withDbFallback(
+    async (sql) => {
+      const [row] = await sql`
+        SELECT COALESCE(SUM(acquisition_cost * quantity), 0) AS total_value
+        FROM items
+      `;
+      return Number(row?.total_value || 0);
+    },
+    async () => {
+      const rows = await sbSelect<any>("items", "select=acquisition_cost,quantity");
+      const total = rows.reduce(
+        (sum, item) => sum + Number(item.acquisition_cost || 0) * Number(item.quantity || 0),
+        0,
+      );
+      return total;
+    },
+  );
+});
+
 export const updateRisFormStatus = createServerFn({ method: "POST" })
   .inputValidator(
     (d: {
