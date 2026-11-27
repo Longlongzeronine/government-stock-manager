@@ -1304,19 +1304,33 @@ export const listTransactionsAsc = createServerFn({ method: "GET" })
       },
       async () => {
         const limit = data?.limit ?? 5000;
-        const [rows, items] = await Promise.all([
-          // Use service-role read for transactions: RLS on the hosted
-          // Supabase project blocks anon-key reads of the transactions table,
-          // which would make Recent IAR Receipts / Recent RIS Issues empty.
-          sbSelectService<any>(
-            "transactions",
-            `select=*&order=created_at.asc&limit=${limit}`,
-          ),
-          sbSelect<any>(
-            "items",
-            "select=id,name,description,stock_number,unit,quantity,acquisition_cost,inventory_classification,semi_expendable_tier&limit=10000",
-          ),
-        ]);
+        try {
+          const [rows, items] = await Promise.all([
+            // Use service-role read for transactions: RLS on the hosted
+            // Supabase project blocks anon-key reads of the transactions table,
+            // which would make Recent IAR Receipts / Recent RIS Issues empty.
+            sbSelectService<any>(
+              "transactions",
+              `select=*&order=created_at.asc&limit=${limit}`,
+            ),
+            sbSelect<any>(
+              "items",
+              "select=id,name,description,stock_number,unit,quantity,acquisition_cost,inventory_classification,semi_expendable_tier&limit=10000",
+            ),
+          ]);
+          const itemsById = new Map(items.map((item: any) => [String(item.id), item]));
+          return rows.map((row: any) => ({
+            ...row,
+            item: itemsById.get(String(row.item_id)) || null,
+          }));
+        } catch (error) {
+          console.error(
+            "[listTransactionsAsc] remote fallback failed:",
+            error instanceof Error ? error.message : String(error),
+          );
+          throw error;
+        }
+      },
         const itemsById = new Map(items.map((item: any) => [String(item.id), item]));
         return rows.map((row: any) => ({
           ...row,

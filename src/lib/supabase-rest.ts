@@ -123,7 +123,17 @@ export async function sbSelectService<T = any>(
   query = "",
 ): Promise<T[]> {
   const cfg = getRestWriteConfig();
-  if (!cfg) throw new Error("Supabase service-role config missing");
+  if (!cfg) {
+    console.error(
+      "[sbSelectService] getRestWriteConfig returned null. " +
+        `workerVar(SUPABASE_SERVICE_ROLE_KEY)=${JSON.stringify(workerVar("SUPABASE_SERVICE_ROLE_KEY")).slice(0, 40)}... ` +
+        `import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY=${JSON.stringify((import.meta as any).env?.VITE_SUPABASE_SERVICE_ROLE_KEY?.slice(0, 20))}...`,
+    );
+    throw new Error("Supabase service-role config missing");
+  }
+  console.log(
+    `[sbSelectService] table=${table} key_present=${!!cfg.key} key_preview=${cfg.key.slice(0, 20)}...`,
+  );
   const res = await fetch(`${cfg.url}/rest/v1/${table}${query ? `?${query}` : ""}`, {
     headers: headers(cfg.key),
   });
