@@ -105,6 +105,27 @@ export async function sbSelect<T = any>(
   return (body ?? []) as T[];
 }
 
+/**
+ * Service-role read that bypasses RLS on the deployed Cloudflare Worker.
+ * Unlike `sbSelect`, this does NOT forward the caller's user JWT, so
+ * Supabase/PostgREST resolves to the service role instead of the end user's
+ * restricted role. Required for inventory totals and RIS amounts on the live
+ * site where RLS would otherwise block reads of items/ris_items/transactions.
+ */
+export async function sbSelectService<T = any>(
+  table: string,
+  query = "",
+): Promise<T[]> {
+  const cfg = getRestWriteConfig();
+  if (!cfg) throw new Error("Supabase service-role config missing");
+  const res = await fetch(`${cfg.url}/rest/v1/${table}${query ? `?${query}` : ""}`, {
+    headers: headers(cfg.key),
+  });
+  const body = await res.json().catch(() => null);
+  throwIfError(res, body, `select ${table}`);
+  return (body ?? []) as T[];
+}
+
 export async function sbInsert<T = any>(
   table: string,
   row: Record<string, unknown>,

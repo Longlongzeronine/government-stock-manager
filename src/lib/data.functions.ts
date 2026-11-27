@@ -9,6 +9,7 @@ import {
   sbInsert,
   sbRpc,
   sbSelect,
+  sbSelectService,
   sbUpdate,
 } from "@/lib/supabase-rest";
 import { classifyInventoryItem } from "@/lib/item-classification";
@@ -1997,14 +1998,14 @@ export const listRisForms = createServerFn({ method: "GET" })
         const ownerFilter = data.created_by?.trim()
           ? `&created_by=eq.${encodeURIComponent(data.created_by.trim())}`
           : "";
-        const forms = await sbSelect<any>(
+        const forms = await sbSelectService<any>(
           "ris_forms",
           `select=id,ris_no,office,purpose,requested_by,status,property_flow,created_at${ownerFilter}&order=created_at.desc&limit=1000`,
         );
         if (forms.length === 0) return [];
 
         const formIds = forms.map((form) => String(form.id));
-        const risItems = await sbSelect<any>(
+        const risItems = await sbSelectService<any>(
           "ris_items",
           `select=ris_id,item_id,quantity,unit_cost,remarks,transaction_id&ris_id=in.(${formIds.map(encodeURIComponent).join(",")})&limit=10000`,
         );
@@ -2012,10 +2013,10 @@ export const listRisForms = createServerFn({ method: "GET" })
         const itemIds = [...new Set(risItems.map((line) => String(line.item_id)))];
         const [linkedTransactions, items] = await Promise.all([
           transactionIds.length
-            ? sbSelect<any>("transactions", `select=id,source_line_id&id=in.(${transactionIds.map(encodeURIComponent).join(",")})&limit=10000`)
+            ? sbSelectService<any>("transactions", `select=id,source_line_id&id=in.(${transactionIds.map(encodeURIComponent).join(",")})&limit=10000`)
             : Promise.resolve([]),
           itemIds.length
-            ? sbSelect<any>(
+            ? sbSelectService<any>(
               "items",
               `select=id,name,unit,acquisition_cost,category_id,supplier_id,inventory_classification&id=in.(${itemIds.map(encodeURIComponent).join(",")})&limit=10000`,
             )
@@ -2027,13 +2028,13 @@ export const listRisForms = createServerFn({ method: "GET" })
         const supplierIds = [...new Set(items.map((item: any) => String(item.supplier_id || "")).filter(Boolean))];
         const [lots, categories, suppliers] = await Promise.all([
           lotIds.length
-            ? sbSelect<any>("iar_items", `select=id,unit_cost&id=in.(${lotIds.map(encodeURIComponent).join(",")})&limit=10000`)
+            ? sbSelectService<any>("iar_items", `select=id,unit_cost&id=in.(${lotIds.map(encodeURIComponent).join(",")})&limit=10000`)
             : Promise.resolve([]),
           categoryIds.length
-            ? sbSelect<any>("categories", `select=id,name&id=in.(${categoryIds.map(encodeURIComponent).join(",")})&limit=10000`)
+            ? sbSelectService<any>("categories", `select=id,name&id=in.(${categoryIds.map(encodeURIComponent).join(",")})&limit=10000`)
             : Promise.resolve([]),
           supplierIds.length
-            ? sbSelect<any>("suppliers", `select=id,name&id=in.(${supplierIds.map(encodeURIComponent).join(",")})&limit=10000`)
+            ? sbSelectService<any>("suppliers", `select=id,name&id=in.(${supplierIds.map(encodeURIComponent).join(",")})&limit=10000`)
             : Promise.resolve([]),
         ]);
         const lotCostById = new Map(lots.map((lot: any) => [String(lot.id), Number(lot.unit_cost || 0)]));
@@ -2135,7 +2136,7 @@ export const getInventoryTotal = createServerFn({ method: "GET" }).handler(async
       return Number(row?.total_value || 0);
     },
     async () => {
-      const rows = await sbSelect<any>("items", "select=acquisition_cost,quantity");
+      const rows = await sbSelectService<any>("items", "select=acquisition_cost,quantity");
       const total = rows.reduce(
         (sum, item) => sum + Number(item.acquisition_cost || 0) * Number(item.quantity || 0),
         0,
