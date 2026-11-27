@@ -1986,7 +1986,8 @@ export const listRisForms = createServerFn({ method: "GET" })
     const allowedFlows = propertyFlow
       ? (await assertFormAccessFromRequest(formKeyForFlow[propertyFlow] ?? "supplies_ris", "list"), [propertyFlow])
       : (await getPermittedFormKeysFromRequest(["supplies_ris", "semi_ris", "ppe_ris"], "list")).map((key) => key.replace(/_ris$/, "").replace("semi", "semi-expendable"));
-    return withDbFallback(
+    try {
+      const result = await withDbFallback(
       async (sql) => {
       const createdBy = data.created_by?.trim() || null;
       return await sql`
@@ -2000,6 +2001,8 @@ export const listRisForms = createServerFn({ method: "GET" })
           r.property_flow,
           r.priority,
           r.review_notes,
+          r.approved_date::text AS approved_date,
+          r.issued_date::text AS issued_date,
           r.created_at::text AS created_at,
           coalesce(string_agg(DISTINCT i.name, ', ' ORDER BY i.name), 'No item listed') AS item_name,
           coalesce(string_agg(DISTINCT c.name, ', ' ORDER BY c.name), 'Uncategorized') AS category_name,
@@ -2047,7 +2050,7 @@ export const listRisForms = createServerFn({ method: "GET" })
           : "";
         const forms = await sbSelectService<any>(
           "ris_forms",
-          `select=id,ris_no,office,purpose,requested_by,status,property_flow,created_at${ownerFilter}&order=created_at.desc&limit=1000`,
+          `select=id,ris_no,office,purpose,requested_by,status,property_flow,approved_date,issued_date,created_at${ownerFilter}&order=created_at.desc&limit=1000`,
         );
         if (forms.length === 0) return [];
 
@@ -2156,7 +2159,15 @@ export const listRisForms = createServerFn({ method: "GET" })
           };
         });
       },
-    );
+      );
+      console.info(`[forms-flow] RIS records loaded table=ris_forms count=${result.length}`);
+      return result;
+    } catch (error) {
+      console.error(
+        `[forms-flow] RIS records read failed tables=ris_forms,ris_items,items error=${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw error;
+    }
   });
 
 export const getRisFormStatus = createServerFn({ method: "GET" })

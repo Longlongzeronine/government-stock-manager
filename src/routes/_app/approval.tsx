@@ -437,6 +437,9 @@ function ApprovalPage() {
       await queryClient.invalidateQueries({
         queryKey: ["risForms", "approval"],
       });
+      await queryClient.invalidateQueries({
+        queryKey: ["risForms", "history"],
+      });
       setSelected(null);
       toast.success(
         status === "approved" ? "Request approved" : "Request rejected",
