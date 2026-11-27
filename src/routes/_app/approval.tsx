@@ -3,7 +3,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState, type ComponentType } from "react";
 import {
   AlertTriangle,
-  Banknote,
   CheckCircle2,
   Clock,
   DollarSign,
@@ -20,7 +19,6 @@ import {
   listCategories,
   listRisForms,
   updateRisFormStatus,
-  getInventoryTotal,
 } from "@/lib/data.functions";
 
 export const Route = createFileRoute("/_app/approval")({
@@ -333,13 +331,6 @@ function ApprovalPage() {
     refetchOnWindowFocus: false,
   });
 
-  const { data: inventoryTotal = 0 } = useQuery({
-    queryKey: ["inventoryTotal"],
-    queryFn: () => getInventoryTotal(),
-    staleTime: 5 * 60_000,
-    refetchOnWindowFocus: false,
-  });
-
   const requests = useMemo<RequestRow[]>(
     () =>
       risForms.map((row: RisApprovalRow) => {
@@ -520,12 +511,6 @@ function ApprovalPage() {
             label="Approved Total"
             value={`₱${money(approved.reduce((sum, request) => sum + request.total, 0))}`}
             tone="success"
-          />
-          <Stat
-            icon={Banknote}
-            label="Inventory Total"
-            value={`₱${money(Number(inventoryTotal || 0))}`}
-            tone="navy"
           />
           <Stat
             icon={AlertTriangle}
