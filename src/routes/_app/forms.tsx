@@ -53,6 +53,7 @@ import {
   listRisForms,
   getIarFormDetails,
   listIarForms,
+  listRecentIarReceiptItems,
   listIarLineRemarks,
   listFormPersonnelMemory,
   listItems,
@@ -560,9 +561,20 @@ function FormsFlow() {
     refetchOnWindowFocus: false,
   });
 
-  const { data: transactions = [] } = useQuery({
+  const { data: transactions = [], error: transactionsError } = useQuery({
     queryKey: ["transactions", "forms-flow"],
     queryFn: () => listTransactionsAsc() as Promise<Transaction[]>,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const {
+    data: iarReceiptItems = [],
+    isLoading: isLoadingIarReceiptItems,
+    error: iarReceiptItemsError,
+  } = useQuery({
+    queryKey: ["iar-receipt-items", "forms-flow"],
+    queryFn: () => listRecentIarReceiptItems(),
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   });
@@ -1026,8 +1038,8 @@ function FormsFlow() {
     [stockBalanceItems, transactions, rpciStartDate, rpciEndDate, rpciEntries, rpciFundCluster, iarForms],
   );
   const flowStats = useMemo(
-    () => getFlowStats(transactions, reportMonth, tab),
-    [transactions, reportMonth, tab],
+    () => getFlowStats(transactions, iarReceiptItems.length, reportMonth, tab),
+    [transactions, iarReceiptItems.length, reportMonth, tab],
   );
 
   async function refreshFlow() {
@@ -1036,6 +1048,7 @@ function FormsFlow() {
       queryClient.invalidateQueries({ queryKey: ["transactions"] }),
       queryClient.invalidateQueries({ queryKey: ["transactions", "forms-flow"] }),
       queryClient.invalidateQueries({ queryKey: ["iar-forms"] }),
+      queryClient.invalidateQueries({ queryKey: ["iar-receipt-items", "forms-flow"] }),
       queryClient.invalidateQueries({ queryKey: ["iar-line-remarks"] }),
     ]);
   }
@@ -1924,6 +1937,10 @@ function FormsFlow() {
             stats={flowStats}
             inventoryItems={flowItems}
             transactions={transactions}
+            transactionsError={transactionsError ? errorMessage(transactionsError) : undefined}
+            iarReceiptItems={iarReceiptItems}
+            isLoadingIarReceiptItems={isLoadingIarReceiptItems}
+            iarReceiptItemsError={iarReceiptItemsError ? errorMessage(iarReceiptItemsError) : undefined}
             reportMonth={reportMonth}
             onSelectIarReceipt={loadIarReceipt}
             loadingIarReceiptId={loadingIarReceiptId}
@@ -5259,6 +5276,10 @@ function FlowSupportPanel({
   stats,
   inventoryItems,
   transactions,
+  transactionsError,
+  iarReceiptItems,
+  isLoadingIarReceiptItems,
+  iarReceiptItemsError,
   reportMonth,
   onSelectIarReceipt,
   loadingIarReceiptId,
@@ -5271,6 +5292,10 @@ function FlowSupportPanel({
   stats: FlowStats;
   inventoryItems: Item[];
   transactions: Transaction[];
+  transactionsError?: string;
+  iarReceiptItems: any[];
+  isLoadingIarReceiptItems: boolean;
+  iarReceiptItemsError?: string;
   reportMonth: string;
   onSelectIarReceipt: (transaction: Transaction) => Promise<void>;
   loadingIarReceiptId: string;
@@ -5281,10 +5306,19 @@ function FlowSupportPanel({
 }) {
   const isBottom = placement === "bottom";
   const [backupBusy, setBackupBusy] = useState(false);
-  const iarRows = transactions
-    .filter((tx) => tx.type === "IN" && isIarTransaction(tx))
-    .slice(-8)
-    .reverse();
+  const iarRows: Transaction[] = iarReceiptItems.slice(0, 8).map((row: any) => ({
+    id: row.id,
+    item_id: row.item_id,
+    type: "IN",
+    quantity: row.quantity,
+    staff_name: null,
+    remarks: `IAR ${row.iar?.iar_no || ""}`,
+    created_at: row.created_at,
+    source_form_type: "IAR",
+    source_form_id: row.iar_id,
+    product_description: row.product_description,
+    item: row.item,
+  }));
   const risRows = transactions
     .filter((tx) => tx.type === "OUT" && isRisTransaction(tx))
     .slice(-8)
@@ -5366,6 +5400,8 @@ function FlowSupportPanel({
           loadingRowId={loadingIarReceiptId}
           actionLabel="Load IAR"
           empty="No IAR receipts posted yet."
+          loading={isLoadingIarReceiptItems}
+          error={iarReceiptItemsError}
         />
         <SupportTable
           title="Recent RIS Issues"
@@ -5374,6 +5410,7 @@ function FlowSupportPanel({
           loadingRowId={loadingRisIssueId}
           actionLabel="Load RIS"
           empty="No RIS issues posted yet."
+          error={transactionsError}
         />
 
         <section
@@ -5446,6 +5483,8 @@ function SupportTable({
   loadingRowId,
   actionLabel,
   empty,
+  loading = false,
+  error,
 }: {
   title: string;
   rows: Transaction[];
@@ -5453,6 +5492,8 @@ function SupportTable({
   loadingRowId?: string;
   actionLabel?: string;
   empty: string;
+  loading?: boolean;
+  error?: string;
 }) {
   return (
     <section className="rounded-lg border border-border bg-card">
@@ -5492,7 +5533,21 @@ function SupportTable({
                 <td>{format(new Date(row.created_at), "MMM d, yyyy")}</td>
               </tr>
             ))}
-            {rows.length === 0 && (
+            {error && rows.length === 0 && (
+              <tr>
+                <td colSpan={4} className="px-3 py-6 text-center text-destructive">
+                  Could not load records: {error}
+                </td>
+              </tr>
+            )}
+            {loading && rows.length === 0 && !error && (
+              <tr>
+                <td colSpan={4} className="px-3 py-6 text-center text-muted-foreground">
+                  Loading records…
+                </td>
+              </tr>
+            )}
+            {rows.length === 0 && !loading && !error && (
               <tr>
                 <td
                   colSpan={4}
@@ -6288,14 +6343,13 @@ type FlowStats = {
 
 function getFlowStats(
   transactions: Transaction[],
+  iarReceiptItemCount: number,
   reportMonth: string,
   tab: FlowTab,
 ): FlowStats {
   return {
     activeStage: activeStageLabel(tab),
-    iarReceipts: transactions.filter(
-      (tx) => tx.type === "IN" && isIarTransaction(tx),
-    ).length,
+    iarReceipts: iarReceiptItemCount,
     risIssues: transactions.filter(
       (tx) => tx.type === "OUT" && isRisTransaction(tx),
     ).length,

@@ -1304,24 +1304,33 @@ export const listTransactionsAsc = createServerFn({ method: "GET" })
       },
       async () => {
         const limit = data?.limit ?? 5000;
-        const [rows, items] = await Promise.all([
-          // Use service-role read for transactions: RLS on the hosted
-          // Supabase project blocks anon-key reads of the transactions table,
-          // which would make Recent IAR Receipts / Recent RIS Issues empty.
-          sbSelectService<any>(
-            "transactions",
-            `select=*&order=created_at.asc&limit=${limit}`,
-          ),
-          sbSelect<any>(
-            "items",
-            "select=id,name,description,stock_number,unit,quantity,acquisition_cost,inventory_classification,semi_expendable_tier&limit=10000",
-          ),
-        ]);
-        const itemsById = new Map(items.map((item: any) => [String(item.id), item]));
-        return rows.map((row: any) => ({
-          ...row,
-          item: itemsById.get(String(row.item_id)) || null,
-        }));
+        try {
+          const [rows, items] = await Promise.all([
+            sbSelectService<any>(
+              "transactions",
+              `select=*&order=created_at.asc&limit=${limit}`,
+            ),
+            // Hosted items have authenticated-only RLS; this server-side
+            // dashboard read must use service role too.
+            sbSelectService<any>(
+              "items",
+              "select=id,name,description,stock_number,unit,quantity,acquisition_cost,inventory_classification,semi_expendable_tier&limit=10000",
+            ),
+          ]);
+          console.info(
+            `[forms-flow] read complete tables=transactions,items counts=${rows.length},${items.length}`,
+          );
+          const itemsById = new Map(items.map((item: any) => [String(item.id), item]));
+          return rows.map((row: any) => ({
+            ...row,
+            item: itemsById.get(String(row.item_id)) || null,
+          }));
+        } catch (error) {
+          console.error(
+            `[forms-flow] read failed tables=transactions,items error=${error instanceof Error ? error.message : String(error)}`,
+          );
+          throw error;
+        }
       },
     );
   });
@@ -1591,6 +1600,36 @@ export const listIarForms = createServerFn({ method: "GET" }).handler(
         "select=id,iar_no,form_data&order=created_at.desc&limit=5000",
       ),
     ).catch(() => []);
+  },
+);
+
+// Flow Summary IAR rows come from receipt lines, not inferred transaction
+// remarks. Read hosted Supabase directly with service role because IAR tables
+// are protected by RLS for the dashboard's publishable key.
+export const listRecentIarReceiptItems = createServerFn({ method: "GET" }).handler(
+  async () => {
+    await getPermittedFormKeysFromRequest(["supplies_iar", "semi_iar", "ppe_iar"], "list");
+    try {
+      const rows = await sbSelectService<any>(
+        "iar_items",
+        "select=id,iar_id,item_id,quantity,product_description,created_at,iar:iar_forms!inner(id,iar_no,status,iar_date,created_at),item:items!inner(id,name,description,unit)&order=created_at.desc&limit=10000",
+      );
+      const postedRows = rows
+        .filter((row: any) => String(row.iar?.status || "").toLowerCase() === "posted")
+        .map((row: any) => ({
+          ...row,
+          created_at: row.iar?.iar_date || row.iar?.created_at || row.created_at,
+        }));
+      console.info(
+        `[forms-flow] read complete tables=iar_items,iar_forms,items count=${postedRows.length}`,
+      );
+      return postedRows;
+    } catch (error) {
+      console.error(
+        `[forms-flow] read failed tables=iar_items,iar_forms,items error=${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw error;
+    }
   },
 );
 

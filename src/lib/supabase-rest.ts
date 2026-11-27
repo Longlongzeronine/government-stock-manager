@@ -124,21 +124,21 @@ export async function sbSelectService<T = any>(
 ): Promise<T[]> {
   const cfg = getRestWriteConfig();
   if (!cfg) {
-    console.error(
-      "[sbSelectService] getRestWriteConfig returned null. " +
-        `workerVar(SUPABASE_SERVICE_ROLE_KEY)=${JSON.stringify(workerVar("SUPABASE_SERVICE_ROLE_KEY")).slice(0, 40)}... ` +
-        `import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY=${JSON.stringify((import.meta as any).env?.VITE_SUPABASE_SERVICE_ROLE_KEY?.slice(0, 20))}...`,
-    );
+    console.error("[sbSelectService] service-role config missing");
     throw new Error("Supabase service-role config missing");
   }
-  console.log(
-    `[sbSelectService] table=${table} key_present=${!!cfg.key} key_preview=${cfg.key.slice(0, 20)}...`,
-  );
   const res = await fetch(`${cfg.url}/rest/v1/${table}${query ? `?${query}` : ""}`, {
     headers: headers(cfg.key),
   });
   const body = await res.json().catch(() => null);
-  throwIfError(res, body, `select ${table}`);
+  if (!res.ok) {
+    const message =
+      (body as any)?.message || (body as any)?.error || res.statusText;
+    console.error(
+      `[supabase] read failed table=${table} status=${res.status} error=${message}`,
+    );
+    throwIfError(res, body, `select ${table}`);
+  }
   return (body ?? []) as T[];
 }
 
