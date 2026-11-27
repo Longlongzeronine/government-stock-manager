@@ -1963,8 +1963,8 @@ export const listRisForms = createServerFn({ method: "GET" })
           coalesce(string_agg(DISTINCT c.name, ', ' ORDER BY c.name), 'Uncategorized') AS category_name,
           coalesce(sum(ri.quantity), 0) AS quantity,
           coalesce(string_agg(DISTINCT i.unit, ', ' ORDER BY i.unit), 'pcs') AS unit,
-          coalesce(max(coalesce(nullif(ri.unit_cost, 0), lot.unit_cost, i.acquisition_cost)), 0) AS acquisition_cost,
-          coalesce(sum(ri.quantity * coalesce(nullif(ri.unit_cost, 0), lot.unit_cost, i.acquisition_cost)), 0) AS total_amount,
+          coalesce(max(coalesce(nullif(ri.unit_cost, 0), lot.unit_cost, latest_iar.unit_cost, i.acquisition_cost)), 0) AS acquisition_cost,
+          coalesce(sum(ri.quantity * coalesce(nullif(ri.unit_cost, 0), lot.unit_cost, latest_iar.unit_cost, i.acquisition_cost)), 0) AS total_amount,
           coalesce(string_agg(DISTINCT nullif(ri.remarks, ''), ' | '), r.purpose, '') AS remarks,
           coalesce(string_agg(DISTINCT s.name, ', ' ORDER BY s.name), '') AS supplier_name
         FROM ris_forms r
@@ -1972,6 +1972,11 @@ export const listRisForms = createServerFn({ method: "GET" })
         LEFT JOIN transactions ris_tx ON ris_tx.id = ri.transaction_id
         LEFT JOIN iar_items lot ON lot.id::text = ris_tx.source_line_id
         LEFT JOIN items i ON i.id = ri.item_id
+        LEFT JOIN LATERAL (
+          SELECT unit_cost FROM iar_items ii
+          WHERE ii.item_id = i.id AND ii.unit_cost > 0
+          ORDER BY ii.created_at DESC LIMIT 1
+        ) latest_iar ON true
         LEFT JOIN categories c ON c.id = i.category_id
         LEFT JOIN suppliers s ON s.id = i.supplier_id
         WHERE (${createdBy}::text IS NULL OR r.created_by = ${createdBy}::text)
@@ -2011,7 +2016,7 @@ export const listRisForms = createServerFn({ method: "GET" })
         );
         const transactionIds = [...new Set(risItems.map((line: any) => String(line.transaction_id || "")).filter(Boolean))];
         const itemIds = [...new Set(risItems.map((line) => String(line.item_id)))];
-        const [linkedTransactions, items] = await Promise.all([
+        const [linkedTransactions, items, iarItems] = await Promise.all([
           transactionIds.length
             ? sbSelectService<any>("transactions", `select=id,source_line_id&id=in.(${transactionIds.map(encodeURIComponent).join(",")})&limit=10000`)
             : Promise.resolve([]),
@@ -2020,6 +2025,9 @@ export const listRisForms = createServerFn({ method: "GET" })
               "items",
               `select=id,name,unit,acquisition_cost,category_id,supplier_id,inventory_classification&id=in.(${itemIds.map(encodeURIComponent).join(",")})&limit=10000`,
             )
+            : Promise.resolve([]),
+          itemIds.length
+            ? sbSelectService<any>("iar_items", "select=item_id,unit_cost,created_at&order=created_at.desc&limit=10000")
             : Promise.resolve([]),
         ]);
         const transactionsById = new Map(linkedTransactions.map((transaction: any) => [String(transaction.id), transaction]));
@@ -2038,6 +2046,15 @@ export const listRisForms = createServerFn({ method: "GET" })
             : Promise.resolve([]),
         ]);
         const lotCostById = new Map(lots.map((lot: any) => [String(lot.id), Number(lot.unit_cost || 0)]));
+        const iarCostByItemId = new Map<string, number>();
+        for (const row of (iarItems || [])) {
+          const itemId = String(row.item_id);
+          if (!itemId) continue;
+          const cost = Number(row.unit_cost || 0);
+          if (cost > 0 && !iarCostByItemId.has(itemId)) {
+            iarCostByItemId.set(itemId, cost);
+          }
+        }
         const itemById = new Map(items.map((item) => [String(item.id), item]));
         const categoryById = new Map(categories.map((category: any) => [String(category.id), category.name]));
         const supplierById = new Map(suppliers.map((supplier: any) => [String(supplier.id), supplier.name]));
@@ -2071,7 +2088,11 @@ export const listRisForms = createServerFn({ method: "GET" })
           const quantity = lines.reduce((sum, line) => sum + Number(line.quantity || 0), 0);
           const totalAmount = lineItems.reduce((sum, { line, item }) => {
             const transaction = transactionsById.get(String(line.transaction_id || ""));
-            const unitCost = Number(line.unit_cost || 0) || lotCostById.get(String(transaction?.source_line_id || "")) || Number(item?.acquisition_cost || 0);
+            const unitCost =
+              Number(line.unit_cost || 0) ||
+              lotCostById.get(String(transaction?.source_line_id || "")) ||
+              iarCostByItemId.get(String(line.item_id)) ||
+              Number(item?.acquisition_cost || 0);
             return sum + Number(line.quantity || 0) * unitCost;
           }, 0);
           const remarks = distinct(lines.map((line) => line.remarks));
