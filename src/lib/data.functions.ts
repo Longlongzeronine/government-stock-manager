@@ -9,6 +9,7 @@ import {
   sbInsert,
   sbRpc,
   sbSelect,
+  sbSelectService,
   sbUpdate,
 } from "@/lib/supabase-rest";
 import { classifyInventoryItem } from "@/lib/item-classification";
@@ -1303,21 +1304,33 @@ export const listTransactionsAsc = createServerFn({ method: "GET" })
       },
       async () => {
         const limit = data?.limit ?? 5000;
-        const [rows, items] = await Promise.all([
-          sbSelect<any>(
-            "transactions",
-            `select=*&order=created_at.asc&limit=${limit}`,
-          ),
-          sbSelect<any>(
-            "items",
-            "select=id,name,description,stock_number,unit,quantity,acquisition_cost,inventory_classification,semi_expendable_tier&limit=10000",
-          ),
-        ]);
-        const itemsById = new Map(items.map((item: any) => [String(item.id), item]));
-        return rows.map((row: any) => ({
-          ...row,
-          item: itemsById.get(String(row.item_id)) || null,
-        }));
+        try {
+          const [rows, items] = await Promise.all([
+            sbSelectService<any>(
+              "transactions",
+              `select=*&order=created_at.asc&limit=${limit}`,
+            ),
+            // Hosted items have authenticated-only RLS; this server-side
+            // dashboard read must use service role too.
+            sbSelectService<any>(
+              "items",
+              "select=id,name,description,stock_number,unit,quantity,acquisition_cost,inventory_classification,semi_expendable_tier&limit=10000",
+            ),
+          ]);
+          console.info(
+            `[forms-flow] read complete tables=transactions,items counts=${rows.length},${items.length}`,
+          );
+          const itemsById = new Map(items.map((item: any) => [String(item.id), item]));
+          return rows.map((row: any) => ({
+            ...row,
+            item: itemsById.get(String(row.item_id)) || null,
+          }));
+        } catch (error) {
+          console.error(
+            `[forms-flow] read failed tables=transactions,items error=${error instanceof Error ? error.message : String(error)}`,
+          );
+          throw error;
+        }
       },
     );
   });
@@ -1587,6 +1600,36 @@ export const listIarForms = createServerFn({ method: "GET" }).handler(
         "select=id,iar_no,form_data&order=created_at.desc&limit=5000",
       ),
     ).catch(() => []);
+  },
+);
+
+// Flow Summary IAR rows come from receipt lines, not inferred transaction
+// remarks. Read hosted Supabase directly with service role because IAR tables
+// are protected by RLS for the dashboard's publishable key.
+export const listRecentIarReceiptItems = createServerFn({ method: "GET" }).handler(
+  async () => {
+    await getPermittedFormKeysFromRequest(["supplies_iar", "semi_iar", "ppe_iar"], "list");
+    try {
+      const rows = await sbSelectService<any>(
+        "iar_items",
+        "select=id,iar_id,item_id,quantity,product_description,created_at,iar:iar_forms!inner(id,iar_no,status,iar_date,created_at),item:items!inner(id,name,description,unit)&order=created_at.desc&limit=10000",
+      );
+      const postedRows = rows
+        .filter((row: any) => String(row.iar?.status || "").toLowerCase() === "posted")
+        .map((row: any) => ({
+          ...row,
+          created_at: row.iar?.iar_date || row.iar?.created_at || row.created_at,
+        }));
+      console.info(
+        `[forms-flow] read complete tables=iar_items,iar_forms,items count=${postedRows.length}`,
+      );
+      return postedRows;
+    } catch (error) {
+      console.error(
+        `[forms-flow] read failed tables=iar_items,iar_forms,items error=${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw error;
+    }
   },
 );
 
@@ -1943,7 +1986,8 @@ export const listRisForms = createServerFn({ method: "GET" })
     const allowedFlows = propertyFlow
       ? (await assertFormAccessFromRequest(formKeyForFlow[propertyFlow] ?? "supplies_ris", "list"), [propertyFlow])
       : (await getPermittedFormKeysFromRequest(["supplies_ris", "semi_ris", "ppe_ris"], "list")).map((key) => key.replace(/_ris$/, "").replace("semi", "semi-expendable"));
-    return withDbFallback(
+    try {
+      const result = await withDbFallback(
       async (sql) => {
       const createdBy = data.created_by?.trim() || null;
       return await sql`
@@ -1957,13 +2001,15 @@ export const listRisForms = createServerFn({ method: "GET" })
           r.property_flow,
           r.priority,
           r.review_notes,
+          r.approved_date::text AS approved_date,
+          r.issued_date::text AS issued_date,
           r.created_at::text AS created_at,
           coalesce(string_agg(DISTINCT i.name, ', ' ORDER BY i.name), 'No item listed') AS item_name,
           coalesce(string_agg(DISTINCT c.name, ', ' ORDER BY c.name), 'Uncategorized') AS category_name,
           coalesce(sum(ri.quantity), 0) AS quantity,
           coalesce(string_agg(DISTINCT i.unit, ', ' ORDER BY i.unit), 'pcs') AS unit,
-          coalesce(max(coalesce(nullif(ri.unit_cost, 0), lot.unit_cost, i.acquisition_cost)), 0) AS acquisition_cost,
-          coalesce(sum(ri.quantity * coalesce(nullif(ri.unit_cost, 0), lot.unit_cost, i.acquisition_cost)), 0) AS total_amount,
+          coalesce(max(coalesce(nullif(ri.unit_cost, 0), lot.unit_cost, latest_iar.unit_cost, i.acquisition_cost)), 0) AS acquisition_cost,
+          coalesce(sum(ri.quantity * coalesce(nullif(ri.unit_cost, 0), lot.unit_cost, latest_iar.unit_cost, i.acquisition_cost)), 0) AS total_amount,
           coalesce(string_agg(DISTINCT nullif(ri.remarks, ''), ' | '), r.purpose, '') AS remarks,
           coalesce(string_agg(DISTINCT s.name, ', ' ORDER BY s.name), '') AS supplier_name
         FROM ris_forms r
@@ -1971,6 +2017,11 @@ export const listRisForms = createServerFn({ method: "GET" })
         LEFT JOIN transactions ris_tx ON ris_tx.id = ri.transaction_id
         LEFT JOIN iar_items lot ON lot.id::text = ris_tx.source_line_id
         LEFT JOIN items i ON i.id = ri.item_id
+        LEFT JOIN LATERAL (
+          SELECT unit_cost FROM iar_items ii
+          WHERE ii.item_id = i.id AND ii.unit_cost > 0
+          ORDER BY ii.created_at DESC LIMIT 1
+        ) latest_iar ON true
         LEFT JOIN categories c ON c.id = i.category_id
         LEFT JOIN suppliers s ON s.id = i.supplier_id
         WHERE (${createdBy}::text IS NULL OR r.created_by = ${createdBy}::text)
@@ -1997,28 +2048,31 @@ export const listRisForms = createServerFn({ method: "GET" })
         const ownerFilter = data.created_by?.trim()
           ? `&created_by=eq.${encodeURIComponent(data.created_by.trim())}`
           : "";
-        const forms = await sbSelect<any>(
+        const forms = await sbSelectService<any>(
           "ris_forms",
-          `select=id,ris_no,office,purpose,requested_by,status,property_flow,created_at${ownerFilter}&order=created_at.desc&limit=1000`,
+          `select=id,ris_no,office,purpose,requested_by,status,property_flow,approved_date,issued_date,created_at${ownerFilter}&order=created_at.desc&limit=1000`,
         );
         if (forms.length === 0) return [];
 
         const formIds = forms.map((form) => String(form.id));
-        const risItems = await sbSelect<any>(
+        const risItems = await sbSelectService<any>(
           "ris_items",
           `select=ris_id,item_id,quantity,unit_cost,remarks,transaction_id&ris_id=in.(${formIds.map(encodeURIComponent).join(",")})&limit=10000`,
         );
         const transactionIds = [...new Set(risItems.map((line: any) => String(line.transaction_id || "")).filter(Boolean))];
         const itemIds = [...new Set(risItems.map((line) => String(line.item_id)))];
-        const [linkedTransactions, items] = await Promise.all([
+        const [linkedTransactions, items, iarItems] = await Promise.all([
           transactionIds.length
-            ? sbSelect<any>("transactions", `select=id,source_line_id&id=in.(${transactionIds.map(encodeURIComponent).join(",")})&limit=10000`)
+            ? sbSelectService<any>("transactions", `select=id,source_line_id&id=in.(${transactionIds.map(encodeURIComponent).join(",")})&limit=10000`)
             : Promise.resolve([]),
           itemIds.length
-            ? sbSelect<any>(
+            ? sbSelectService<any>(
               "items",
               `select=id,name,unit,acquisition_cost,category_id,supplier_id,inventory_classification&id=in.(${itemIds.map(encodeURIComponent).join(",")})&limit=10000`,
             )
+            : Promise.resolve([]),
+          itemIds.length
+            ? sbSelectService<any>("iar_items", "select=item_id,unit_cost,created_at&order=created_at.desc&limit=10000")
             : Promise.resolve([]),
         ]);
         const transactionsById = new Map(linkedTransactions.map((transaction: any) => [String(transaction.id), transaction]));
@@ -2027,16 +2081,25 @@ export const listRisForms = createServerFn({ method: "GET" })
         const supplierIds = [...new Set(items.map((item: any) => String(item.supplier_id || "")).filter(Boolean))];
         const [lots, categories, suppliers] = await Promise.all([
           lotIds.length
-            ? sbSelect<any>("iar_items", `select=id,unit_cost&id=in.(${lotIds.map(encodeURIComponent).join(",")})&limit=10000`)
+            ? sbSelectService<any>("iar_items", `select=id,unit_cost&id=in.(${lotIds.map(encodeURIComponent).join(",")})&limit=10000`)
             : Promise.resolve([]),
           categoryIds.length
-            ? sbSelect<any>("categories", `select=id,name&id=in.(${categoryIds.map(encodeURIComponent).join(",")})&limit=10000`)
+            ? sbSelectService<any>("categories", `select=id,name&id=in.(${categoryIds.map(encodeURIComponent).join(",")})&limit=10000`)
             : Promise.resolve([]),
           supplierIds.length
-            ? sbSelect<any>("suppliers", `select=id,name&id=in.(${supplierIds.map(encodeURIComponent).join(",")})&limit=10000`)
+            ? sbSelectService<any>("suppliers", `select=id,name&id=in.(${supplierIds.map(encodeURIComponent).join(",")})&limit=10000`)
             : Promise.resolve([]),
         ]);
         const lotCostById = new Map(lots.map((lot: any) => [String(lot.id), Number(lot.unit_cost || 0)]));
+        const iarCostByItemId = new Map<string, number>();
+        for (const row of (iarItems || [])) {
+          const itemId = String(row.item_id);
+          if (!itemId) continue;
+          const cost = Number(row.unit_cost || 0);
+          if (cost > 0 && !iarCostByItemId.has(itemId)) {
+            iarCostByItemId.set(itemId, cost);
+          }
+        }
         const itemById = new Map(items.map((item) => [String(item.id), item]));
         const categoryById = new Map(categories.map((category: any) => [String(category.id), category.name]));
         const supplierById = new Map(suppliers.map((supplier: any) => [String(supplier.id), supplier.name]));
@@ -2070,7 +2133,11 @@ export const listRisForms = createServerFn({ method: "GET" })
           const quantity = lines.reduce((sum, line) => sum + Number(line.quantity || 0), 0);
           const totalAmount = lineItems.reduce((sum, { line, item }) => {
             const transaction = transactionsById.get(String(line.transaction_id || ""));
-            const unitCost = Number(line.unit_cost || 0) || lotCostById.get(String(transaction?.source_line_id || "")) || Number(item?.acquisition_cost || 0);
+            const unitCost =
+              Number(line.unit_cost || 0) ||
+              lotCostById.get(String(transaction?.source_line_id || "")) ||
+              iarCostByItemId.get(String(line.item_id)) ||
+              Number(item?.acquisition_cost || 0);
             return sum + Number(line.quantity || 0) * unitCost;
           }, 0);
           const remarks = distinct(lines.map((line) => line.remarks));
@@ -2092,7 +2159,15 @@ export const listRisForms = createServerFn({ method: "GET" })
           };
         });
       },
-    );
+      );
+      console.info(`[forms-flow] RIS records loaded table=ris_forms count=${result.length}`);
+      return result;
+    } catch (error) {
+      console.error(
+        `[forms-flow] RIS records read failed tables=ris_forms,ris_items,items error=${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw error;
+    }
   });
 
 export const getRisFormStatus = createServerFn({ method: "GET" })
@@ -2124,6 +2199,53 @@ export const getRisFormStatus = createServerFn({ method: "GET" })
       },
     );
   });
+
+export const getInventoryTotal = createServerFn({ method: "GET" }).handler(async () => {
+  return withDbFallback(
+    async (sql) => {
+      const [row] = await sql`
+        SELECT COALESCE(SUM(acquisition_cost * quantity), 0) AS total_value
+        FROM items
+      `;
+      return Number(row?.total_value || 0);
+    },
+    async () => {
+      // Hosted Supabase `items.acquisition_cost` is 0 (see investigation), so
+      // valuing inventory as items.acquisition_cost * items.quantity returns 0.
+      // The real unit costs live in `iar_items` (IAR receipts). Value current
+      // stock on hand (`items.quantity`) at the most recent IAR receipt cost per
+      // item, falling back to `items.acquisition_cost` when no IAR receipt exists.
+      // This counts each item once from `items` (current stock on hand) and never
+      // sums released/RIS transactions, avoiding double-counting.
+      const items = await sbSelectService<any>(
+        "items",
+        "select=id,quantity,acquisition_cost",
+      );
+      const iarItems = await sbSelectService<any>(
+        "iar_items",
+        "select=item_id,unit_cost,created_at&order=created_at.desc",
+      );
+      const latestCostByItem = new Map<string, number>();
+      for (const row of iarItems) {
+        const itemId = String(row.item_id || "");
+        if (!itemId) continue;
+        const cost = Number(row.unit_cost || 0);
+        if (cost > 0 && !latestCostByItem.has(itemId)) {
+          latestCostByItem.set(itemId, cost);
+        }
+      }
+      let total = 0;
+      for (const item of items) {
+        const qty = Number(item.quantity || 0);
+        if (qty <= 0) continue;
+        const unitCost =
+          latestCostByItem.get(String(item.id)) ?? Number(item.acquisition_cost || 0);
+        total += qty * unitCost;
+      }
+      return total;
+    },
+  );
+});
 
 export const updateRisFormStatus = createServerFn({ method: "POST" })
   .inputValidator(

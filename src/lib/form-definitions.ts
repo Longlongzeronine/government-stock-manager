@@ -47,7 +47,7 @@ export const FORM_DEFINITIONS: FormDefinition[] = [
   { formKey: "supplies_stock_card", section: "Supplies", label: "Stock Card", sortOrder: 12 },
   { formKey: "supplies_ris", section: "Supplies", label: "RIS", sortOrder: 14 },
   { formKey: "supplies_rsmi", section: "Supplies", label: "RSMI", sortOrder: 30 },
-  { formKey: "supplies_rpci", section: "Supplies", label: "RPCI", sortOrder: 40 },
+  { formKey: "supplies_rpci", section: "Supplies", label: "RPCI", sortOrder: 18 },
 
   // Semi-Expendable Property
   { formKey: "semi_iar", section: "Semi-Expendable Property", label: "IAR", sortOrder: 50 },

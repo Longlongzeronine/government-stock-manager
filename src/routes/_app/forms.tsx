@@ -53,6 +53,7 @@ import {
   listRisForms,
   getIarFormDetails,
   listIarForms,
+  listRecentIarReceiptItems,
   listIarLineRemarks,
   listFormPersonnelMemory,
   listItems,
@@ -104,6 +105,7 @@ type Transaction = {
   source_line_id?: string | null;
   product_description?: string | null;
   item?: Item;
+  display_status?: string;
 };
 
 type IarFormRecord = {
@@ -567,6 +569,31 @@ function FormsFlow() {
     refetchOnWindowFocus: false,
   });
 
+  const {
+    data: risFormRecords = [],
+    isLoading: isLoadingRisFormRecords,
+    error: risFormRecordsError,
+  } = useQuery({
+    queryKey: ["risForms", "history", user?.id],
+    queryFn: () => listRisForms({ data: { created_by: user?.id } }),
+    enabled: Boolean(user?.id),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    refetchOnMount: "always",
+  });
+
+  const {
+    data: iarReceiptItems = [],
+    isLoading: isLoadingIarReceiptItems,
+    error: iarReceiptItemsError,
+  } = useQuery({
+    queryKey: ["iar-receipt-items", "forms-flow"],
+    queryFn: () => listRecentIarReceiptItems(),
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+
   const { data: iarForms = [] } = useQuery({
     queryKey: ["iar-forms"],
     queryFn: () => listIarForms() as Promise<IarFormRecord[]>,
@@ -1024,8 +1051,8 @@ function FormsFlow() {
     [stockBalanceItems, transactions, rpciStartDate, rpciEndDate, rpciEntries, rpciFundCluster, iarForms],
   );
   const flowStats = useMemo(
-    () => getFlowStats(transactions, reportMonth, tab),
-    [transactions, reportMonth, tab],
+    () => getFlowStats(iarReceiptItems.length, risFormRecords, today.slice(0, 7), tab),
+    [iarReceiptItems.length, risFormRecords, today, tab],
   );
 
   async function refreshFlow() {
@@ -1034,6 +1061,7 @@ function FormsFlow() {
       queryClient.invalidateQueries({ queryKey: ["transactions"] }),
       queryClient.invalidateQueries({ queryKey: ["transactions", "forms-flow"] }),
       queryClient.invalidateQueries({ queryKey: ["iar-forms"] }),
+      queryClient.invalidateQueries({ queryKey: ["iar-receipt-items", "forms-flow"] }),
       queryClient.invalidateQueries({ queryKey: ["iar-line-remarks"] }),
     ]);
   }
@@ -1339,6 +1367,7 @@ function FormsFlow() {
       rememberPersonnel("ris_received_by", ris.receivedBy),
     ]);
     await queryClient.invalidateQueries({ queryKey: ["ris-forms", "semi-expendable"] });
+    await queryClient.invalidateQueries({ queryKey: ["risForms", "history"] });
     const nextRisNo =
       (await getNextRisNumberFromHistory({ data: { date: today } })) || incrementRisNumber(postedRisNo, today);
     const nextVerification = createVerificationIdentity();
@@ -1921,7 +1950,12 @@ function FormsFlow() {
             placement={viewMode === "split" ? "bottom" : "side"}
             stats={flowStats}
             inventoryItems={flowItems}
-            transactions={transactions}
+            iarReceiptItems={iarReceiptItems}
+            isLoadingIarReceiptItems={isLoadingIarReceiptItems}
+            iarReceiptItemsError={iarReceiptItemsError ? errorMessage(iarReceiptItemsError) : undefined}
+            risFormRecords={risFormRecords}
+            isLoadingRisFormRecords={isLoadingRisFormRecords}
+            risFormRecordsError={risFormRecordsError ? errorMessage(risFormRecordsError) : undefined}
             reportMonth={reportMonth}
             onSelectIarReceipt={loadIarReceipt}
             loadingIarReceiptId={loadingIarReceiptId}
@@ -5256,7 +5290,12 @@ function FlowSupportPanel({
   placement,
   stats,
   inventoryItems,
-  transactions,
+  iarReceiptItems,
+  isLoadingIarReceiptItems,
+  iarReceiptItemsError,
+  risFormRecords,
+  isLoadingRisFormRecords,
+  risFormRecordsError,
   reportMonth,
   onSelectIarReceipt,
   loadingIarReceiptId,
@@ -5268,7 +5307,12 @@ function FlowSupportPanel({
   placement: "side" | "bottom";
   stats: FlowStats;
   inventoryItems: Item[];
-  transactions: Transaction[];
+  iarReceiptItems: any[];
+  isLoadingIarReceiptItems: boolean;
+  iarReceiptItemsError?: string;
+  risFormRecords: any[];
+  isLoadingRisFormRecords: boolean;
+  risFormRecordsError?: string;
   reportMonth: string;
   onSelectIarReceipt: (transaction: Transaction) => Promise<void>;
   loadingIarReceiptId: string;
@@ -5279,14 +5323,40 @@ function FlowSupportPanel({
 }) {
   const isBottom = placement === "bottom";
   const [backupBusy, setBackupBusy] = useState(false);
-  const iarRows = transactions
-    .filter((tx) => tx.type === "IN" && isIarTransaction(tx))
-    .slice(-8)
-    .reverse();
-  const risRows = transactions
-    .filter((tx) => tx.type === "OUT" && isRisTransaction(tx))
-    .slice(-8)
-    .reverse();
+  const iarRows: Transaction[] = iarReceiptItems.slice(0, 8).map((row: any) => ({
+    id: row.id,
+    item_id: row.item_id,
+    type: "IN",
+    quantity: row.quantity,
+    staff_name: null,
+    remarks: `IAR ${row.iar?.iar_no || ""}`,
+    created_at: row.created_at,
+    source_form_type: "IAR",
+    source_form_id: row.iar_id,
+    product_description: row.product_description,
+    item: row.item,
+  }));
+  const risRows: Transaction[] = risFormRecords
+    .map((form: any) => ({
+      id: String(form.id),
+      item_id: "",
+      type: "OUT" as const,
+      quantity: Number(form.quantity || 0),
+      staff_name: null,
+      remarks: `RIS ${form.ris_no || ""}`,
+      created_at: String(form.created_at || ""),
+      source_form_type: "RIS",
+      source_form_id: String(form.id),
+      item: {
+        id: "",
+        name: String(form.item_name || "No item listed"),
+        quantity: Number(form.quantity || 0),
+        unit: String(form.unit || "pcs"),
+      },
+      display_status: risStatusLabel(form.status),
+    }))
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 8);
 
   function exportSummary() {
     exportCSV(
@@ -5364,6 +5434,8 @@ function FlowSupportPanel({
           loadingRowId={loadingIarReceiptId}
           actionLabel="Load IAR"
           empty="No IAR receipts posted yet."
+          loading={isLoadingIarReceiptItems}
+          error={iarReceiptItemsError}
         />
         <SupportTable
           title="Recent RIS Issues"
@@ -5371,7 +5443,10 @@ function FlowSupportPanel({
           onSelectRow={onSelectRisIssue}
           loadingRowId={loadingRisIssueId}
           actionLabel="Load RIS"
-          empty="No RIS issues posted yet."
+          empty="No RIS records found."
+          loading={isLoadingRisFormRecords}
+          error={risFormRecordsError}
+          showStatus
         />
 
         <section
@@ -5444,6 +5519,9 @@ function SupportTable({
   loadingRowId,
   actionLabel,
   empty,
+  loading = false,
+  error,
+  showStatus = false,
 }: {
   title: string;
   rows: Transaction[];
@@ -5451,6 +5529,9 @@ function SupportTable({
   loadingRowId?: string;
   actionLabel?: string;
   empty: string;
+  loading?: boolean;
+  error?: string;
+  showStatus?: boolean;
 }) {
   return (
     <section className="rounded-lg border border-border bg-card">
@@ -5465,6 +5546,7 @@ function SupportTable({
               <th>Item</th>
               <th className="text-right">Qty.</th>
               <th>Date</th>
+              {showStatus && <th>Status</th>}
             </tr>
           </thead>
           <tbody>
@@ -5488,12 +5570,39 @@ function SupportTable({
                 <td>{row.item?.name || "-"}{row.product_description && <small className="block text-muted-foreground">{row.product_description}</small>}</td>
                 <td className="text-right tabular-nums">{row.quantity}</td>
                 <td>{format(new Date(row.created_at), "MMM d, yyyy")}</td>
+                {showStatus && (
+                  <td>
+                    <span className={`inline-flex rounded-md border px-2 py-1 text-[11px] font-semibold ${
+                      row.display_status === "Approved"
+                        ? "border-success/30 bg-success/15 text-success"
+                        : row.display_status === "Rejected"
+                          ? "border-destructive/30 bg-destructive/15 text-destructive"
+                          : "border-warning/30 bg-warning/15 text-warning-foreground"
+                    }`}>
+                      {row.display_status || "Pending"}
+                    </span>
+                  </td>
+                )}
               </tr>
             ))}
-            {rows.length === 0 && (
+            {error && rows.length === 0 && (
+              <tr>
+                <td colSpan={showStatus ? 5 : 4} className="px-3 py-6 text-center text-destructive">
+                  Could not load records: {error}
+                </td>
+              </tr>
+            )}
+            {loading && rows.length === 0 && !error && (
+              <tr>
+                <td colSpan={showStatus ? 5 : 4} className="px-3 py-6 text-center text-muted-foreground">
+                  Loading records…
+                </td>
+              </tr>
+            )}
+            {rows.length === 0 && !loading && !error && (
               <tr>
                 <td
-                  colSpan={4}
+                  colSpan={showStatus ? 5 : 4}
                   className="px-3 py-6 text-center text-muted-foreground"
                 >
                   {empty}
@@ -6255,6 +6364,13 @@ function isRisTransaction(transaction: Transaction) {
   return source === "RIS" || extractReference(transaction.remarks).startsWith("RIS ");
 }
 
+function risStatusLabel(value: unknown) {
+  const status = String(value || "pending").toLowerCase();
+  if (status === "approved" || status === "issued") return "Approved";
+  if (status === "rejected" || status === "cancelled") return "Rejected";
+  return "Pending";
+}
+
 type RsmiRow = {
   id: string;
   itemId: string;
@@ -6293,26 +6409,26 @@ type FlowStats = {
 };
 
 function getFlowStats(
-  transactions: Transaction[],
-  reportMonth: string,
+  iarReceiptItemCount: number,
+  risFormRecords: any[],
+  currentMonth: string,
   tab: FlowTab,
 ): FlowStats {
+  const issuedThisMonth = risFormRecords
+    .filter((form) => {
+      const status = String(form.status || "").toLowerCase();
+      if (status !== "approved" && status !== "issued") return false;
+      const issueDate = status === "issued"
+        ? form.issued_date || form.approved_date || form.created_at
+        : form.approved_date || form.issued_date || form.created_at;
+      return dateKey(issueDate) === currentMonth;
+    })
+    .reduce((sum, form) => sum + Number(form.quantity || 0), 0);
   return {
     activeStage: activeStageLabel(tab),
-    iarReceipts: transactions.filter(
-      (tx) => tx.type === "IN" && isIarTransaction(tx),
-    ).length,
-    risIssues: transactions.filter(
-      (tx) => tx.type === "OUT" && isRisTransaction(tx),
-    ).length,
-    issuedThisMonth: transactions
-      .filter(
-        (tx) =>
-          tx.type === "OUT" &&
-          isRisTransaction(tx) &&
-          dateKey(tx.created_at) === reportMonth,
-      )
-      .reduce((sum, tx) => sum + tx.quantity, 0),
+    iarReceipts: iarReceiptItemCount,
+    risIssues: risFormRecords.length,
+    issuedThisMonth,
   };
 }
 

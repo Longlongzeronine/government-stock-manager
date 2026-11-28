@@ -58,7 +58,13 @@ export function getRestWriteConfig(): { url: string; key: string } | null {
     workerVar("SUPABASE_URL") ||
     workerVar("VITE_SUPABASE_URL") ||
     "";
-  const key = workerVar("SUPABASE_SERVICE_ROLE_KEY") || "";
+  // Worker secrets may not be reliably visible via workerVar()/process.env on
+  // the deployed Cloudflare Worker. Fall back to the build-time value from
+  // .env (import.meta.env) so the service-role key is available for RLS-
+  // bypassing reads on the live Worker.
+  const key =
+    workerVar("SUPABASE_SERVICE_ROLE_KEY") ||
+    String((import.meta as any).env?.VITE_SUPABASE_SERVICE_ROLE_KEY || "").trim();
   if (!url || !key) return null;
   return { url: url.replace(/\/$/, ""), key };
 }
@@ -102,6 +108,37 @@ export async function sbSelect<T = any>(
   );
   const body = await res.json().catch(() => null);
   throwIfError(res, body, `select ${table}`);
+  return (body ?? []) as T[];
+}
+
+/**
+ * Service-role read that bypasses RLS on the deployed Cloudflare Worker.
+ * Unlike `sbSelect`, this does NOT forward the caller's user JWT, so
+ * Supabase/PostgREST resolves to the service role instead of the end user's
+ * restricted role. Required for inventory totals and RIS amounts on the live
+ * site where RLS would otherwise block reads of items/ris_items/transactions.
+ */
+export async function sbSelectService<T = any>(
+  table: string,
+  query = "",
+): Promise<T[]> {
+  const cfg = getRestWriteConfig();
+  if (!cfg) {
+    console.error("[sbSelectService] service-role config missing");
+    throw new Error("Supabase service-role config missing");
+  }
+  const res = await fetch(`${cfg.url}/rest/v1/${table}${query ? `?${query}` : ""}`, {
+    headers: headers(cfg.key),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const message =
+      (body as any)?.message || (body as any)?.error || res.statusText;
+    console.error(
+      `[supabase] read failed table=${table} status=${res.status} error=${message}`,
+    );
+    throwIfError(res, body, `select ${table}`);
+  }
   return (body ?? []) as T[];
 }
 
