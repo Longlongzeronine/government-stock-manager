@@ -415,7 +415,7 @@ function FormsFlow() {
   function setFormsFundCluster(value: string) {
     setActiveFundCluster(value);
     setIar((current) => current.fundCluster === value ? current : { ...current, fundCluster: value });
-    const clusterItemIds = getIarItemIdsForCluster(transactions, iarForms, value);
+    const clusterItemIds = getIarItemIdsForCluster(transactions, iarForms, value, stockBalanceItems);
     if (!clusterItemIds.has(selectedItemId)) {
       setSelectedItemId(pickerItems.find((item) => clusterItemIds.has(item.id))?.id || "");
     }
@@ -626,58 +626,6 @@ function FormsFlow() {
     () => groupPersonnelMemory(personnelMemory as PersonnelMemory[]),
     [personnelMemory],
   );
-  const clusterItemIds = useMemo(
-    () => getIarItemIdsForCluster(transactions, iarForms, activeFundCluster),
-    [transactions, iarForms, activeFundCluster],
-  );
-  const risItemClusters = useMemo(
-    () => getIarItemClusters(transactions, iarForms),
-    [transactions, iarForms],
-  );
-
-  // Keep the RIS Fund Cluster in sync with the inventory fund cluster of the
-  // items selected on the RIS lines (e.g. inventory 01-MOOE => form shows 01-MOOE).
-  useEffect(() => {
-    const validRisLines = risLines.filter(
-      (line) => line.item_id && Number(line.quantity) > 0,
-    );
-    if (validRisLines.length === 0) return;
-    const resolvedCluster = resolveRisClusterFromLines(
-      validRisLines,
-      risItemClusters,
-    );
-    if (!resolvedCluster) return;
-    if (
-      normalizeFundCluster(risFundCluster) !==
-      normalizeFundCluster(resolvedCluster)
-    ) {
-      setFormsFundCluster(resolvedCluster);
-    }
-  }, [risLines, risItemClusters, risFundCluster]);
-
-  // Block manual Fund Cluster picks that conflict with the inventory fund
-  // cluster of the selected RIS line items (e.g. inventory 01-MOOE must not be
-  // switched to 06-SSP, and vice versa).
-  function setRisFundCluster(value: string) {
-    const validRisLines = risLines.filter(
-      (line) => line.item_id && Number(line.quantity) > 0,
-    );
-    const resolvedCluster =
-      validRisLines.length > 0
-        ? resolveRisClusterFromLines(validRisLines, risItemClusters)
-        : "";
-    if (
-      resolvedCluster &&
-      normalizeFundCluster(value) !== normalizeFundCluster(resolvedCluster)
-    ) {
-      toast.error(
-        `Fund cluster cannot be "${value}"; the selected inventory items are "${resolvedCluster}".`,
-      );
-      return;
-    }
-    setFormsFundCluster(value);
-  }
-
   useEffect(() => {
     if (draftRestored.current) return;
     if (initializedPersonnel.current || personnelMemory.length === 0) return;
@@ -752,6 +700,56 @@ function FormsFlow() {
     })),
     [pickerItems, transactions, activeFundCluster, iarForms],
   );
+  const clusterItemIds = useMemo(
+    () => getIarItemIdsForCluster(transactions, iarForms, activeFundCluster, stockBalanceItems),
+    [transactions, iarForms, activeFundCluster, stockBalanceItems],
+  );
+  const risItemClusters = useMemo(
+    () => getIarItemClusters(transactions, iarForms, stockBalanceItems),
+    [transactions, iarForms, stockBalanceItems],
+  );
+  // Keep the RIS Fund Cluster in sync with the inventory fund cluster of the
+  // items selected on the RIS lines (e.g. inventory 01-MOOE => form shows 01-MOOE).
+  useEffect(() => {
+    const validRisLines = risLines.filter(
+      (line) => line.item_id && Number(line.quantity) > 0,
+    );
+    if (validRisLines.length === 0) return;
+    const resolvedCluster = resolveRisClusterFromLines(
+      validRisLines,
+      risItemClusters,
+    );
+    if (!resolvedCluster) return;
+    if (
+      normalizeFundCluster(risFundCluster) !==
+      normalizeFundCluster(resolvedCluster)
+    ) {
+      setFormsFundCluster(resolvedCluster);
+    }
+  }, [risLines, risItemClusters, risFundCluster]);
+
+  // Block manual Fund Cluster picks that conflict with the inventory fund
+  // cluster of the selected RIS line items (e.g. inventory 01-MOOE must not be
+  // switched to 06-SSP, and vice versa).
+  function setRisFundCluster(value: string) {
+    const validRisLines = risLines.filter(
+      (line) => line.item_id && Number(line.quantity) > 0,
+    );
+    const resolvedCluster =
+      validRisLines.length > 0
+        ? resolveRisClusterFromLines(validRisLines, risItemClusters)
+        : "";
+    if (
+      resolvedCluster &&
+      normalizeFundCluster(value) !== normalizeFundCluster(resolvedCluster)
+    ) {
+      toast.error(
+        `Fund cluster cannot be "${value}"; the selected inventory items are "${resolvedCluster}".`,
+      );
+      return;
+    }
+    setFormsFundCluster(value);
+  }
   const acceptedStockItems = useMemo(
     () => getAcceptedStockItems(stockBalanceItems, transactions).filter((item) => clusterItemIds.has(item.id)),
     [stockBalanceItems, transactions, clusterItemIds],
@@ -6224,6 +6222,14 @@ function getAcceptedStockItems(items: Item[], transactions: Transaction[]) {
       .map((tx) => tx.item_id),
   );
 
+  // Hosted legacy data may have IAR receipt lots without matching transaction
+  // rows. listItems derives price_balances from iar_items, so use those receipts too.
+  for (const item of items) {
+    if (item.price_balances?.some((lot) => Number(lot.quantity) > 0)) {
+      acceptedItemIds.add(item.id);
+    }
+  }
+
   // Keep accepted items that have run down to zero so the RIS picker shows them
   // as "Out of stock" instead of silently hiding them.
   return items.filter((item) => acceptedItemIds.has(item.id));
@@ -6472,10 +6478,11 @@ function getIarItemIdsForCluster(
   transactions: Transaction[],
   iarForms: IarFormRecord[],
   fundCluster: string,
+  items?: Item[],
 ): Set<string> {
   const selectedCluster = normalizeFundCluster(fundCluster);
   return new Set(
-    [...getIarItemClusters(transactions, iarForms).entries()]
+    [...getIarItemClusters(transactions, iarForms, items).entries()]
       .filter(([, clusters]) => [...clusters].some((cluster) => normalizeFundCluster(cluster) === selectedCluster))
       .map(([itemId]) => itemId),
   );
@@ -6484,6 +6491,7 @@ function getIarItemIdsForCluster(
 function getIarItemClusters(
   transactions: Transaction[],
   iarForms: IarFormRecord[],
+  items?: Item[],
 ): Map<string, Set<string>> {
   const formsById = new Map<string, IarFormRecord>(
     iarForms.map((form): [string, IarFormRecord] => [form.id, form]),
@@ -6510,6 +6518,21 @@ function getIarItemClusters(
       clusters.add(cluster);
       itemClusters.set(tx.item_id, clusters);
     });
+  const formsByNumberNormalized = new Map(
+    iarForms
+      .filter((form) => form.iar_no)
+      .map((form) => [String(form.iar_no).trim().toLocaleLowerCase(), form]),
+  );
+  for (const item of items || []) {
+    for (const lot of item.price_balances || []) {
+      const form = formsByNumberNormalized.get(String(lot.iar_no || "").trim().toLocaleLowerCase());
+      const cluster = normalizeFundCluster(form?.form_data?.fund_cluster);
+      if (!cluster) continue;
+      const clusters = itemClusters.get(item.id) || new Set<string>();
+      clusters.add(cluster);
+      itemClusters.set(item.id, clusters);
+    }
+  }
   return itemClusters;
 }
 
